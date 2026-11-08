@@ -185,6 +185,8 @@ const SENSITIVE_SETTING_KEYS = new Set([
   'posthog_host',
   GUEST_QR_SECRET_KEY,
   QR_RELAY_PRIVATE_KEY,
+  // Cloud Connector bearer token: readable only through the connector's own route, never the wildcard.
+  'qr_cloud_connector_token',
 ]);
 
 function isGoogleDriveSettingKey(key: string): boolean {

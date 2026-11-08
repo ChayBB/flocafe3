@@ -41,6 +41,7 @@ import {
 import { computeTaxPackUpdates, fetchRemoteTaxPackCatalog } from './tax-packs/catalog';
 import { startServer, stopServer, getLocalIP, isServerRunning, getServerPort } from './server';
 import { cloudSync } from './services/cloud-sync';
+import { shutdownQrCloudConnector, startQrCloudConnector } from './services/qr-cloud/connector';
 import {
   getOfflineModeAbortSignal,
   isOfflineMode,
@@ -1593,6 +1594,8 @@ async function initialize(): Promise<void> {
       if (isShutdownRequested()) return;
 
       cloudSync.start();
+      // The QR Cloud connector is inbox-only and starts after the database and its migrations.
+      startQrCloudConnector();
       telemetry.start();
       startPostHog();
       googleDrive.start();
@@ -1918,6 +1921,7 @@ const cleanupCoordinator = createShutdownCoordinator(
     { name: 'Main server', run: () => stopServer(), blocksDatabase: true },
     { name: 'KDS server', run: () => stopKdsServer(), blocksDatabase: true },
     { name: 'cloud sync', run: () => cloudSync.shutdown(), blocksDatabase: true },
+    { name: 'QR cloud connector', run: () => shutdownQrCloudConnector(), blocksDatabase: true },
     { name: 'telemetry', run: () => telemetry.stop(), blocksDatabase: true },
     { name: 'posthog', run: () => stopPostHog(), blocksDatabase: true },
     { name: 'Google Drive', run: () => googleDrive.stop(), blocksDatabase: true },

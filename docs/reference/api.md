@@ -1266,6 +1266,30 @@ in the sensitive set the wildcard settings read refuses.
 Failures answer `400` with `code` `server_url_invalid` (an https address, or http only on this
 machine) or `not_pairing`. They answer `502` with `relay_unreachable` or `relay_bad_response`.
 
+`/api/qr-cloud` is the integrated Cloud connector (see
+[Cloud integrations](../architecture/cloud-integrations.md#qr-cloud-connector)). `GET /`
+(`settings.view`) answers `{ config, status }` where `config` reports `has_token` but never the
+token, and `status` carries the runtime `state`, `last_success_at`, `last_error`, inbox counts, TLS
+fingerprint and `websocket: { available: false }`. `settings.manage` is required for:
+
+| Method | Path | Body | Notes |
+| --- | --- | --- | --- |
+| `PUT` | `/settings` | `enabled`, `mode`, `cloud_url`, `connection_mode`, `poll_interval_ms`, `auto_start`, `retry_max`, `timeout_ms`, `reconcile_interval_ms` | Validated server-side; a bad value answers `400` with its `code`. |
+| `POST` | `/token` | `token` | Replaces the stored credential; answered as `{ has_token }`. |
+| `DELETE` | `/token` | none | Clears the credential and stops polling. |
+| `POST` | `/test` | none | One isolated request: `{ ok, code, detail, latency_ms, checked_at }`; rate-limited to 10 a minute. |
+| `POST` | `/retry` | none | Re-arms the loop. |
+| `POST` | `/enable`, `/disable` | none | Enable or stop the connector. |
+| `POST` | `/inbox/import` | `source_path`, `confirm: true` | Copies a standalone `connector.db` after writing a backup; re-running imports nothing new. |
+| `POST` | `/ca/inspect` | `certificate` | Subject, issuer, validity and SHA-256 fingerprint; trusts nothing. |
+| `POST` | `/ca` | `certificate`, `expected_fingerprint`, `confirm: true` | Stores the approved staging CA in the app-managed directory only. |
+| `DELETE` | `/ca` | none | Removes the approved CA. |
+| `DELETE` | `/diagnostics/errors` | none | Clears error history; stored events are kept. |
+
+`GET /diagnostics` and `GET /inbox` need `settings.view` and never include event payloads. Mutations
+refuse a non-loopback `Origin`. The API is bearer-token authenticated, so no cookie session exists
+for a cross-site request to ride.
+
 `requireServerAppAuth` is applied to every route except `/api/health`, `/api/server-app/info`, public product images, the four `/api/guest/*` routes, and the login route, and
 it runs the feature check **before** the token check. Behaviour by condition:
 

@@ -32,7 +32,13 @@ function remaining(expiresAt: string, now: number): string {
 }
 
 /** Pairs this POS with a QR ordering relay by a short code, so customers can order over mobile data. */
-export function QrRelayPairing({ disabled }: { disabled: boolean }) {
+export function QrRelayPairing({
+  disabled,
+  showRelayPairing = true,
+}: {
+  disabled: boolean;
+  showRelayPairing?: boolean;
+}) {
   const t = useTranslations('settings');
   const { confirm, ConfirmDialog } = useConfirm();
   const [status, setStatus] = useState<RelayStatus | null>(null);
@@ -53,6 +59,7 @@ export function QrRelayPairing({ disabled }: { disabled: boolean }) {
   );
 
   useEffect(() => {
+    if (!showRelayPairing) return;
     let cancelled = false;
     api
       .get('/qr-relay')
@@ -66,25 +73,31 @@ export function QrRelayPairing({ disabled }: { disabled: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [showRelayPairing]);
 
   const state = status?.state;
   useEffect(() => {
+    if (!showRelayPairing) return;
     if (state !== 'pairing' && state !== 'paired') return;
     const poll = () => {
       const request = state === 'pairing' ? api.post('/qr-relay/pair/check') : api.get('/qr-relay');
       request.then(({ data }) => apply(data)).catch(() => {});
     };
     const timer = window.setInterval(poll, state === 'pairing' ? 3000 : 10000);
-    const clock = state === 'pairing' ? window.setInterval(() => setNow(Date.now()), 1000) : undefined;
+    const clock =
+      state === 'pairing' ? window.setInterval(() => setNow(Date.now()), 1000) : undefined;
     return () => {
       window.clearInterval(timer);
       if (clock) window.clearInterval(clock);
     };
-  }, [state, apply]);
+  }, [state, apply, showRelayPairing]);
 
-  const errorText = (code: string | null | undefined) => (code ? t(ERROR_KEYS[code as keyof typeof ERROR_KEYS] ?? 'qrRelayErrorGeneric') : '');
+  // The integrated Cloud Connector replaces the legacy pairing panel; the settings page keeps
+  // the stickers and QR-rotation actions outside this component.
+  if (!showRelayPairing) return null;
 
+  const errorText = (code: string | null | undefined) =>
+    code ? t(ERROR_KEYS[code as keyof typeof ERROR_KEYS] ?? 'qrRelayErrorGeneric') : '';
   const run = async (action: () => Promise<{ data: RelayStatus }>) => {
     setBusy(true);
     try {
@@ -144,8 +157,15 @@ export function QrRelayPairing({ disabled }: { disabled: boolean }) {
             onChange={(event) => setServerUrl(event.target.value)}
             className={inputClass}
           />
-          {status?.last_error && <p className="text-xs text-destructive">{errorText(status.last_error)}</p>}
-          <Button type="button" size="sm" disabled={off || !serverUrl.trim()} onClick={() => void start()}>
+          {status?.last_error && (
+            <p className="text-xs text-destructive">{errorText(status.last_error)}</p>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            disabled={off || !serverUrl.trim()}
+            onClick={() => void start()}
+          >
             {t('qrRelayStart')}
           </Button>
         </div>
@@ -161,7 +181,10 @@ export function QrRelayPairing({ disabled }: { disabled: boolean }) {
           />
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">{t('qrRelayCodeLabel')}</p>
-            <p data-testid="qr-relay-code" className="font-mono text-3xl font-bold tracking-[0.3em] text-foreground">
+            <p
+              data-testid="qr-relay-code"
+              className="font-mono text-3xl font-bold tracking-[0.3em] text-foreground"
+            >
               {status.pairing.code}
             </p>
             <p className="text-xs text-muted-foreground">
@@ -186,7 +209,11 @@ export function QrRelayPairing({ disabled }: { disabled: boolean }) {
         <div className="space-y-2">
           <p
             data-testid="qr-relay-state"
-            className={status.connected ? 'text-sm font-medium text-green-600' : 'text-sm font-medium text-amber-600'}
+            className={
+              status.connected
+                ? 'text-sm font-medium text-green-600'
+                : 'text-sm font-medium text-amber-600'
+            }
           >
             {status.connected ? t('qrRelayConnected') : t('qrRelayReconnecting')}
           </p>
@@ -198,7 +225,13 @@ export function QrRelayPairing({ disabled }: { disabled: boolean }) {
           {!status.connected && status.last_error && (
             <p className="text-xs text-destructive">{errorText(status.last_error)}</p>
           )}
-          <Button type="button" size="sm" variant="outline" disabled={off} onClick={() => void unpair()}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={off}
+            onClick={() => void unpair()}
+          >
             {t('qrRelayUnpair')}
           </Button>
         </div>

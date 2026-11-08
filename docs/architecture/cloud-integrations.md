@@ -615,6 +615,59 @@ error stops the tunnel until the POS is paired again.
 `unpair:{store_id}:{ts}:{nonce}` (best effort). It then clears the key, the store id and the public QR address.
 The relay is never awaited at startup; without it, ordering on the shop network is unchanged.
 
+## QR Cloud connector
+
+OrderFlow's Cloud QR Ordering has two integration modes, chosen in Settings → OrderFlow. `legacy_relay`
+is the relay above. `integrated` runs a Cloud connector inside the backend process
+([`main/services/qr-cloud/`](../../main/services/qr-cloud/)): no second executable, service, listener or
+startup script.
+
+**Inbox only.** The connector polls `GET {cloud_url}/api/v1/connectors/events` with a bearer token,
+stores each event in a durable SQLite inbox, and does nothing else. It never creates a POS order,
+never sends an ACK, never changes a Cloud price and never maps a table or product. Those steps need
+the Cloud-side contract that does not exist yet.
+
+**Storage.** The inbox is a separate file from the POS database, at
+`<userData>/qr-cloud/inbox.db` (`FLO_QR_CLOUD_DIR` overrides it for tests). Keeping it out of
+`flo.db` means Cloud payloads never enter POS exports or backups, and a damaged inbox cannot touch
+orders. Schema version is tracked with `PRAGMA user_version`; `inbox_events.event_id` is the primary
+key, so a replayed poll stores nothing twice. `POST /api/qr-cloud/inbox/import` copies an existing
+standalone `connector.db` after writing a byte copy beside it: the source is opened read-only,
+event ids are preserved, and re-running imports nothing new. Import is never automatic.
+
+**Lifecycle.** Startup calls `startQrCloudConnector()` after `initDatabase()` and its migrations, so
+the connector only ever runs against a migrated store. Shutdown registers `QR cloud connector`
+ahead of the database in the shutdown coordinator, which cancels an in-flight request and closes the
+inbox. One loop exists per process: `start()` cancels the previous generation, every scheduled step
+checks its generation, and settings saves are serialised by a revision counter.
+
+**State machine.** `DISABLED`, `NOT_CONFIGURED`, `CONNECTING`, `CONNECTED_POLLING`, `DEGRADED`,
+`AUTH_FAILED`, `TLS_FAILED`, `OFFLINE`, `STOPPING`, plus `CONNECTED_WEBSOCKET` reserved for the
+Cloud WSS contract that is not deployed. HTTP 401/403 maps to `AUTH_FAILED`, certificate and
+handshake errors to `TLS_FAILED`, DNS/connection/timeout failures to `OFFLINE`, and 5xx or malformed
+responses to `DEGRADED`. Reaching `retryMax` failures stays `DEGRADED` and settles onto the
+reconciliation interval. Status never reports `CONNECTED` because a URL is reachable: only a
+successful authenticated poll sets `CONNECTED_POLLING`.
+
+**Credentials.** The token is written through `writeProtectedSetting()` (`safeStorage` in a packaged
+app plus a `safe-storage:v1` marker row). `GET /api/qr-cloud` reports `has_token` only; the value is
+never returned, is not logged, and is redacted from database exports. A stored token is explicitly
+not proof of authentication.
+
+**TLS trust.** The staging Cloud uses a Caddy private root CA. `POST /api/qr-cloud/ca/inspect`
+parses a certificate and reports subject, issuer, validity and SHA-256 fingerprint without trusting
+it; `POST /api/qr-cloud/ca` requires `confirm: true` and an `expected_fingerprint` that must equal
+the certificate's own fingerprint, then stores the PEM under `<userData>/qr-cloud/ca/` with mode
+`0600`. Requests to the configured origin pass that PEM as `ca`, always with
+`rejectUnauthorized: true`; the Windows trusted root store is never modified, and private keys are
+rejected. A stored fingerprint whose file is missing or altered is reported as unverified rather
+than trusted.
+
+**SSRF.** A saved Cloud URL must be `https` with no credentials, query or fragment; literal addresses
+inside the shop, loopback, link-local and metadata ranges are refused. Every request re-resolves the
+hostname and refuses a name that resolves to a blocked address, so DNS rebinding cannot move the
+endpoint into the LAN. Redirects are not followed.
+
 ## Support ticket outbox
 
 A support request is written to the `support_ticket_outbox` table with a `status` of `pending`,

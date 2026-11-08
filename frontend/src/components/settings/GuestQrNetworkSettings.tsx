@@ -11,7 +11,13 @@ import { QrRelayPairing } from '@/components/settings/QrRelayPairing';
 import TableStickerSheet from '@/components/tables/TableStickerSheet';
 
 /** How customers reach table-QR ordering from outside the shop network, table stickers, and retiring every table QR. */
-export function GuestQrNetworkSettings({ disabled }: { disabled: boolean }) {
+export function GuestQrNetworkSettings({
+  disabled,
+  showRelayPairing = true,
+}: {
+  disabled: boolean;
+  showRelayPairing?: boolean;
+}) {
   const t = useTranslations('settings');
   const { confirm, ConfirmDialog } = useConfirm();
   const [stickersOpen, setStickersOpen] = useState(false);
@@ -33,7 +39,7 @@ export function GuestQrNetworkSettings({ disabled }: { disabled: boolean }) {
 
   return (
     <div data-testid="settings-qr-network" className="space-y-3 ps-7">
-      <QrRelayPairing disabled={disabled} />
+      <QrRelayPairing disabled={disabled} showRelayPairing={showRelayPairing} />
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"

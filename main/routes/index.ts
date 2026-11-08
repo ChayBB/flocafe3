@@ -28,6 +28,7 @@ import { customerDisplayFeedRoutes } from './customer-display-feed';
 import { kdsInfoRoutes } from './kds-info';
 import { kdsAlertRoutes } from './kds-alerts';
 import { qrRelayRoutes } from './qr-relay';
+import { qrCloudRoutes } from './qr-cloud';
 import { posInfoRoutes } from './pos-info';
 import { serverAppInfoRoutes } from './server-app-info';
 import { moreAppsRoutes } from './more-apps';
@@ -145,6 +146,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/kds-info', kdsInfoRoutes);
   app.use('/api/kds-alerts', kdsAlertRoutes);
   app.use('/api/qr-relay', qrRelayRoutes);
+  app.use('/api/qr-cloud', qrCloudRoutes);
   app.use('/api/pos-info', posInfoRoutes);
   app.use('/api/server-app-info', serverAppInfoRoutes);
   app.use('/api/more-apps', moreAppsRoutes);
