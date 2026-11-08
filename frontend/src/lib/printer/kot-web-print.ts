@@ -128,11 +128,14 @@ const KOT_FONT_STACKS_BY_SCRIPT: Record<string, string> = {
   Beng: `'Noto Sans Bengali', 'Nirmala UI', 'Vrinda', 'Bangla Sangam MN', ${KOT_MONOSPACE_TAIL}`,
   Cyrl: `'Noto Sans', ${KOT_MONOSPACE_TAIL}`,
   Deva: `'Noto Sans Devanagari', 'Nirmala UI', 'Kohinoor Devanagari', 'Devanagari Sangam MN', ${KOT_MONOSPACE_TAIL}`,
+  Guru: `'Noto Sans Gurmukhi', 'Nirmala UI', 'Raavi', 'Kohinoor Gurmukhi', 'Gurmukhi Sangam MN', ${KOT_MONOSPACE_TAIL}`,
   Hans: `'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans', ${KOT_MONOSPACE_TAIL}`,
   Hant: `'PingFang TC', 'Microsoft JhengHei', 'Noto Sans CJK TC', 'Noto Sans TC', monospace`,
   Jpan: `'Yu Gothic', Meiryo, 'Hiragino Sans', 'Noto Sans CJK JP', 'Noto Sans JP', ${KOT_MONOSPACE_TAIL}`,
   Kore: `'Noto Sans', ${KOT_MONOSPACE_TAIL}`,
   Latn: `'Courier New',monospace`,
+  Taml: `'Noto Sans Tamil', 'Nirmala UI', 'Latha', 'Tamil Sangam MN', ${KOT_MONOSPACE_TAIL}`,
+  Telu: `'Noto Sans Telugu', 'Nirmala UI', 'Kohinoor Telugu', 'Telugu Sangam MN', ${KOT_MONOSPACE_TAIL}`,
   Thai: `'Noto Sans Thai', 'Leelawadee UI', Thonburi, ${KOT_MONOSPACE_TAIL}`,
 };
 

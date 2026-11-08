@@ -209,6 +209,32 @@ async function runTests() {
     'Nepali UI locale supplies date language without changing tenant timezone',
   );
 
+  const mrDate = formatDateForTenant(
+    testDateUtc,
+    'IN',
+    'Asia/Kolkata',
+    {},
+    { year: 'numeric', month: 'short', day: 'numeric' },
+    'mr-IN',
+  );
+  assert.ok(
+    mrDate.includes('2026') && mrDate.includes('ऑग'),
+    'Marathi UI locale supplies date language without changing tenant timezone',
+  );
+
+  const ukDate = formatDateForTenant(
+    testDateUtc,
+    'AR',
+    argentinaTimezone,
+    {},
+    { year: 'numeric', month: 'short', day: 'numeric' },
+    'uk-UA',
+  );
+  assert.ok(
+    ukDate.includes('2026') && ukDate.includes('серп'),
+    `Ukrainian UI locale supplies date language without changing tenant timezone, got: ${ukDate}`,
+  );
+
   // Argentina store + Spanish UI
   const arEsDate = formatDateForTenant(
     testDateUtc,
@@ -358,10 +384,15 @@ async function runTests() {
       | 'ja'
       | 'hi'
       | 'ne'
+      | 'pa'
+      | 'te'
       | 'sq'
       | 'th'
       | 'ha'
-      | 'jv';
+      | 'jv'
+      | 'mr'
+      | 'sw'
+      | 'ta';
     label: string;
     filePrefix: string;
   }> = [
@@ -375,10 +406,15 @@ async function runTests() {
     { lang: 'ja', label: 'Japanese UI', filePrefix: 'receipt-argentina-japanese-ui' },
     { lang: 'hi', label: 'Hindi UI', filePrefix: 'receipt-argentina-hindi-ui' },
     { lang: 'ne', label: 'Nepali UI', filePrefix: 'receipt-argentina-nepali-ui' },
+    { lang: 'pa', label: 'Punjabi UI', filePrefix: 'receipt-argentina-punjabi-ui' },
+    { lang: 'te', label: 'Telugu UI', filePrefix: 'receipt-argentina-telugu-ui' },
     { lang: 'sq', label: 'Albanian UI', filePrefix: 'receipt-argentina-albanian-ui' },
     { lang: 'th', label: 'Thai UI', filePrefix: 'receipt-argentina-thai-ui' },
     { lang: 'ha', label: 'Hausa UI', filePrefix: 'receipt-argentina-hausa-ui' },
     { lang: 'jv', label: 'Javanese UI', filePrefix: 'receipt-argentina-javanese-ui' },
+    { lang: 'mr', label: 'Marathi UI', filePrefix: 'receipt-argentina-marathi-ui' },
+    { lang: 'sw', label: 'Swahili UI', filePrefix: 'receipt-argentina-swahili-ui' },
+    { lang: 'ta', label: 'Tamil UI', filePrefix: 'receipt-argentina-tamil-ui' },
   ];
 
   const receiptResults: Record<string, { html: string; htmlPath: string; pngPath: string }> = {};
@@ -447,6 +483,47 @@ async function runTests() {
       assert.ok(
         receiptHtml.includes('Tagihan #') && receiptHtml.includes('Gunggung Akhir'),
         `Receipt in Javanese UI must contain Javanese labels, got: ${receiptHtml}`,
+      );
+    } else if (lang === 'mr') {
+      assert.ok(
+        receiptHtml.includes('बिल #') && receiptHtml.includes('एकूण रक्कम'),
+        `Receipt in Marathi UI must contain Devanagari labels`,
+      );
+      assert.ok(
+        receiptHtml.includes('ऑग'),
+        `Receipt in Marathi UI must contain a Marathi month name, got: ${receiptHtml}`,
+      );
+    } else if (lang === 'sw') {
+      assert.ok(
+        receiptHtml.includes('Bili #') && receiptHtml.includes('Jumla Kuu'),
+        `Receipt in Swahili UI must contain Swahili labels`,
+      );
+    } else if (lang === 'pa') {
+      assert.ok(
+        receiptHtml.includes('ਬਿੱਲ #') && receiptHtml.includes('ਕੁੱਲ ਜੋੜ'),
+        `Receipt in Punjabi UI must contain Gurmukhi labels`,
+      );
+      assert.ok(
+        receiptHtml.includes('ਅਗ'),
+        `Receipt in Punjabi UI must contain a Punjabi month name, got: ${receiptHtml}`,
+      );
+    } else if (lang === 'te') {
+      assert.ok(
+        receiptHtml.includes('బిల్లు #') && receiptHtml.includes('మొత్తం'),
+        `Receipt in Telugu UI must contain Telugu labels`,
+      );
+      assert.ok(
+        receiptHtml.includes('ఆగ') || receiptHtml.includes('ఆగస్టు'),
+        `Receipt in Telugu UI must contain a Telugu month name, got: ${receiptHtml}`,
+      );
+    } else if (lang === 'ta') {
+      assert.ok(
+        receiptHtml.includes('பில் #') && receiptHtml.includes('மொத்தத் தொகை'),
+        `Receipt in Tamil UI must contain Tamil labels`,
+      );
+      assert.ok(
+        receiptHtml.includes('ஆக'),
+        `Receipt in Tamil UI must contain a Tamil month name, got: ${receiptHtml}`,
       );
     }
 

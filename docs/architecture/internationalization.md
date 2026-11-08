@@ -1,6 +1,6 @@
 # Internationalization
 
-FloCafe supports 26 UI languages. This page describes how a language is declared, loaded, and
+FloCafe supports 32 UI languages. This page describes how a language is declared, loaded, and
 validated, and how the UI language stays separate from a store's regional settings.
 
 ## Source of truth and the parity rule
@@ -17,22 +17,22 @@ for `th`, no orphans anywhere), ICU validity, placeholder and tag parity, per-la
 of the keys a catalogue does carry, and frontend key safety. The set of complete locales is
 `FULLY_MAINTAINED_LOCALES` in that test.
 
-The 26 committed catalogues are: `ar`, `bn`, `de`, `en`, `es`, `fa`, `fil`, `fr`, `ha`, `hi`, `id`,
-`it`, `ja`, `jv`, `ko`, `ne`, `nl`, `pt`, `ru`, `sq`, `th`, `tr`, `ur`, `vi`, `zh`, `zh-tw`.
+The 32 committed catalogues are: `ar`, `bn`, `de`, `en`, `es`, `fa`, `fil`, `fr`, `ha`, `hi`, `id`,
+`it`, `ja`, `jv`, `ko`, `mr`, `ne`, `nl`, `pa`, `pt`, `ru`, `sq`, `sw`, `ta`, `te`, `th`, `tr`, `uk`, `ur`, `vi`, `zh`, `zh-tw`.
 
 ## The registry
 
 `frontend/src/lib/i18n/languages.ts` exports `LANGUAGES`, the single source for everything about a
 language. Each entry carries:
 
-| Field | Meaning |
-| --- | --- |
-| key | The object key in `LANGUAGES`, and the language code used in settings, print policies, and message filenames. |
-| `locale` | The canonical BCP-47 tag passed to `Intl`. It is the tag, not the key: `de` has locale `de-DE`, `pt` has `pt-BR`. |
-| `nativeName` | The endonym shown in the language picker. It is written in the language itself. |
-| `direction` | `ltr` or `rtl`. |
-| `selectable` | Whether the language may be chosen by an end user. |
-| `load` | A lazy dynamic import returning that language's message catalogue. |
+| Field        | Meaning                                                                                                           |
+| ------------ | ----------------------------------------------------------------------------------------------------------------- |
+| key          | The object key in `LANGUAGES`, and the language code used in settings, print policies, and message filenames.     |
+| `locale`     | The canonical BCP-47 tag passed to `Intl`. It is the tag, not the key: `de` has locale `de-DE`, `pt` has `pt-BR`. |
+| `nativeName` | The endonym shown in the language picker. It is written in the language itself.                                   |
+| `direction`  | `ltr` or `rtl`.                                                                                                   |
+| `selectable` | Whether the language may be chosen by an end user.                                                                |
+| `load`       | A lazy dynamic import returning that language's message catalogue.                                                |
 
 Because the registry is the only place a language is declared, adding a language means adding an
 entry here and nothing else structural. The registry also exports `isLanguage()`,

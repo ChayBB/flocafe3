@@ -17,7 +17,8 @@ FloCafe prints receipts and kitchen order tickets from the desktop app. Configur
 | USB / OS Queue | Direct USB printers and OS-managed print queues | A configured OS print queue (Windows Spooler, or CUPS via **System Settings > Printers & Scanners** on macOS including Mac App Store builds) |
 | WebUSB | A browser-connected printer | A compatible browser and a user-selected device; the browser sends the print bytes |
 
-Set the paper width to match the printer, either 58 mm or 80 mm. The first configured printer
+Set the printer profile and printable columns to match the hardware (see
+[printer profiles and paper width](#printer-profiles-and-paper-width)). The first configured printer
 becomes the default; choose a different default in Settings when another printer should receive
 ordinary receipts. Keep **Print Method** set to **ESCPOS (USB / Network Thermal Printer)** for
 USB, Network, and WebUSB receipt printers; **Browser Print (any printer)** opens the browser print
@@ -66,27 +67,22 @@ rendered.
 
 ## Printer profiles and paper width
 
-FloCafe resolves a printer to a capability profile in three steps, in order:
+When adding or editing a printer in **Settings > Printers**, choose a **Printer Type / Profile** or
+leave it on **Auto-detect from printer name**, and set the printable column width (`32`, `36`, `40`,
+`42`, `44`, or `48` columns). Selecting a profile sets its default column width unless you override
+it manually.
+The `76mm Impact / Dot-Matrix (Epson TM-U220, Bixolon SRP-275)` profile (`escpos-impact-76`) uses
+32-column text mode and omits bitmap logos, QR graphics, and raster bands.
 
-1. An explicitly selected profile id on the configured printer, if one is set.
-2. A match against the printer's name, make, or model. Matching is a case-insensitive substring
-   test against each profile's make, model, and alias list, in profile order.
-3. The paper width, which selects a generic profile: `58mm` selects the 58 mm generic, anything
-   else selects the 80 mm generic.
+When **Settings > Printers** detects OS queues that do not accept raw ESC/POS commands (such as Star
+`TSP100` / `TSP143` / `SP700` / `mC-Print`, Epson `EcoTank` / `WorkForce` / `Stylus` inkjets, label
+printers, and PDF queues), it marks them **Driver / Browser print only** and offers a **Use Browser
+Print** button instead of adding them as raw thermal printers.
 
-Four profiles ship. Detection does **not** return the generic profile for everything: a name
-containing an Xprinter XP-V320M or XP-V330M, or a string containing `v320m` or `v330m`, resolves
-to the Xprinter profile. A name containing `epson tm`, `tm-t88`, `tm-t82`, `tm-t20`, or `tm-m30`
-resolves to the Epson TM series profile. Only a name that matches nothing falls through to the
-generic profile chosen by paper width.
-
-The generic profiles are the conservative ones for native text encoding (ASCII-only, with no text
-shaping), while the Xprinter and Epson profiles add the Latin code pages and Latin script
-representability. All four shipped profiles enable the capability-gated
-[raster printing](architecture/printing.md#raster-printing) path, so lines containing characters
-outside the printer's native code pages are rendered as raster bands. If raster rendering is
-unavailable or fails on a financial row, FloCafe refuses the print rather than omitting an amount,
-reporting `Receipt not printed: ...` with the affected row and next steps.
+For the shipped profile table, profile resolution order, native code-page vs.
+[raster printing](architecture/printing.md#raster-printing) capabilities, and
+[financial-row refusal](architecture/printing.md#capabilities-and-refusal), see
+[printer profiles](architecture/printing.md#printer-profiles).
 
 ## Arabic-script text
 
@@ -130,15 +126,22 @@ FloCafe can print kitchen order tickets to the default printer or route items to
 stations. Configure stations under **Settings > Operations > Kitchen Stations**, whether or not KDS
 is enabled. Each category can belong to only one active station, and the station editor separates
 categories selected for the current station, categories still available, and categories assigned
-elsewhere. Selecting a category from another station moves it to the current station when saved.
-Each station maps its categories to any configured FloCafe printer.
+elsewhere, with an **All categories (including new ones)** toggle (`category_ids: []`) when no
+specific categories are selected. Selecting a category from another station moves it to the current
+station when saved. Each station maps its categories to any configured FloCafe printer, and `routeItemsToStations` in
+`main/routes/printers.ts` resolves each item's station in precedence order: first an active station
+explicitly assigned to the item's category/subcategory, second an active station assigned to the
+item's parent category, and third the first active unrestricted station (`category_ids: []`) with a
+configured non-WebUSB printer.
 
-When KDS is enabled, a station can be assigned to multiple active chef accounts for shift coverage.
-An assigned chef's KDS view is limited to their assigned stations and categories. A Chef account
-can be linked to one or more stations from the Staff form. A chef created without a station remains
-unrestricted by station.
+When KDS is enabled, a station can be assigned to multiple active chef accounts for shift coverage,
+and leaving a station's category selection empty makes that station unrestricted on KDS; see
+[KDS category and station scoping](reference/api.md#kds-category-and-station-scoping). A Chef
+account can be linked to one or more stations from the Staff form, and a chef created without a
+station remains unrestricted by station.
 
-Items in categories without a station use the read-only **DEFAULT > Printer Name** route shown with
+Items that do not match an explicit category station, an inherited parent category station, or an
+unrestricted station with a printer use the read-only **DEFAULT > Printer Name** route shown with
 the station list, and print on the default kitchen printer.
 
 KOT printing can be disabled for the business. When it is disabled, neither automatic nor manual KOT

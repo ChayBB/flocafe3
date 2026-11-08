@@ -297,6 +297,109 @@ function run(): void {
     printLabel('jv', 'pos.subtotal') === 'Sub-gunggung' &&
       printLabel('jv', 'print.grandTotal') !== printLabel('jv', 'pos.subtotal'),
   );
+  assert('Marathi grand total is localized', printLabel('mr', 'print.grandTotal') === 'एकूण रक्कम');
+  assert(
+    'Marathi bill number label is localized',
+    printLabel('mr', 'receipt.billNumber') === 'बिल #',
+  );
+  assert('Marathi print-test amount is localized', printLabel('mr', 'printTest.amt') === 'रक्कम');
+  assert(
+    'Marathi takeaway is distinct from delivery',
+    printLabel('mr', 'pos.orderTypeTakeaway') === 'टेकअवे' &&
+      printLabel('mr', 'pos.orderTypeDelivery') === 'डिलिव्हरी',
+  );
+  assert(
+    'Marathi subtotal stays distinct from grand total',
+    printLabel('mr', 'pos.subtotal') === 'उप-एकूण' &&
+      printLabel('mr', 'print.grandTotal') !== printLabel('mr', 'pos.subtotal'),
+  );
+  assert('Swahili grand total is localized', printLabel('sw', 'print.grandTotal') === 'JUMLA KUU');
+  assert(
+    'Swahili bill number label is localized',
+    printLabel('sw', 'receipt.billNumber') === 'Bili #',
+  );
+  assert('Swahili print-test amount is localized', printLabel('sw', 'printTest.amt') === 'Kiasi');
+  assert(
+    'Swahili takeaway is distinct from delivery',
+    printLabel('sw', 'pos.orderTypeTakeaway') === 'Kuchukua' &&
+      printLabel('sw', 'pos.orderTypeDelivery') === 'Uwasilishaji',
+  );
+  assert(
+    'Swahili subtotal stays distinct from grand total',
+    printLabel('sw', 'pos.subtotal') === 'Jumla Ndogo' &&
+      printLabel('sw', 'print.grandTotal') !== printLabel('sw', 'pos.subtotal'),
+  );
+  assert('Punjabi grand total is localized', printLabel('pa', 'print.grandTotal') === 'ਕੁੱਲ ਜੋੜ');
+  assert(
+    'Punjabi bill number label is localized',
+    printLabel('pa', 'receipt.billNumber') === 'ਬਿੱਲ #',
+  );
+  assert('Punjabi print-test amount is localized', printLabel('pa', 'printTest.amt') === 'ਰਕਮ');
+  assert(
+    'Punjabi takeaway is distinct from delivery',
+    printLabel('pa', 'pos.orderTypeTakeaway') === 'ਟੇਕਅਵੇ' &&
+      printLabel('pa', 'pos.orderTypeDelivery') === 'ਡਿਲੀਵਰੀ',
+  );
+  assert(
+    'Punjabi subtotal stays distinct from grand total',
+    printLabel('pa', 'pos.subtotal') === 'ਉਪ-ਜੋੜ' &&
+      printLabel('pa', 'print.grandTotal') !== printLabel('pa', 'pos.subtotal'),
+  );
+  assert('Telugu grand total is localized', printLabel('te', 'print.grandTotal') === 'మొత్తం');
+  assert(
+    'Telugu bill number label is localized',
+    printLabel('te', 'receipt.billNumber') === 'బిల్లు #',
+  );
+  assert('Telugu print-test amount is localized', printLabel('te', 'printTest.amt') === 'మొత్తం');
+  assert(
+    'Telugu takeaway is distinct from delivery',
+    printLabel('te', 'pos.orderTypeTakeaway') === 'టేక్అవే' &&
+      printLabel('te', 'pos.orderTypeDelivery') === 'డెలివరీ',
+  );
+  assert(
+    'Telugu subtotal stays distinct from grand total',
+    printLabel('te', 'pos.subtotal') === 'ఉప మొత్తం' &&
+      printLabel('te', 'print.grandTotal') !== printLabel('te', 'pos.subtotal'),
+  );
+  assert('Tamil grand total is localized', printLabel('ta', 'print.grandTotal') === 'மொத்தத் தொகை');
+  assert(
+    'Tamil bill number label is localized',
+    printLabel('ta', 'receipt.billNumber') === 'பில் #',
+  );
+  assert('Tamil print-test amount is localized', printLabel('ta', 'printTest.amt') === 'தொகை');
+  assert(
+    'Tamil takeaway is distinct from delivery',
+    printLabel('ta', 'pos.orderTypeTakeaway') === 'பார்சல்' &&
+      printLabel('ta', 'pos.orderTypeDelivery') === 'டெலிவரி',
+  );
+  assert(
+    'Tamil subtotal stays distinct from grand total',
+    printLabel('ta', 'pos.subtotal') === 'துணை மொத்தம்' &&
+      printLabel('ta', 'print.grandTotal') !== printLabel('ta', 'pos.subtotal'),
+  );
+  assert(
+    'Tamil cash received resolves from the canonical receipt key',
+    printLabel('ta', 'receipt.cashReceived') === 'பெற்ற ரொக்கம்',
+  );
+  assert('Ukrainian grand total is localized', printLabel('uk', 'print.grandTotal') === 'РАЗОМ');
+  assert(
+    'Ukrainian bill number label is localized',
+    printLabel('uk', 'receipt.billNumber') === 'Рахунок №',
+  );
+  assert(
+    'Ukrainian cash received resolves from the canonical receipt key',
+    printLabel('uk', 'receipt.cashReceived') === 'Отримано готівкою',
+  );
+  assert(
+    'Ukrainian takeaway is distinct from delivery',
+    printLabel('uk', 'pos.orderTypeTakeaway') === 'З собою' &&
+      printLabel('uk', 'pos.orderTypeDelivery') === 'Доставка',
+  );
+  assert(
+    'Ukrainian subtotal stays distinct from grand total',
+    printLabel('uk', 'pos.subtotal') === 'Проміжний підсумок' &&
+      printLabel('uk', 'print.grandTotal') !== printLabel('uk', 'pos.subtotal'),
+  );
 
   console.log('\n✅ Test 2: classic receipt honors language');
   {

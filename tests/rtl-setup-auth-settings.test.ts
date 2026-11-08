@@ -461,6 +461,96 @@ async function run(): Promise<void> {
       'getBrowserLanguage must return "jv" for bare jv',
     );
   });
+  withNavigatorLanguage('mr-IN', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'mr',
+      'getBrowserLanguage must return "mr" for mr-IN',
+    );
+  });
+  withNavigatorLanguage('mr', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'mr',
+      'getBrowserLanguage must return "mr" for bare mr',
+    );
+  });
+  withNavigatorLanguage('sw-KE', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'sw',
+      'getBrowserLanguage must return "sw" for sw-KE',
+    );
+  });
+  withNavigatorLanguage('sw', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'sw',
+      'getBrowserLanguage must return "sw" for bare sw',
+    );
+  });
+  withNavigatorLanguage('sw-TZ', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'sw',
+      'sw-TZ must resolve through the same-script regional fallback to sw-KE',
+    );
+  });
+  withNavigatorLanguage('pa-IN', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'pa',
+      'getBrowserLanguage must return "pa" for pa-IN',
+    );
+  });
+  withNavigatorLanguage('pa', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'pa',
+      'getBrowserLanguage must return "pa" for bare pa',
+    );
+  });
+  withNavigatorLanguage('pa-Guru-IN', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'pa',
+      'pa-Guru-IN must resolve through the Gurmukhi script fallback to pa-IN',
+    );
+  });
+  withNavigatorLanguage('te-IN', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'te',
+      'getBrowserLanguage must return "te" for te-IN',
+    );
+  });
+  withNavigatorLanguage('te', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'te',
+      'getBrowserLanguage must return "te" for bare te',
+    );
+  });
+  withNavigatorLanguage('ta-IN', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'ta',
+      'getBrowserLanguage must return "ta" for ta-IN',
+    );
+  });
+  withNavigatorLanguage('ta', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'ta',
+      'getBrowserLanguage must return "ta" for bare ta',
+    );
+  });
+  withNavigatorLanguage('ta-LK', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'ta',
+      'ta-LK must resolve through the same-script regional fallback to ta-IN',
+    );
+  });
+  withNavigatorLanguage('uk-UA', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'uk',
+      'getBrowserLanguage must return "uk" for uk-UA',
+    );
+  });
+  withNavigatorLanguage('uk', () => {
+    assert(
+      i18nModule.getBrowserLanguage() === 'uk',
+      'getBrowserLanguage must return "uk" for bare uk',
+    );
+  });
   withNavigatorLanguage(
     'en-US',
     () => {
@@ -513,6 +603,12 @@ async function run(): Promise<void> {
     'ne',
     'ha',
     'jv',
+    'mr',
+    'sw',
+    'pa',
+    'te',
+    'ta',
+    'uk',
   ] as const;
   const { createTranslator } = frontendRequire('use-intl/core');
   // #375: prime the shared locale cache so messages resolve for all locales.

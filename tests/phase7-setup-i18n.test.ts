@@ -410,6 +410,146 @@ async function run(): Promise<void> {
         'Javanese express snack is localized',
       );
     }
+    if (language === 'mr') {
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-food'")[0].name,
+        'खाद्यपदार्थ',
+        'Marathi express category is localized',
+      );
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-beverages'")[0].name,
+        'पेये',
+        'Marathi express beverages category is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-meal'")[0].name,
+        'जेवण',
+        'Marathi express product is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-snack'")[0].name,
+        'नाश्ता',
+        'Marathi express snack is localized',
+      );
+    }
+    if (language === 'sw') {
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-food'")[0].name,
+        'Chakula',
+        'Swahili express category is localized',
+      );
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-beverages'")[0].name,
+        'Vinywaji',
+        'Swahili express beverages category is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-meal'")[0].name,
+        'Mlo',
+        'Swahili express product is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-tea'")[0].name,
+        'Chai',
+        'Swahili express tea is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-coffee'")[0].name,
+        'Kahawa',
+        'Swahili express coffee is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-snack'")[0].name,
+        'Vitafunio',
+        'Swahili express snack is localized',
+      );
+    }
+    if (language === 'te') {
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-food'")[0].name,
+        'ఆహారం',
+        'Telugu express category is localized',
+      );
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-beverages'")[0].name,
+        'పానీయాలు',
+        'Telugu express beverages category is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-meal'")[0].name,
+        'భోజనం',
+        'Telugu express meal is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-tea'")[0].name,
+        'టీ',
+        'Telugu express tea is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-coffee'")[0].name,
+        'కాఫీ',
+        'Telugu express coffee is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-snack'")[0].name,
+        'చిరుతిండి',
+        'Telugu express snack is localized',
+      );
+    }
+    if (language === 'ta') {
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-food'")[0].name,
+        'உணவு',
+        'Tamil express category is localized',
+      );
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-beverages'")[0].name,
+        'பானங்கள்',
+        'Tamil express beverages category is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-meal'")[0].name,
+        'சாப்பாடு',
+        'Tamil express product is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-snack'")[0].name,
+        'சிற்றுண்டி',
+        'Tamil express snack is localized',
+      );
+    }
+    if (language === 'uk') {
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-food'")[0].name,
+        'Їжа',
+        'Ukrainian express category is localized',
+      );
+      assert.equal(
+        rows('categories', 'name', "id = 'cat-express-beverages'")[0].name,
+        'Напої',
+        'Ukrainian express beverages category is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-meal'")[0].name,
+        'Страва',
+        'Ukrainian express meal is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-tea'")[0].name,
+        'Чай',
+        'Ukrainian express tea is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-coffee'")[0].name,
+        'Кава',
+        'Ukrainian express coffee is localized',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-express-snack'")[0].name,
+        'Закуска',
+        'Ukrainian express snack is localized',
+      );
+    }
 
     seedSetupProfile(db, 'demo', 'finedine', language, 'IN');
     const seededCustomers = rows('customers', 'phone, phone_digits, country_code', 'is_active = 1');
@@ -579,6 +719,50 @@ async function run(): Promise<void> {
         'Javanese demo customers use Indonesia E.164 numbers independent of the selected store country',
       );
     }
+    if (language === 'sw') {
+      assert.equal(snapshot.category, 'Vitafunio vya Mwanzo', 'Swahili demo category is localized');
+      assert.equal(snapshot.product, 'Sambusa za Nyama', 'Swahili demo product is localized');
+      assert.equal(
+        rows('products', 'name', "id = 'prod-demo-pilau'")[0].name,
+        'Pilau ya Nyama',
+        'Swahili demo pilau uses Swahili restaurant terminology',
+      );
+      assert.equal(snapshot.manager, 'Meneja wa Mfano', 'Swahili demo manager is localized');
+      assert.equal(snapshot.customer, 'Juma Bakari', 'Swahili demo customer is localized');
+      assert.deepEqual(
+        rows('customers', 'phone, country_code', "id LIKE 'cust-demo-%' ORDER BY id").map(
+          (customer) => [customer.phone, customer.country_code],
+        ),
+        [
+          ['+254712345678', '+254'],
+          ['+254712345679', '+254'],
+          ['+254712345680', '+254'],
+        ],
+        'Swahili demo customers use Kenya E.164 numbers independent of the selected store country',
+      );
+    }
+    if (language === 'te') {
+      assert.equal(snapshot.category, 'స్టార్టర్లు', 'Telugu demo category is localized');
+      assert.equal(snapshot.product, 'పునుగులు', 'Telugu demo product is localized');
+      assert.equal(
+        rows('products', 'name', "id = 'prod-demo-hyderabadi-biryani'")[0].name,
+        'హైదరాబాదీ బిర్యానీ',
+        'Telugu demo biryani uses Telugu restaurant terminology',
+      );
+      assert.equal(snapshot.manager, 'డెమో మేనేజర్', 'Telugu demo manager is localized');
+      assert.equal(snapshot.customer, 'రవి కుమార్', 'Telugu demo customer is localized');
+      assert.deepEqual(
+        rows('customers', 'phone, country_code', "id LIKE 'cust-demo-%' ORDER BY id").map(
+          (customer) => [customer.phone, customer.country_code],
+        ),
+        [
+          ['+919876543210', '+91'],
+          ['+919876543211', '+91'],
+          ['+919876543212', '+91'],
+        ],
+        'Telugu demo customers use India E.164 numbers',
+      );
+    }
     if (language === 'hi') {
       assert.equal(snapshot.category, 'स्टार्टर', 'Hindi demo category is localized');
       assert.equal(snapshot.product, 'पनीर टिक्का', 'Hindi demo product is localized');
@@ -590,6 +774,64 @@ async function run(): Promise<void> {
         ),
         ['+919876543210', '+919876543211', '+919876543212'],
         'Hindi demo customers use India E.164 numbers',
+      );
+    }
+    if (language === 'mr') {
+      assert.equal(snapshot.category, 'स्टार्टर', 'Marathi demo category is localized');
+      assert.equal(snapshot.product, 'कांदा भजी', 'Marathi demo product is localized');
+      assert.equal(
+        rows('products', 'name', "id = 'prod-demo-misal-pav'")[0].name,
+        'मिसळ पाव',
+        'Marathi demo misal pav uses Marathi restaurant terminology',
+      );
+      assert.equal(snapshot.manager, 'डेमो व्यवस्थापक', 'Marathi demo manager is localized');
+      assert.equal(snapshot.customer, 'रोहन देशमुख', 'Marathi demo customer is localized');
+      assert.deepEqual(
+        rows('customers', 'phone, country_code', "id LIKE 'cust-demo-%' ORDER BY id").map(
+          (customer) => [customer.phone, customer.country_code],
+        ),
+        [
+          ['+919820123456', '+91'],
+          ['+919820123457', '+91'],
+          ['+919820123458', '+91'],
+        ],
+        'Marathi demo customers use India E.164 numbers',
+      );
+    }
+    if (language === 'pa') {
+      assert.equal(snapshot.category, 'ਸਟਾਰਟਰ', 'Punjabi demo category is localized');
+      assert.equal(snapshot.product, 'ਪਨੀਰ ਟਿੱਕਾ', 'Punjabi demo product is localized');
+      assert.equal(
+        rows('products', 'name', "id = 'prod-demo-dal-makhani'")[0].name,
+        'ਦਾਲ ਮੱਖਣੀ',
+        'Punjabi demo dal makhani uses Punjabi restaurant terminology',
+      );
+      assert.equal(snapshot.manager, 'ਡੈਮੋ ਮੈਨੇਜਰ', 'Punjabi demo manager is localized');
+      assert.equal(snapshot.customer, 'ਹਰਪ੍ਰੀਤ ਸਿੰਘ', 'Punjabi demo customer is localized');
+      assert.deepEqual(
+        rows('customers', 'phone', "id LIKE 'cust-demo-%' ORDER BY id").map(
+          (customer) => customer.phone,
+        ),
+        ['+919876543210', '+919876543211', '+919876543212'],
+        'Punjabi demo customers use India E.164 numbers',
+      );
+    }
+    if (language === 'ta') {
+      assert.equal(snapshot.category, 'தொடக்க உணவுகள்', 'Tamil demo category is localized');
+      assert.equal(snapshot.product, 'மெது வடை', 'Tamil demo product is localized');
+      assert.equal(
+        rows('products', 'name', "id = 'prod-demo-masala-dosa'")[0].name,
+        'மசாலா தோசை',
+        'Tamil demo masala dosa uses Tamil restaurant terminology',
+      );
+      assert.equal(snapshot.manager, 'மாதிரி மேலாளர்', 'Tamil demo manager is localized');
+      assert.equal(snapshot.customer, 'கார்த்திக் சுப்பிரமணியன்', 'Tamil demo customer is localized');
+      assert.deepEqual(
+        rows('customers', 'phone', "id LIKE 'cust-demo-%' ORDER BY id").map(
+          (customer) => customer.phone,
+        ),
+        ['+919876543210', '+919876543211', '+919876543212'],
+        'Tamil demo customers use India E.164 numbers',
       );
     }
     if (language === 'bn') {
@@ -720,6 +962,38 @@ async function run(): Promise<void> {
         rows('tables', 'number', "id = 'tbl-demo-1'")[0].number,
         'С1',
         'Russian demo table label is localized',
+      );
+    }
+    if (language === 'uk') {
+      assert.equal(snapshot.category, 'Закуски', 'Ukrainian demo category is localized');
+      assert.equal(snapshot.product, 'Деруни зі сметаною', 'Ukrainian demo product is localized');
+      assert.equal(
+        rows('products', 'name', "id = 'prod-demo-borshch'")[0].name,
+        'Український борщ',
+        'Ukrainian demo borshch uses Ukrainian restaurant terminology',
+      );
+      assert.equal(
+        rows('products', 'name', "id = 'prod-demo-kyiv-cutlet'")[0].name,
+        'Котлета по-київськи',
+        'Ukrainian demo Kyiv cutlet uses Ukrainian restaurant terminology',
+      );
+      assert.equal(snapshot.manager, 'Демо-менеджер', 'Ukrainian demo manager is localized');
+      assert.equal(snapshot.customer, 'Олена Коваленко', 'Ukrainian demo customer is localized');
+      assert.deepEqual(
+        rows('customers', 'phone, country_code', "id LIKE 'cust-demo-%' ORDER BY id").map(
+          (customer) => [customer.phone, customer.country_code],
+        ),
+        [
+          ['+380501234567', '+380'],
+          ['+380501234568', '+380'],
+          ['+380501234569', '+380'],
+        ],
+        'Ukrainian demo customers use Ukraine E.164 numbers independent of the selected store country',
+      );
+      assert.equal(
+        rows('tables', 'number', "id = 'tbl-demo-1'")[0].number,
+        'С1',
+        'Ukrainian demo table label is localized',
       );
     }
     if (englishIdenticalSeeds.has(language)) {
@@ -865,6 +1139,34 @@ async function run(): Promise<void> {
   assert.equal(
     translate('ru', 'settings.fixesAppliedPartial', { applied: 1, failed: 0 }),
     'Исправлений применено: 1; ошибок: 0',
+  );
+
+  // Ukrainian cardinal plural branches and count-safe labels must render one/few/many forms cleanly.
+  assert.equal(translate('uk', 'pos.addToOrder', { count: 1 }), 'Додати 1 позицію до замовлення');
+  assert.equal(translate('uk', 'pos.addToOrder', { count: 2 }), 'Додати 2 позиції до замовлення');
+  assert.equal(translate('uk', 'pos.addToOrder', { count: 5 }), 'Додати 5 позицій до замовлення');
+  assert.equal(
+    translate('uk', 'kds.itemsUpdateFailed', { count: 1 }),
+    'Не вдалося оновити 1 позицію. Дошку оновлено.',
+  );
+  assert.equal(
+    translate('uk', 'kds.itemsUpdateFailed', { count: 2 }),
+    'Не вдалося оновити 2 позиції. Дошку оновлено.',
+  );
+  assert.equal(
+    translate('uk', 'kds.itemsUpdateFailed', { count: 5 }),
+    'Не вдалося оновити 5 позицій. Дошку оновлено.',
+  );
+  assert.equal(
+    translate('uk', 'auth.attemptsRemaining', { count: 1 }),
+    'До блокування залишилося спроб: 1',
+  );
+  assert.equal(translate('uk', 'dashboard.ordersCount', { count: 1 }), 'Замовлень: 1');
+  assert.equal(translate('uk', 'pos.tableSeats', { count: 1 }), 'Місць: 1');
+  assert.equal(translate('uk', 'settings.printColumnsShort', { cols: 32 }), 'Стовпців: 32');
+  assert.equal(
+    translate('uk', 'settings.fixesAppliedPartial', { applied: 1, failed: 0 }),
+    'Виправлень застосовано: 1; помилок: 0',
   );
 
   for (const language of languages) {

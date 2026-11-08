@@ -118,6 +118,12 @@ async function run() {
     'ne',
     'ha',
     'jv',
+    'mr',
+    'sw',
+    'pa',
+    'te',
+    'ta',
+    'uk',
   ] as const) {
     await i18n.loadLocaleMessages(lang);
   }
@@ -724,6 +730,105 @@ async function run() {
         jvHtml.includes('Matur nuwun rawuhipun!'),
     );
 
+    const mrTenant = {
+      business_name: 'FloCafe Pune',
+      currency: 'INR',
+      country: 'IN',
+      timezone: 'Asia/Kolkata',
+    };
+    const mrHtml = generateBillHtml(sampleEnBill, mrTenant, { language: 'mr', isReprint: true });
+    assert(
+      'MR receipt has lang="mr-IN" and dir="ltr"',
+      mrHtml.includes('<html lang="mr-IN" dir="ltr">'),
+    );
+    assert(
+      'MR labels are Devanagari',
+      mrHtml.includes('पुनःमुद्रण') &&
+        mrHtml.includes('बिल #') &&
+        mrHtml.includes('एकूण रक्कम') &&
+        mrHtml.includes('तुमच्या भेटीबद्दल धन्यवाद!'),
+    );
+
+    const swTenant = {
+      business_name: 'FloCafe Nairobi',
+      currency: 'KES',
+      country: 'KE',
+      timezone: 'Africa/Nairobi',
+    };
+    const swHtml = generateBillHtml(sampleEnBill, swTenant, { language: 'sw', isReprint: true });
+    assert(
+      'SW receipt has lang="sw-KE" and dir="ltr"',
+      swHtml.includes('<html lang="sw-KE" dir="ltr">'),
+    );
+    assert(
+      'SW labels are Swahili',
+      swHtml.includes('CHAPISHO LA MARUDIO') &&
+        swHtml.includes('Bili #') &&
+        swHtml.includes('Jumla Kuu') &&
+        swHtml.includes('Asante kwa kututembelea!'),
+    );
+
+    const paTenant = {
+      business_name: 'FloCafe Amritsar',
+      currency: 'INR',
+      country: 'IN',
+      timezone: 'Asia/Kolkata',
+    };
+    const paHtml = generateBillHtml(sampleEnBill, paTenant, { language: 'pa', isReprint: true });
+    assert(
+      'PA receipt has lang="pa-IN" and dir="ltr"',
+      paHtml.includes('<html lang="pa-IN" dir="ltr">'),
+    );
+    assert(
+      'PA labels are Gurmukhi',
+      paHtml.includes('ਮੁੜ-ਪ੍ਰਿੰਟ') &&
+        paHtml.includes('ਬਿੱਲ #') &&
+        paHtml.includes('ਕੁੱਲ ਜੋੜ') &&
+        paHtml.includes('ਤੁਹਾਡੇ ਆਉਣ ਲਈ ਧੰਨਵਾਦ!'),
+    );
+
+    const taTenant = {
+      business_name: 'FloCafe Chennai',
+      currency: 'INR',
+      country: 'IN',
+      timezone: 'Asia/Kolkata',
+    };
+    const taHtml = generateBillHtml(sampleEnBill, taTenant, { language: 'ta', isReprint: true });
+    assert(
+      'TA receipt has lang="ta-IN" and dir="ltr"',
+      taHtml.includes('<html lang="ta-IN" dir="ltr">'),
+    );
+    assert(
+      'TA labels are Tamil',
+      taHtml.includes('மறுஅச்சு') &&
+        taHtml.includes('பில் #') &&
+        taHtml.includes('மொத்தத் தொகை') &&
+        taHtml.includes('உங்கள் வருகைக்கு நன்றி!'),
+    );
+    assert(
+      'TA receipt declares the Tamil font families',
+      taHtml.includes("'Noto Sans Tamil', 'Latha', 'Tamil Sangam MN'"),
+    );
+
+    const ukTenant = {
+      business_name: 'FloCafe Київ',
+      currency: 'UAH',
+      country: 'UA',
+      timezone: 'Europe/Kyiv',
+    };
+    const ukHtml = generateBillHtml(sampleEnBill, ukTenant, { language: 'uk', isReprint: true });
+    assert(
+      'UK receipt has lang="uk-UA" and dir="ltr"',
+      ukHtml.includes('<html lang="uk-UA" dir="ltr">'),
+    );
+    assert(
+      'UK labels are Ukrainian Cyrillic',
+      ukHtml.includes('ПОВТОРНИЙ ДРУК') &&
+        ukHtml.includes('Рахунок №') &&
+        ukHtml.includes('Загальна сума') &&
+        ukHtml.includes('Дякуємо за ваш візит!'),
+    );
+
     // The browser receipt is the primary print path, and its body stack was
     // extended per language by hand, so Bengali was the one merged locale left
     // without a declared family here. Assert the families the order-slip and
@@ -738,6 +843,27 @@ async function run() {
       bnHtml.includes(
         "'Noto Naskh Arabic', 'Noto Sans Bengali', 'Vrinda', 'Bangla Sangam MN', 'Noto Sans Devanagari'",
       ),
+    );
+
+    const teHtml = generateBillHtml(
+      sampleEnBill,
+      { ...neTenant, currency: 'INR', country: 'IN', timezone: 'Asia/Kolkata' },
+      { language: 'te', isReprint: true },
+    );
+    assert(
+      'TE receipt has lang="te-IN" and dir="ltr"',
+      teHtml.includes('<html lang="te-IN" dir="ltr">'),
+    );
+    assert(
+      'TE receipt declares the Telugu font families',
+      teHtml.includes("'Noto Sans Telugu', 'Kohinoor Telugu', 'Telugu Sangam MN'"),
+    );
+    assert(
+      'TE labels are Telugu',
+      teHtml.includes('రీప్రింట్') &&
+        teHtml.includes('బిల్లు #') &&
+        teHtml.includes('మొత్తం') &&
+        teHtml.includes('మీ సందర్శనకు ధన్యవాదాలు!'),
     );
   }
 
@@ -954,6 +1080,87 @@ async function run() {
         nepaliSlip.includes('रू'),
     );
 
+    const marathiSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'ऑर्डर स्लिप',
+        subtotal: 'उप-एकूण',
+        discount: 'सवलत',
+        serviceCharge: 'सेवा शुल्क',
+        deliveryCharge: 'डिलिव्हरी शुल्क',
+        packagingCharge: 'पॅकेजिंग शुल्क',
+        tax: 'कर',
+        total: 'एकूण रक्कम',
+      },
+      {
+        country: 'IN',
+        currency: 'INR',
+        locale: 'mr-IN',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Marathi order slip carries mr-IN LTR metadata, Devanagari labels, and tenant currency',
+      marathiSlip.includes('lang="mr-IN" dir="ltr"') &&
+        marathiSlip.includes('उप-एकूण') &&
+        marathiSlip.includes('एकूण रक्कम') &&
+        marathiSlip.includes('₹'),
+    );
+
+    const punjabiSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'ਆਰਡਰ ਸਲਿੱਪ',
+        subtotal: 'ਉਪ-ਜੋੜ',
+        discount: 'ਛੋਟ',
+        serviceCharge: 'ਸਰਵਿਸ ਚਾਰਜ',
+        deliveryCharge: 'ਡਿਲੀਵਰੀ ਚਾਰਜ',
+        packagingCharge: 'ਪੈਕੇਜਿੰਗ ਚਾਰਜ',
+        tax: 'ਟੈਕਸ',
+        total: 'ਕੁੱਲ ਜੋੜ',
+      },
+      {
+        country: 'IN',
+        currency: 'INR',
+        locale: 'pa-IN',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Punjabi order slip carries pa-IN LTR metadata, Gurmukhi labels, and local font fallback',
+      punjabiSlip.includes('lang="pa-IN" dir="ltr"') &&
+        punjabiSlip.includes('Noto Sans Gurmukhi') &&
+        punjabiSlip.includes('ਉਪ-ਜੋੜ') &&
+        punjabiSlip.includes('ਕੁੱਲ ਜੋੜ'),
+    );
+
+    const tamilSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'ஆர்டர் சீட்டு',
+        subtotal: 'துணை மொத்தம்',
+        discount: 'தள்ளுபடி',
+        serviceCharge: 'சேவை கட்டணம்',
+        deliveryCharge: 'டெலிவரி கட்டணம்',
+        packagingCharge: 'பேக்கேஜிங் கட்டணம்',
+        tax: 'வரி',
+        total: 'மொத்தத் தொகை',
+      },
+      {
+        country: 'IN',
+        currency: 'INR',
+        locale: 'ta-IN',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Tamil order slip carries ta-IN LTR metadata, local font fallback, and Tamil labels',
+      tamilSlip.includes('lang="ta-IN" dir="ltr"') &&
+        tamilSlip.includes('Noto Sans Tamil') &&
+        tamilSlip.includes('துணை மொத்தம்') &&
+        tamilSlip.includes('மொத்தத் தொகை'),
+    );
+
     const bengaliSlip = generateOrderSlipHtml(
       testIranOrder,
       {
@@ -1091,6 +1298,91 @@ async function run() {
         javaneseSlip.includes('Slip Pesenan') &&
         javaneseSlip.includes('Sub-gunggung') &&
         javaneseSlip.includes('Gunggung'),
+    );
+
+    const swahiliSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'Karatasi ya Oda',
+        subtotal: 'Jumla Ndogo',
+        discount: 'Punguzo',
+        serviceCharge: 'Ada ya Huduma',
+        deliveryCharge: 'Ada ya Uwasilishaji',
+        packagingCharge: 'Ada ya Ufungashaji',
+        tax: 'Kodi',
+        total: 'Jumla',
+      },
+      {
+        country: 'KE',
+        currency: 'KES',
+        locale: 'sw-KE',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Swahili order slip carries sw-KE LTR metadata and Swahili labels',
+      swahiliSlip.includes('lang="sw-KE" dir="ltr"') &&
+        swahiliSlip.includes('direction:ltr;text-align:left;') &&
+        swahiliSlip.includes('Karatasi ya Oda') &&
+        swahiliSlip.includes('Jumla Ndogo') &&
+        swahiliSlip.includes('Jumla'),
+    );
+
+    const teluguSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'ఆర్డర్ స్లిప్',
+        subtotal: 'ఉప మొత్తం',
+        discount: 'డిస్కౌంట్',
+        serviceCharge: 'సర్వీస్ ఛార్జ్',
+        deliveryCharge: 'డెలివరీ ఛార్జ్',
+        packagingCharge: 'ప్యాకేజింగ్ ఛార్జ్',
+        tax: 'పన్ను',
+        total: 'మొత్తం',
+      },
+      {
+        country: 'IN',
+        currency: 'INR',
+        locale: 'te-IN',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Telugu order slip carries te-IN LTR metadata and Telugu font fallback',
+      teluguSlip.includes('lang="te-IN" dir="ltr"') &&
+        teluguSlip.includes('Noto Sans Telugu') &&
+        teluguSlip.includes('ఆర్డర్ స్లిప్') &&
+        teluguSlip.includes('ఉప మొత్తం') &&
+        teluguSlip.includes('మొత్తం'),
+    );
+
+    const ukrainianSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'Чек замовлення',
+        subtotal: 'Проміжний підсумок',
+        discount: 'Знижка',
+        serviceCharge: 'Сервісний збір',
+        deliveryCharge: 'Вартість доставки',
+        packagingCharge: 'Вартість пакування',
+        tax: 'Податок',
+        total: 'Разом',
+      },
+      {
+        paperWidth: 80,
+        country: 'UA',
+        currency: 'UAH',
+        locale: 'uk-UA',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Ukrainian order slip carries uk-UA LTR metadata and localized Cyrillic labels',
+      ukrainianSlip.includes('lang="uk-UA" dir="ltr"') &&
+        ukrainianSlip.includes('direction:ltr;text-align:left;') &&
+        ukrainianSlip.includes('Чек замовлення') &&
+        ukrainianSlip.includes('Проміжний підсумок') &&
+        ukrainianSlip.includes('Разом'),
     );
   }
 

@@ -197,6 +197,48 @@ export const LANGUAGES = {
     selectable: true,
     load: () => import('./messages/jv.json'),
   },
+  mr: {
+    locale: 'mr-IN',
+    nativeName: 'मराठी',
+    direction: 'ltr',
+    selectable: true,
+    load: () => import('./messages/mr.json'),
+  },
+  sw: {
+    locale: 'sw-KE',
+    nativeName: 'Kiswahili',
+    direction: 'ltr',
+    selectable: true,
+    load: () => import('./messages/sw.json'),
+  },
+  pa: {
+    locale: 'pa-IN',
+    nativeName: 'ਪੰਜਾਬੀ',
+    direction: 'ltr',
+    selectable: true,
+    load: () => import('./messages/pa.json'),
+  },
+  te: {
+    locale: 'te-IN',
+    nativeName: 'తెలుగు',
+    direction: 'ltr',
+    selectable: true,
+    load: () => import('./messages/te.json'),
+  },
+  ta: {
+    locale: 'ta-IN',
+    nativeName: 'தமிழ்',
+    direction: 'ltr',
+    selectable: true,
+    load: () => import('./messages/ta.json'),
+  },
+  uk: {
+    locale: 'uk-UA',
+    nativeName: 'Українська',
+    direction: 'ltr',
+    selectable: true,
+    load: () => import('./messages/uk.json'),
+  },
 } as const satisfies Record<string, LanguageConfig>;
 
 export type Language = keyof typeof LANGUAGES;

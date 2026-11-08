@@ -18,6 +18,7 @@ import {
 import {
   concatBytes,
   encodeGsV0Band,
+  rasterCapabilityEnabled,
   type RasterSemanticLineGroup,
   type RasterTextLayout,
 } from '../../shared/print/raster';
@@ -283,6 +284,7 @@ export interface ClassicDocumentRenderOptions {
   readonly preserveCurrencySymbol?: boolean;
   readonly cutMode: PrinterCutMode;
   readonly capabilities?: ThermalPrinterCapabilities;
+  readonly logoCapabilities?: ThermalPrinterCapabilities;
   readonly maskCustomerPhone?: boolean;
   readonly rasterGroups?: RasterSemanticLineGroup[];
   readonly financialLineRanges?: Array<{ lineIndex: number; lineCount: number }>;
@@ -550,9 +552,13 @@ export function renderBillDocumentToClassicLines(
     switch (block.kind) {
       case 'business-header': {
         const segment = segmentOf('business-header');
-        if (block.logoRaster) {
-          const widthDots = options.capabilities?.raster?.widthDots ?? (cols <= 32 ? 384 : 576);
-          const maxBandHeight = options.capabilities?.raster?.maxBandHeight ?? 200;
+        const logoCapabilities = options.logoCapabilities ?? options.capabilities;
+        if (
+          block.logoRaster &&
+          (logoCapabilities === undefined || rasterCapabilityEnabled(logoCapabilities))
+        ) {
+          const widthDots = logoCapabilities?.raster?.widthDots ?? (cols <= 32 ? 384 : 576);
+          const maxBandHeight = logoCapabilities?.raster?.maxBandHeight ?? 200;
           const bands = getLogoRasterBands(block.logoRaster, widthDots, maxBandHeight);
           if (bands.length > 0) {
             const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
@@ -1301,7 +1307,7 @@ export function renderClassicReceiptViaDocument(
   const warnings: PrintWarning[] = [];
   const rasterGroups: RasterSemanticLineGroup[] = [];
   const financialLineRanges: Array<{ lineIndex: number; lineCount: number }> = [];
-  const lines = renderBillDocumentToClassicLines(document, {
+  const baseRenderOptions = {
     columns: opts.columns,
     language: printContext.languages[0],
     locale: printContext.locale,
@@ -1312,14 +1318,31 @@ export function renderClassicReceiptViaDocument(
     useUnicode: opts.useUnicode,
     arabicShaping: opts.arabicShaping,
     cutMode: opts.cutMode,
-    capabilities: opts.capabilities,
     maskCustomerPhone: false,
     preserveCurrencySymbol: opts.preserveCurrencySymbol,
+  };
+  const lines = renderBillDocumentToClassicLines(document, {
+    ...baseRenderOptions,
+    capabilities: opts.capabilities,
     rasterGroups,
     financialLineRanges,
   });
+  let nativeLines = lines;
+  let nativeFinancialLineRanges = financialLineRanges;
+  if (opts.capabilities?.raster.enabled === true) {
+    nativeFinancialLineRanges = [];
+    nativeLines = renderBillDocumentToClassicLines(document, {
+      ...baseRenderOptions,
+      capabilities: {
+        ...opts.capabilities,
+        raster: { ...opts.capabilities.raster, enabled: false },
+      },
+      logoCapabilities: opts.capabilities,
+      financialLineRanges: nativeFinancialLineRanges,
+    });
+  }
   const data = buildEscPos(
-    lines,
+    nativeLines,
     opts.useUnicode,
     {
       cutMode: opts.cutMode,
@@ -1327,7 +1350,7 @@ export function renderClassicReceiptViaDocument(
       columns: opts.columns,
       language: opts.language,
       capabilities: opts.capabilities,
-      financialLineRanges,
+      financialLineRanges: nativeFinancialLineRanges,
     },
     warnings,
   );

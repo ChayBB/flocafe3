@@ -27,9 +27,9 @@ Pinned by `tests/print-kernel.test.ts`.
 
 ## Indic conjuncts are never split
 
-A Devanagari or Bengali conjunct is a single grapheme cluster and must stay one. The virama
-characters that join them, U+094D in Devanagari and U+09CD in Bengali, are the ones a naive
-splitter would break.
+A Devanagari, Bengali, Gurmukhi, or Telugu conjunct is a single grapheme cluster and must stay one. The
+virama characters that join them, U+094D in Devanagari, U+09CD in Bengali, U+0A4D in Gurmukhi, and U+0C4D in Telugu,
+are the ones a naive splitter would break.
 
 Pinned by `tests/print-kernel.test.ts`, which asserts that wrapping a two-cluster Indic string at one
 column per line keeps each conjunct intact, and that truncation whose budget ends inside a conjunct
@@ -55,22 +55,22 @@ is invisible on screen and corrupts comparison, searching, and print labels.
 identically and wrap identically after normalisation, which is what makes NFC a requirement rather
 than a preference. `tests/translations.test.ts` rejects a `vi.json` value that is not already NFC.
 
-The same NFC requirement is enforced for `ha.json`, `jv.json`, `ne.json`, `ru.json`, and `th.json`.
+The same NFC requirement is enforced for `ha.json`, `jv.json`, `mr.json`, `ne.json`, `pa.json`, `ru.json`, `sw.json`, `ta.json`, `te.json`, `th.json`, and `uk.json`.
 
-## Albanian and Vietnamese on a generic thermal printer
+## Albanian and Vietnamese on thermal and impact printers
 
-`LATIN_THERMAL_CAPABILITIES` in `shared/print/thermal-capabilities.ts` covers Latin-script printers
-with `cp437`, `cp850`, `cp858`, and `windows1252` code pages, and transliteration to ASCII.
+`GENERIC_THERMAL_CAPABILITIES` (`scripts: ['ascii']`) in `shared/print/thermal-capabilities.ts`
+transliterates only through the fixed `LATIN_ASCII_MAP`, so Albanian `Ç`/`ç` and `Ë`/`ë` become
+`C`/`c` and `E`/`e`, and German umlauts (`Ä`/`Ö`/`Ü`/`ß`) fold the same way. Characters outside
+that map remain unrepresentable on `GENERIC_THERMAL_CAPABILITIES` unless raster rendering is
+enabled.
 
-Albanian is transliterated through a fixed `LATIN_ASCII_MAP`, so `Ç` and `ç` become `C` and `c`, and
-`Ë` and `ë` become `E` and `e`. The map exists because those two characters are outside CP437. German
-umlauts are transliterated the same way in the same table. A translation is free to use the full
-character set; the printer path handles the reduction.
+`LATIN_THERMAL_CAPABILITIES` (`scripts: ['ascii', 'latin']`) covers Latin-script printers with
+`cp437`, `cp850`, `cp858`, and `windows1252` code pages plus fallback transliteration. Native
+code-page coverage (without transliteration, as checked by `shouldUseOrderTypeFallback()`) for
+Vietnamese strings is:
 
-Vietnamese is a different case, because many of its characters are outside every supported code page.
-Verified against `LATIN_THERMAL_CAPABILITIES`:
-
-| String | Representable | Code page |
+| String | Native code-page match | Code page |
 | --- | --- | --- |
 | `Món` | yes | `cp437` |
 | `Khách hàng` | yes | `cp437` |
@@ -84,12 +84,14 @@ Verified against `LATIN_THERMAL_CAPABILITIES`:
 | `Đơn vị` | no | none |
 | `Tiếng Việt` | no | none |
 
-The characters that fail are those carrying a tone mark: `ộ`, `đ`, `ạ`, `ố`, `ơ`, and the stacked
-`ế` in `Tiếng`. Note that the language endonym itself is not representable, so a printer-specific
-surface that prints the language name needs a fallback too.
-
-This is a property of the printer, not of the translation. A Vietnamese string that fails this table
-still renders correctly in the UI, on a browser receipt, and on a printer with a raster path.
+The characters lacking a native single-byte code page are those carrying a tone mark, horn, or
+stroke: `ộ`, `đ`, `ạ`, `ố`, `ơ`, and the stacked `ế` in `Tiếng`. When no single native code page
+can represent a Latin-script string on `LATIN_THERMAL_CAPABILITIES` (and raster rendering is not
+handling it), `normalizeThermalText()` applies `LATIN_ASCII_MAP`, `LATIN_EXTENDED_ASCII_MAP`
+(`Æ/æ`, `Œ/œ`, `Ø/ø`, `Ł/ł`, `Đ/đ`, `Ð/ð`, `Þ/þ`, `Ğ/ğ`, `İ/ı`, `Ş/ş`, `Ơ/ơ`, `Ư/ư`), and Unicode
+NFD `\p{Diacritic}` stripping on Latin characters so non-raster Latin profiles (such as
+`escpos-impact-76`) fold those strings to ASCII (`cp437`). A translation is free to use the full
+character set; the printer path handles the reduction or raster fallback.
 
 ## Print capability is owned by the printer profile
 
@@ -135,12 +137,12 @@ A space before `{number}` is legitimate. Persian and Arabic use `شماره {num
 
 ## Devanagari spelling: the visarga in पुनः
 
-Nepali spells "again" `पुनः` with the visarga, U+0903, not with an ASCII colon. `पुन:` looks
+Nepali and Marathi spell "again" `पुनः` with the visarga, U+0903, not with an ASCII colon. `पुन:` looks
 close enough in a diff to be overlooked, and it renders as a visibly wrong glyph on a thermal
 receipt. The same applies to the matra in a trailing syllable, where a base consonant must keep
 the marks that attach to it.
 
-`tests/translations.test.ts` rejects a `ne.json` value containing `पुन:` and requires at least one
+`tests/translations.test.ts` rejects a `ne.json` or `mr.json` value containing `पुन:` and requires at least one
 `पुनः`, so the spelling cannot silently regress.
 
 ## POS terminology a translator would otherwise get wrong
@@ -177,6 +179,48 @@ use idiomatic Javanese: dine-in is `Mangan ing Kene`, takeaway is `Gawa Mulih`, 
 `pos.*` and `products.*`. Cash movement uses `Lebokake Tunai` for pay-in and `Wetokake Tunai` for
 pay-out across both the dashboard and the Z-report, and cash received on a receipt is
 `Tunai Ditampa`.
+
+**Marathi.** Subtotal `उप-एकूण` and grand total `एकूण रक्कम` are distinct labels and must stay
+distinct on the receipt. The vegetarian tags are `शाकाहारी` and the non-vegetarian tags
+`मांसाहारी`, identical between `pos.*` and `products.*`. Cash movement uses `रोख जमा` for pay-in
+and `रोख काढणे` for pay-out, identically on the dashboard and on the Z-report. Reprint is
+`पुनःमुद्रण` with the visarga (U+0903), and standard restaurant POS loanwords remain natural:
+order is `ऑर्डर`, takeaway is `टेकअवे`, delivery is `डिलिव्हरी`, and dine-in is `डाइन-इन`.
+
+**Swahili.** Subtotal `Jumla Ndogo` and grand total `JUMLA KUU` (`Jumla Kuu` on browser receipts) are
+distinct labels and must stay distinct on the receipt. Vegetarian tags are `Mboga` and non-vegetarian
+tags `Isiyo ya Mboga`, identical between `pos.*` and `products.*`. Takeaway is `Kuchukua`, dine-in is
+`Kula Hapa`, and delivery is `Uwasilishaji`. Cash movement uses `Uwekaji pesa` for pay-in and
+`Utoaji pesa` for pay-out, identically on the dashboard and on the Z-report.
+
+**Punjabi.** Subtotal `ਉਪ-ਜੋੜ` and grand total `ਕੁੱਲ ਜੋੜ` stay distinct on the receipt, and cash
+received is `ਪ੍ਰਾਪਤ ਨਕਦ`. The vegetarian and non-vegetarian tags are `ਸ਼ਾਕਾਹਾਰੀ` and `ਮਾਸਾਹਾਰੀ` across
+both `pos.*` and `products.*`. Cash movement uses `ਨਕਦ ਜਮ੍ਹਾਂ` for pay-in and `ਨਕਦ ਨਿਕਾਸੀ` for
+pay-out on both the dashboard and the Z-report, and takeaway is `ਟੇਕਅਵੇ` across `orders.*` and
+`pos.*`. Gurmukhi virama conjuncts (`ਪ੍ਰ`, `ਸ੍ਰ`) and combining signs (`ੰ` tippi, `ਂ` bindi, `ੱ`
+addak, `਼` nukta) must remain NFC-normalized and attached to their base consonant.
+
+**Telugu.** Subtotal `ఉప మొత్తం` and grand total `మొత్తం` are distinct labels and must stay
+distinct on the receipt. The vegetarian tags are `శాకాహారం` and the non-vegetarian tags
+`మాంసాహారం`, identical between `pos.*` and `products.*`. Cash movement uses `నగదు జమ` for pay-in
+and `నగదు ఉపసంహరణ` for pay-out, identically on the dashboard and on the Z-report. Takeaway is
+`టేక్అవే` and delivery is `డెలివరీ`.
+
+**Tamil.** Subtotal `துணை மொத்தம்` and grand total `மொத்தத் தொகை` are distinct labels and must stay
+distinct on the receipt. The vegetarian tags are `சைவம்` and the non-vegetarian tags `அசைவம்`,
+identical between `pos.*` and `products.*`. Cash movement uses `ரொக்க வரவு` for pay-in and `ரொக்க செலவு`
+for pay-out across the dashboard and the Z-report. Takeaway is `பார்சல்` across `orders.takeaway` and
+`pos.orderTypeTakeaway`, distinct from delivery `டெலிவரி` and dine-in `உணவகத்தில் சாப்பிட`.
+
+**Ukrainian.** Takeaway is `З собою` and dine-in is `У закладі`; "delivery" is `Доставка`. Subtotal
+`Проміжний підсумок` and grand total `РАЗОМ` (or `Загальна сума` on browser receipts) stay distinct,
+and cash received on a receipt is `Отримано готівкою`. The dietary tags are `Вегетаріанське`,
+`Не вегетаріанське`, and `Без молочних продуктів` (dairy-free, not lactose-free) across both `pos.*`
+and `products.*`. Store-credit refund is `Баланс гаманця клієнта`, and waiving a charge is
+`Не стягувати`. Cash movement is `Внесення готівки` for pay-in, `Видача готівки` for pay-out, and
+`Інкасація` for safe drop, identically on the dashboard and on the Z-report, and the
+counted-versus-expected pair is `Фактична готівка` and `Очікувана готівка`. Use count-safe wording
+throughout where the English catalogue has no plural selector.
 
 ## Verification
 

@@ -69,6 +69,7 @@ import {
   getSupportedPrinterProfiles,
   resolvePrinterProfile,
   capabilitiesForPrinter,
+  isValidPrinterProfileId,
 } from '../printers/profiles';
 import { hasPermission, requirePermission, requireAnyPermission } from '../services/authorization';
 import { getOpenSession, listOpenSessions } from '../services/shift-session-gate';
@@ -145,6 +146,14 @@ function validatePrinterFields(body: any, existing?: any): string | null {
   if (body.text_size !== undefined && !PRINTER_TEXT_SIZES.includes(body.text_size)) {
     return 'text_size must be normal, large, or extra_large';
   }
+  if (
+    body.profile_id !== undefined &&
+    body.profile_id !== null &&
+    body.profile_id !== '' &&
+    !isValidPrinterProfileId(body.profile_id)
+  ) {
+    return 'profile_id must be a supported printer profile ID';
+  }
 
   const connectionType =
     body.connection_type !== undefined ? body.connection_type : existing?.connection_type;
@@ -208,6 +217,7 @@ export function printerShape(printer: any) {
     text_size: textSize,
     created_at: printer.created_at,
     updated_at: printer.updated_at,
+    configured_profile_id: printer.profile_id ?? null,
     profile_id: profile.id,
     profile_name: `${profile.make} ${profile.model}`,
     capabilities,
@@ -337,6 +347,7 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
       port,
       paper_width,
       text_size,
+      profile_id,
       is_default,
       cash_drawer_pulse_enabled,
     } = req.body;
@@ -364,6 +375,13 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
 
     const db = getDatabase();
     const id = randomUUID();
+    const normalizedProfileId =
+      typeof profile_id === 'string' && profile_id.trim().length > 0 ? profile_id.trim() : null;
+    const resolvedProfile = resolvePrinterProfile({
+      name,
+      profile_id: normalizedProfileId,
+    });
+    const resolvedPaperWidth = paper_width ?? resolvedProfile.defaultPaperWidth ?? 'cols-42';
 
     db.transaction(() => {
       const existingPrinters = db.prepare('SELECT COUNT(*) as count FROM printers').get() as any;
@@ -371,8 +389,8 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
       const shouldBeDefault = Boolean(is_default) || isFirstPrinter;
       if (shouldBeDefault) db.prepare('UPDATE printers SET is_default = 0').run();
       db.prepare(`
-        INSERT INTO printers (id, name, device_name, connection_type, ip_address, port, paper_width, text_size, is_default, cash_drawer_pulse_enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO printers (id, name, device_name, connection_type, ip_address, port, paper_width, text_size, profile_id, is_default, cash_drawer_pulse_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         name,
@@ -380,8 +398,9 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
         connection_type,
         ip_address ?? null,
         port ?? 9100,
-        paper_width ?? 'cols-42',
+        resolvedPaperWidth,
         text_size ?? 'normal',
+        normalizedProfileId,
         shouldBeDefault ? 1 : 0,
         cash_drawer_pulse_enabled === true ? 1 : 0,
         now(),
@@ -412,6 +431,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
       port,
       paper_width,
       text_size,
+      profile_id,
       is_default,
       cash_drawer_pulse_enabled,
     } = req.body;
@@ -430,11 +450,17 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
       const updatedConnectionType =
         connection_type !== undefined ? connection_type : existing.connection_type;
       const updatedIpAddress = ip_address !== undefined ? ip_address : existing.ip_address;
+      const updatedProfileId =
+        profile_id !== undefined
+          ? typeof profile_id === 'string' && profile_id.trim().length > 0
+            ? profile_id.trim()
+            : null
+          : (existing.profile_id ?? null);
       const becameDefault = is_default === true;
       db.prepare(`
         UPDATE printers SET
           name = ?, device_name = ?, connection_type = ?, ip_address = ?, port = ?,
-          paper_width = ?, text_size = ?, is_default = ?, cash_drawer_pulse_enabled = ?, updated_at = ?
+          paper_width = ?, text_size = ?, profile_id = ?, is_default = ?, cash_drawer_pulse_enabled = ?, updated_at = ?
         WHERE id = ?
       `).run(
         name !== undefined ? name : existing.name,
@@ -444,6 +470,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
         port !== undefined ? port : existing.port,
         paper_width !== undefined ? paper_width : existing.paper_width,
         text_size !== undefined ? text_size : existing.text_size,
+        updatedProfileId,
         becameDefault ? 1 : is_default === false ? 0 : existing.is_default,
         cash_drawer_pulse_enabled !== undefined
           ? cash_drawer_pulse_enabled
@@ -1272,18 +1299,24 @@ export function routeItemsToStations(
   orderItems: any[],
 ): { stationName: string; printer: any; items: any[] }[] {
   const rawStations = db
-    .prepare(
-      `SELECT * FROM kitchen_stations WHERE is_active = 1 AND printer_id IS NOT NULL AND category_ids IS NOT NULL AND category_ids != ''`,
-    )
+    .prepare(`SELECT * FROM kitchen_stations WHERE is_active = 1 AND printer_id IS NOT NULL`)
     .all() as any[];
 
   const stations = rawStations
     .map((s) => {
       let categoryIds: string[] = [];
-      try {
-        categoryIds = JSON.parse(s.category_ids) || [];
-      } catch {
-        categoryIds = [];
+      let validCategories = true;
+      if (s.category_ids != null && String(s.category_ids).trim() !== '') {
+        try {
+          const parsed = JSON.parse(s.category_ids);
+          if (Array.isArray(parsed)) {
+            categoryIds = parsed.filter((id) => id != null && String(id).trim() !== '').map(String);
+          } else {
+            validCategories = false;
+          }
+        } catch {
+          validCategories = false;
+        }
       }
       const printer = db
         .prepare(
@@ -1291,25 +1324,36 @@ export function routeItemsToStations(
          WHERE id = ? AND connection_type != 'webusb'`,
         )
         .get(s.printer_id);
-      return { ...s, categoryIds, printer };
+      return { ...s, categoryIds, validCategories, printer };
     })
-    .filter((s) => s.categoryIds.length > 0 && s.printer);
+    .filter((s) => s.validCategories && s.printer);
 
   if (stations.length === 0) {
     return [{ stationName: 'Kitchen', printer: null, items: orderItems }];
   }
+
+  const restrictedStations = stations.filter((s) => s.categoryIds.length > 0);
+  const unrestrictedStation = stations.find((s) => s.categoryIds.length === 0);
 
   const groups = new Map<string, { stationName: string; printer: any; items: any[] }>();
   const unrouted: any[] = [];
 
   for (const item of orderItems) {
     const product: any = item.product_id
-      ? db.prepare('SELECT category_id FROM products WHERE id = ?').get(item.product_id)
+      ? db
+          .prepare(
+            'SELECT p.category_id, c.parent_id FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?',
+          )
+          .get(item.product_id)
       : null;
-    const categoryId = product?.category_id;
-    const matched = categoryId
-      ? stations.find((s) => s.categoryIds.includes(categoryId))
-      : undefined;
+    const categoryId = product?.category_id != null ? String(product.category_id) : null;
+    const parentId = product?.parent_id != null ? String(product.parent_id) : null;
+    const matched =
+      (categoryId
+        ? restrictedStations.find((s) => s.categoryIds.includes(categoryId))
+        : undefined) ??
+      (parentId ? restrictedStations.find((s) => s.categoryIds.includes(parentId)) : undefined) ??
+      unrestrictedStation;
     if (matched) {
       if (!groups.has(matched.id)) {
         groups.set(matched.id, { stationName: matched.name, printer: matched.printer, items: [] });

@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import {
   ACTIVE_RELEASED_KDS_ORDER_IDS_SQL,
   completeSettledReleasedOrderIfServed,
+  expandCategoryIdsWithSubcategories,
   getDatabase,
   annotateKdsItems,
   getKdsItemParentOrderState,
@@ -141,7 +142,10 @@ function isKdsClientAuthorized(client: KdsClient): boolean {
     if (!currentUser) return false;
     const nextCategoryIds = hasRole(status.role, ROLE_ACCESS.ownerManager)
       ? []
-      : parseCategoryIds(currentUser.category_ids);
+      : expandCategoryIdsWithSubcategories(
+          getDatabase(),
+          parseCategoryIds(currentUser.category_ids),
+        );
     const nextStationIds = getUserKdsStationIds(getDatabase(), client.userId);
     const nextStationCategoryIds = nextStationIds
       ? getKdsStationCategoryIds(getDatabase(), nextStationIds)
@@ -389,7 +393,7 @@ function handleAuth(ws: WebSocket, client: KdsClient, message: any): void {
 
     const categoryIds = hasRole(user.role, ROLE_ACCESS.ownerManager)
       ? []
-      : parseCategoryIds(user.category_ids);
+      : expandCategoryIdsWithSubcategories(db, parseCategoryIds(user.category_ids));
     const stationIds = getUserKdsStationIds(getDatabase(), user.id);
     const stationAssignmentsConfigured = hasUserKdsStationAssignments(getDatabase(), user.id);
     if (!stationIds || stationAssignmentsConfigured === null)
@@ -659,8 +663,9 @@ export function buildActiveOrdersSnapshot(
   restrictedPayload = categoryIds.length > 0,
 ): string {
   const db = getDatabase();
+  const expandedCategoryIds = expandCategoryIdsWithSubcategories(db, categoryIds);
   const stationCategoryIds = getKdsStationCategoryIds(db, stationIds);
-  const stationScope = getKdsStationRoutingScope(db, stationIds, categoryIds);
+  const stationScope = getKdsStationRoutingScope(db, stationIds, expandedCategoryIds);
   const stationRoutingCategoryIds = stationScope?.tablelessCategoryIds;
   if (!stationCategoryIds || !stationScope || !stationRoutingCategoryIds)
     throw new Error('Could not load station permissions');
@@ -691,12 +696,12 @@ export function buildActiveOrdersSnapshot(
 
   // Pre-fetch allowed product IDs once if category restrictions apply to eliminate N+1 queries
   let allowedProductIds: Set<string> | null = null;
-  if (categoryIds.length > 0) {
+  if (expandedCategoryIds.length > 0) {
     const productRows = db
       .prepare(`
-      SELECT id FROM products WHERE category_id IN (${categoryIds.map(() => '?').join(',')})
+      SELECT id FROM products WHERE category_id IN (${expandedCategoryIds.map(() => '?').join(',')})
     `)
-      .all(...categoryIds) as { id: string }[];
+      .all(...expandedCategoryIds) as { id: string }[];
     allowedProductIds = new Set(productRows.map((p) => p.id));
   }
 
@@ -823,9 +828,9 @@ export function buildActiveOrdersSnapshot(
     if (stationScope.hasUnrestrictedStation) stationRoutes.push('t.kitchen_station_id IS NULL');
     countsQuery += ` AND (${stationRoutes.length > 0 ? stationRoutes.join(' OR ') : '0'})`;
   }
-  if (categoryIds.length > 0) {
-    countsQuery += ` AND p.category_id IN (${categoryIds.map(() => '?').join(',')})`;
-    countParams.push(...categoryIds);
+  if (expandedCategoryIds.length > 0) {
+    countsQuery += ` AND p.category_id IN (${expandedCategoryIds.map(() => '?').join(',')})`;
+    countParams.push(...expandedCategoryIds);
   }
 
   countsQuery += ' GROUP BY oi.status';

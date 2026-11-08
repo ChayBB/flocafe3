@@ -57,6 +57,10 @@ different changes. FloCafe distinguishes the histories by the order-item columns
 version 116, then runs the missing migrations in one transaction. Interrupted-restore validation
 uses the matching historical schema before opening a database for upgrade.
 
+Local changes after version 124 occupy versions 125 through 141. A migration that arrives from
+upstream after those fork-point versions is appended with the next free version above the local
+tail (currently v142, `add_printer_profile_id`), never by reusing a local number.
+
 ```mermaid
 flowchart TB
   A["initDatabase()"] --> B{"interrupted replacement journal?"}

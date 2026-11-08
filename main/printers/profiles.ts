@@ -63,10 +63,91 @@ export const SUPPORTED_PRINTER_PROFILES: SupportedPrinterProfile[] = [
       '80mm ESC/POS receipt printer. This profile declares 72mm print width and 576 dots/line, which is 48 Font A and 64 Font B columns; vendor listings also give 42/56 for the 512-dot variant, which is what generic-escpos-80 assumes.',
   },
   {
+    id: 'escpos-impact-76',
+    make: 'Epson',
+    model: 'TM-U220 / 76mm Impact',
+    aliases: [
+      'epson tm-u',
+      'epson tm u',
+      'tm-u series',
+      'tm u series',
+      'tm-u220',
+      'tm u220',
+      'tm-u220a',
+      'tm-u220b',
+      'tm-u220d',
+      'tm-u230',
+      'tm u230',
+      'tm-u',
+      'u220',
+      'srp-275',
+      'srp-270',
+      'bixolon srp-275',
+      'xp-76',
+      'xp-76i',
+      'xp-c76',
+      'xprinter xp-76',
+      '76mm impact',
+      'impact 76',
+    ],
+    commandSet: 'escpos',
+    defaultPaperWidth: 'cols-32',
+    defaultPort: 9100,
+    fontAColumns: 32,
+    fontBColumns: 40,
+    printWidthMm: 64,
+    cutMode: 'partial',
+    capabilities: {
+      ...LATIN_THERMAL_CAPABILITIES,
+      raster: {
+        enabled: false,
+        widthDots: 0,
+        maxBandHeight: 0,
+        modes: [],
+      },
+    },
+    notes:
+      '76mm (3-inch) ESC/POS impact / dot-matrix receipt & kitchen printer (Epson TM-U220A/B/D, Bixolon SRP-275, Xprinter XP-76). Raster graphics (GS v 0) and native QR commands are disabled.',
+  },
+  {
     id: 'epson-tm-series',
     make: 'Epson',
     model: 'TM Series ESC/POS',
-    aliases: ['epson tm', 'tm-t88', 'tm-t82', 'tm-t20', 'tm-m30'],
+    aliases: [
+      'epson tm',
+      'tm series',
+      'epson tm-t',
+      'epson tm-m',
+      'epson tm-p',
+      'epson tm-h',
+      'tm-t',
+      'tm t',
+      'tm-m',
+      'tm m',
+      'tm-p',
+      'tm p',
+      'tm-h',
+      'tm h',
+      'tm-t88',
+      'tm-t82',
+      'tm-t81',
+      'tm-t70',
+      'tm-t60',
+      'tm-t20',
+      'tm-t100',
+      'tm-m30',
+      'tm-m10',
+      'tm-m50',
+      'tm-p20',
+      'tm-p80',
+      'tm-h600',
+      'tm-h6000',
+      'srp-330',
+      'srp-350',
+      'ct-s310',
+      'ct-e351',
+      'mp-4200',
+    ],
     commandSet: 'escpos',
     defaultPaperWidth: 'cols-48',
     defaultPort: 9100,
@@ -133,6 +214,10 @@ export function getSupportedPrinterProfiles(): SupportedPrinterProfile[] {
   return SUPPORTED_PRINTER_PROFILES;
 }
 
+export function isValidPrinterProfileId(value: unknown): value is string {
+  return typeof value === 'string' && SUPPORTED_PRINTER_PROFILES.some((p) => p.id === value);
+}
+
 export function matchSupportedPrinterProfile(
   ...parts: Array<string | null | undefined>
 ): SupportedPrinterProfile | null {
@@ -140,7 +225,18 @@ export function matchSupportedPrinterProfile(
 
   if (!haystack) return null;
 
+  if (
+    /\b(?:tm[-\s]?l\d*|ecotank|workforce|stylus|expression|et-\d\w*|wf-\d\w*|l3\d*|l4\d*)\b/.test(
+      haystack,
+    )
+  ) {
+    return null;
+  }
+
   for (const profile of SUPPORTED_PRINTER_PROFILES) {
+    if (profile.id === 'epson-tm-series' && /\b(?:tm[-\s]?u\w*|u220\w*|u230\w*)\b/.test(haystack)) {
+      continue;
+    }
     const tokens = [`${profile.make} ${profile.model}`, profile.model, ...profile.aliases].map(
       (s) => s.toLowerCase(),
     );

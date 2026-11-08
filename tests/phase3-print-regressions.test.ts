@@ -30,10 +30,18 @@ const languages = [
   'ne',
   'ha',
   'jv',
+  'mr',
+  'sw',
+  'pa',
+  'te',
+  'ta',
+  'uk',
 ] as const;
-// Any Devanagari codepoint: the native paths must emit none, not merely none of
+// Any Devanagari, Telugu, or Tamil codepoint: the native paths must emit none, not merely none of
 // the specific phrases this fixture happens to use.
 const DEVANAGARI_RE = /[ऀ-ॿ]/;
+const TELUGU_RE = /[\u0C00-\u0C7F]/;
+const TAMIL_RE = /[\u0B80-\u0BFF]/;
 const order = {
   order_number: 'KOT-PHASE3-001',
   type: 'dine_in',
@@ -149,12 +157,12 @@ async function run(): Promise<void> {
         `${language}: browser KOT keeps Thai font fallback available`,
       );
     }
-    if (language === 'hi' || language === 'ne') {
+    if (language === 'hi' || language === 'ne' || language === 'mr') {
       // The KOT font stack and the document locale are both selected per
       // language, so this proves the Devanagari branch resolves for the locale
       // under test rather than inheriting a sibling Devanagari bundle. The
-      // locale is matched exactly: a Nepali ticket tagged hi-IN must fail.
-      const expectedLocale = language === 'hi' ? 'hi-IN' : 'ne-NP';
+      // locale is matched exactly: a Nepali or Marathi ticket tagged hi-IN must fail.
+      const expectedLocale = language === 'hi' ? 'hi-IN' : language === 'ne' ? 'ne-NP' : 'mr-IN';
       assert.match(
         browserHtml,
         /font-family:'Noto Sans Devanagari'/,
@@ -164,6 +172,42 @@ async function run(): Promise<void> {
         browserHtml,
         new RegExp(`lang="${expectedLocale}" dir="ltr"`),
         `${language}: browser KOT must carry its own locale ${expectedLocale}, not another Devanagari bundle`,
+      );
+    }
+    if (language === 'pa') {
+      assert.match(
+        browserHtml,
+        /font-family:'Noto Sans Gurmukhi'/,
+        `${language}: browser KOT selects the Gurmukhi font stack`,
+      );
+      assert.match(
+        browserHtml,
+        /lang="pa-IN" dir="ltr"/,
+        `${language}: browser KOT carries locale pa-IN`,
+      );
+    }
+    if (language === 'te') {
+      assert.match(
+        browserHtml,
+        /font-family:'Noto Sans Telugu'/,
+        `${language}: browser KOT selects the Telugu font stack`,
+      );
+      assert.match(
+        browserHtml,
+        /lang="te-IN" dir="ltr"/,
+        `${language}: browser KOT must carry its own locale te-IN`,
+      );
+    }
+    if (language === 'ta') {
+      assert.match(
+        browserHtml,
+        /font-family:'Noto Sans Tamil'/,
+        'ta: browser KOT selects the Tamil font stack',
+      );
+      assert.match(
+        browserHtml,
+        /lang="ta-IN" dir="ltr"/,
+        'ta: browser KOT carries ta-IN LTR metadata',
       );
     }
     assert.match(browserHtml, /KOT-PHASE3-001/, `${language}: browser order number`);
@@ -217,12 +261,12 @@ async function run(): Promise<void> {
     assert.match(thermalText, /Main Kitchen/, `${language}: thermal station remains visible`);
     assert.match(
       thermalText,
-      /(?:Time|Hora|Uhrzeit|Saat|Oras|Heure|Ora|時刻|时间|시간|Waktu|Tijd|সময়|Thời gian|Lokaci|Wektu)/,
+      /(?:Time|Hora|Uhrzeit|Saat|Oras|Heure|Ora|時刻|时间|시간|Waktu|Tijd|সময়|Thời gian|Lokaci|Wektu|Muda)/,
       `${language}: thermal time remains visible`,
     );
     assert.match(
       thermalText,
-      /KITCHEN ORDER TICKET|COMANDA DE COCINA|KUECHENBESTELLSCHEIN|BON DE COMMANDE CUISINE|COMANDA DE COZINHA|BIGLIETTO ORDINE DI CUCINA|キッチン伝票|厨房订单|廚房訂單|주방 주문지|TIKET PESANAN DAPUR|KEUKENBESTELBON|রান্নাঘরের অর্ডার টিকিট|POROSI E KUZHINES|PHIẾU BẾP|TAKARDAR ODAR GIRKI|TIKET PESENAN PAWON/,
+      /KITCHEN ORDER TICKET|COMANDA DE COCINA|KUECHENBESTELLSCHEIN|BON DE COMMANDE CUISINE|COMANDA DE COZINHA|BIGLIETTO ORDINE DI CUCINA|キッチン伝票|厨房订单|廚房訂單|주방 주문지|TIKET PESANAN DAPUR|KEUKENBESTELBON|রান্নাঘরের অর্ডার টিকিট|POROSI E KUZHINES|PHIẾU BẾP|TAKARDAR ODAR GIRKI|TIKET PESENAN PAWON|TIKETI YA ODA YA JIKONI/,
       `${language}: thermal banner remains visible`,
     );
     if (language !== 'sq') {
@@ -481,6 +525,196 @@ async function run(): Promise<void> {
       DEVANAGARI_RE,
       'Nepali WebUSB KOT emits no Devanagari codepoints at all',
     );
+  }
+
+  {
+    const marathiOrder = {
+      ...order,
+      items: [
+        {
+          quantity: 1,
+          product_name: 'मिसळ पाव',
+          status: 'pending',
+          addons: [{ name: 'अतिरिक्त पाव', quantity: 1 }],
+          special_instructions: 'कमी तिखट',
+        },
+      ],
+    };
+    const thermalWarnings: any[] = [];
+    const thermalText = escPosToText(
+      formatKOT(
+        marathiOrder,
+        marathiOrder.items,
+        'Main Kitchen',
+        42,
+        false,
+        'full',
+        'en-US',
+        { timeZone: 'UTC' },
+        thermalWarnings,
+        false,
+        'mr',
+      ),
+    );
+    assert.equal(
+      thermalWarnings.some((warning) => warning.kind === 'line'),
+      true,
+      'Marathi unsupported KOT lines warn before native output',
+    );
+    assert.doesNotMatch(
+      thermalText,
+      DEVANAGARI_RE,
+      'Marathi native KOT emits no Devanagari codepoints at all',
+    );
+
+    const webUsbWarnings: any[] = [];
+    const webUsbText = Buffer.from(
+      frontend.kotEncoder.buildKotBytes(
+        marathiOrder as any,
+        {
+          paperWidth: 58,
+          language: 'mr',
+          stationName: 'Main Kitchen',
+          locale: 'mr-IN',
+          timezone: 'UTC',
+        },
+        webUsbWarnings,
+      ),
+    ).toString('utf8');
+    assert.equal(
+      webUsbWarnings.some((warning) => warning.kind === 'line'),
+      true,
+      'Marathi unsupported WebUSB KOT lines warn before output',
+    );
+    assert.doesNotMatch(
+      webUsbText,
+      DEVANAGARI_RE,
+      'Marathi WebUSB KOT emits no Devanagari codepoints at all',
+    );
+  }
+
+  {
+    const teluguOrder = {
+      ...order,
+      items: [
+        {
+          quantity: 1,
+          product_name: 'హైదరాబాదీ బిర్యానీ',
+          status: 'pending',
+          addons: [{ name: 'పెరుగు', quantity: 1 }],
+          special_instructions: 'తక్కువ కారం',
+        },
+      ],
+    };
+    const thermalWarnings: any[] = [];
+    const thermalText = escPosToText(
+      formatKOT(
+        teluguOrder,
+        teluguOrder.items,
+        'Main Kitchen',
+        42,
+        false,
+        'full',
+        'en-US',
+        { timeZone: 'UTC' },
+        thermalWarnings,
+        false,
+        'te',
+      ),
+    );
+    assert.equal(
+      thermalWarnings.some((warning) => warning.kind === 'line'),
+      true,
+      'Telugu unsupported KOT lines warn before native output',
+    );
+    assert.doesNotMatch(
+      thermalText,
+      TELUGU_RE,
+      'Telugu native KOT emits no Telugu codepoints at all',
+    );
+
+    const webUsbWarnings: any[] = [];
+    const webUsbText = Buffer.from(
+      frontend.kotEncoder.buildKotBytes(
+        teluguOrder as any,
+        {
+          paperWidth: 58,
+          language: 'te',
+          stationName: 'Main Kitchen',
+          locale: 'te-IN',
+          timezone: 'UTC',
+        },
+        webUsbWarnings,
+      ),
+    ).toString('utf8');
+    assert.equal(
+      webUsbWarnings.some((warning) => warning.kind === 'line'),
+      true,
+      'Telugu unsupported WebUSB KOT lines warn before output',
+    );
+    assert.doesNotMatch(
+      webUsbText,
+      TELUGU_RE,
+      'Telugu WebUSB KOT emits no Telugu codepoints at all',
+    );
+  }
+
+  {
+    const tamilOrder = {
+      ...order,
+      items: [
+        {
+          quantity: 1,
+          product_name: 'பில்டர் காபி',
+          status: 'pending',
+          addons: [{ name: 'பால்', quantity: 1 }],
+          special_instructions: 'சர்க்கரை குறைவு',
+        },
+      ],
+    };
+    const thermalWarnings: any[] = [];
+    const thermalText = escPosToText(
+      formatKOT(
+        tamilOrder,
+        tamilOrder.items,
+        'Main Kitchen',
+        42,
+        false,
+        'full',
+        'en-US',
+        { timeZone: 'UTC' },
+        thermalWarnings,
+        false,
+        'ta',
+      ),
+    );
+    assert.equal(
+      thermalWarnings.some((warning) => warning.kind === 'line'),
+      true,
+      'Tamil unsupported KOT lines warn before native output',
+    );
+    assert.doesNotMatch(thermalText, TAMIL_RE, 'Tamil native KOT emits no Tamil codepoints at all');
+
+    const webUsbWarnings: any[] = [];
+    const webUsbText = Buffer.from(
+      frontend.kotEncoder.buildKotBytes(
+        tamilOrder as any,
+        {
+          paperWidth: 58,
+          language: 'ta',
+          stationName: 'Main Kitchen',
+          locale: 'ta-IN',
+          timezone: 'UTC',
+        },
+        webUsbWarnings,
+      ),
+    ).toString('utf8');
+    assert.equal(
+      webUsbWarnings.some((warning) => warning.kind === 'line'),
+      true,
+      'Tamil unsupported WebUSB KOT lines warn before output',
+    );
+    assert.doesNotMatch(webUsbText, TAMIL_RE, 'Tamil WebUSB KOT emits no Tamil codepoints at all');
   }
 
   const longKotHtml = frontend.kotWebPrint.generateKotHtml(

@@ -88,6 +88,32 @@ const LABELS: Record<string, { basic: string; web: string; whatsapp: string }> =
     web: 'Cetak Web (Browser)',
     whatsapp: 'Bagekake WhatsApp',
   },
+  mr: {
+    basic: 'साधी पावती (थर्मल)',
+    web: 'वेब प्रिंट (ब्राउझर)',
+    whatsapp: 'WhatsApp शेअर',
+  },
+  sw: {
+    basic: 'Risiti ya Msingi (Joto)',
+    web: 'Uchapishaji wa Wavuti (Kivinjari)',
+    whatsapp: 'Shiriki kwa WhatsApp',
+  },
+  pa: {
+    basic: 'ਮੁੱਢਲੀ ਰਸੀਦ (ਥਰਮਲ)',
+    web: 'ਵੈੱਬ ਪ੍ਰਿੰਟ (ਬ੍ਰਾਊਜ਼ਰ)',
+    whatsapp: 'WhatsApp ਸ਼ੇਅਰ',
+  },
+  te: { basic: 'ప్రాథమిక రసీదు (థర్మల్)', web: 'వెబ్ ప్రింట్ (బ్రౌజర్)', whatsapp: 'WhatsApp షేర్' },
+  ta: {
+    basic: 'அடிப்படை ரசீது (தெர்மல்)',
+    web: 'வெப் அச்சு (உலாவி)',
+    whatsapp: 'WhatsApp பகிர்வு',
+  },
+  uk: {
+    basic: 'Базовий чек (термопринтер)',
+    web: 'Веб-друк (браузер)',
+    whatsapp: 'Поділитися у WhatsApp',
+  },
 };
 
 async function loginAsOwner(page: Page): Promise<void> {
@@ -99,6 +125,7 @@ async function loginAsOwner(page: Page): Promise<void> {
 }
 
 test('print-test visible labels use the selected UI locale', async ({ page }) => {
+  test.setTimeout(90_000);
   await loginAsOwner(page);
   try {
     // Driven from the registry so a newly registered locale cannot be skipped:
