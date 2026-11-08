@@ -1375,15 +1375,15 @@ function main() {
   );
   closeDatabase();
 
-  // ── v125: add_printer_profile_id on printers ──────────────────────────────
+  // ── add_printer_profile_id on printers (v142 in this fork) ────────────────
   const printerProfileMigrationIndex = MIGRATIONS.findIndex(
     (migration: any) => migration.name === 'add_printer_profile_id',
   );
   assert.ok(printerProfileMigrationIndex > 0, 'the add_printer_profile_id migration is registered');
   assert.equal(
     MIGRATIONS[printerProfileMigrationIndex].version,
-    125,
-    'the add_printer_profile_id migration is v125',
+    142,
+    'the add_printer_profile_id migration is v142 in this fork',
   );
   const v124SnapDb = buildIdealSchemaDb(124);
   try {
@@ -1409,12 +1409,12 @@ function main() {
   initDatabase();
   const postPrinterProfileDb = getDatabase();
   assert.equal(getCurrentSchemaVersion(), latestSchemaVersion);
-  const postV125PrinterCols = (
+  const postPrinterProfileCols = (
     postPrinterProfileDb.prepare('PRAGMA table_info(printers)').all() as Array<{ name: string }>
   ).map((col) => col.name);
   assert.ok(
-    postV125PrinterCols.includes('profile_id'),
-    'v125 adds printers.profile_id during upgrade from v124',
+    postPrinterProfileCols.includes('profile_id'),
+    'add_printer_profile_id adds printers.profile_id during upgrade from v124',
   );
   const migratedPrinter = postPrinterProfileDb
     .prepare(`SELECT id, name, profile_id FROM printers WHERE id = 'pr-pre-v125'`)
@@ -1426,14 +1426,16 @@ function main() {
       name: 'EPSON TM-U220',
       profile_id: null,
     },
-    'existing pre-v125 printers default to profile_id = null',
+    'existing printers default to profile_id = null',
   );
   assert.equal(
     runHealthCheck().findings.length,
     0,
-    'runHealthCheck() reports zero drift after v125',
+    'runHealthCheck() reports zero drift after the profile migration',
   );
-  console.log('   ✓ v125 adds printers.profile_id and preserves existing printers with NULL');
+  console.log(
+    '   ✓ add_printer_profile_id adds printers.profile_id and preserves existing printers with NULL',
+  );
   closeDatabase();
 
   console.log('='.repeat(60));

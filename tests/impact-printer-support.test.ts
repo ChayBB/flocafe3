@@ -6,7 +6,7 @@
  * 2. `normalizeThermalText` fallback Latin transliteration (preserving `LATIN_ASCII_MAP` + extended Latin foldings + NFD diacritic stripping).
  * 3. `GS v 0` logo (`{RAW_BYTES:...}`) and `GS ( k` payment-ticket QR suppression when `raster.enabled: false`.
  * 4. OS printer detection (`getMacOSPrinterDetails`, `detectWindowsMakeModel`) and `classifyDetectedPrinterCompatibility`.
- * 5. Database migration 125 (`add_printer_profile_id`) and `/api/printers` `profile_id` / `configured_profile_id` persistence & validation.
+ * 5. Database migration `add_printer_profile_id` (v142 in this fork) and `/api/printers` `profile_id` / `configured_profile_id` persistence & validation.
  */
 
 import * as fs from 'node:fs';
@@ -596,12 +596,22 @@ async function run() {
     );
   }
 
-  console.log('--- 5. Migration 125 & /api/printers profile_id persistence + payment ticket ---');
+  console.log(
+    '--- 5. Migration add_printer_profile_id & /api/printers profile_id persistence + payment ticket ---',
+  );
   initTestDb();
   const db = getDatabase();
-  const mig125 = MIGRATIONS.find((m: any) => m.name === 'add_printer_profile_id');
-  assertOrThrow(Boolean(mig125), 'Migration add_printer_profile_id must be registered');
-  assertEqualOrThrow(mig125.version, 125, 'add_printer_profile_id must be migration version 125');
+  const printerProfileMigration = MIGRATIONS.find((m: any) => m.name === 'add_printer_profile_id');
+  assertOrThrow(
+    Boolean(printerProfileMigration),
+    'Migration add_printer_profile_id must be registered',
+  );
+  // This fork numbers its own migrations 125-141, so the upstream migration is appended at v142.
+  assertEqualOrThrow(
+    printerProfileMigration.version,
+    142,
+    'add_printer_profile_id must be migration version 142 in this fork',
+  );
 
   const printerCols = (
     db.prepare('PRAGMA table_info(printers)').all() as Array<{ name: string }>
