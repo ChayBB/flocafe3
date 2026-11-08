@@ -601,11 +601,11 @@ test.describe('checkout controls stay visible while catalog and cart content scr
       page.getByTestId('pos-product-card').filter({ hasText: SYNTHETIC_PRODUCT_PREFIX }).first(),
     ).toBeVisible();
 
-    const cashControl = page.getByTitle('Cash movement');
+    const cashControl = page.getByRole('button', { name: 'More actions' });
     const searchInput = page.getByTestId('pos-product-grid').locator('input[type="text"]').first();
     const categoryRow = page.getByTestId('pos-category-row');
     const pinned = {
-      cash: await elementTop(cashControl, 'cash movement control'),
+      cash: await elementTop(cashControl, 'more actions control'),
       search: await elementTop(searchInput, 'product search'),
       categories: await elementTop(categoryRow, 'category chips'),
     };
@@ -624,9 +624,9 @@ test.describe('checkout controls stay visible while catalog and cart content scr
     ).toBeGreaterThan(0);
 
     expectPinned(
-      await elementTop(cashControl, 'cash movement control'),
+      await elementTop(cashControl, 'more actions control'),
       pinned.cash,
-      'cash movement control',
+      'more actions control',
     );
     expectPinned(await elementTop(searchInput, 'product search'), pinned.search, 'product search');
     expectPinned(
@@ -742,7 +742,7 @@ test.describe('checkout controls stay visible while catalog and cart content scr
     expect(
       cartScrollBox!.height,
       'cart items container maintains usable height on 1024x600 display',
-    ).toBeGreaterThanOrEqual(120);
+    ).toBeGreaterThanOrEqual(300);
 
     const placeOrder = page.getByRole('button', { name: 'Place Order' });
     const viewport = page.viewportSize();
@@ -775,8 +775,8 @@ test.describe('checkout controls stay visible while catalog and cart content scr
     expect(deliveryCartScrollBox, 'delivery cart items container has bounds').not.toBeNull();
     expect(
       deliveryCartScrollBox!.height,
-      'cart items container maintains usable height with taller Delivery header on 1024x600 display',
-    ).toBeGreaterThanOrEqual(120);
+      'cart items container maintains usable height with compact Delivery header on 1024x600 display',
+    ).toBeGreaterThanOrEqual(300);
 
     await cartShell.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
@@ -850,6 +850,132 @@ test.describe('checkout controls stay visible while catalog and cart content scr
         { message: 'checkout button is reachable inside the zoomed viewport' },
       )
       .toBeLessThanOrEqual(viewport!.height + 1);
+  });
+
+  test('POS cart item controls have non-overlapping touch targets and edge clicks do not trigger neighbors (#1471)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${BASE}/auth/login`);
+    await page.locator('#email').fill('owner@flo.local');
+    await page.locator('#password').fill(E2E_PASSWORD);
+    await page.locator('button[type="submit"]').click();
+    await page.waitForURL(/\/(pos|orders)/, { timeout: 20000 });
+    await setLanguage(page, 'en');
+    await page.goto(`${BASE}/pos`);
+
+    await addSyntheticItemsToCart(page, 1);
+
+    const cartShell = page.getByTestId('cart-shell');
+    const cartItem = cartShell.getByTestId('cart-item').first();
+    await expect(cartItem).toBeVisible();
+
+    const removeBtn = cartItem.getByTestId('cart-item-remove-btn');
+    const overrideBtn = cartItem.getByRole('button', { name: 'Override price' });
+    const editBtn = cartItem.getByRole('button', { name: 'Edit' });
+    const minusBtn = cartItem.locator(
+      'button[aria-label="Remove"]:not([data-testid="cart-item-remove-btn"])',
+    );
+    const plusBtn = cartItem.getByRole('button', { name: 'Add Items' });
+    const decreasePaxBtn = cartShell.getByRole('button', { name: 'Decrease pax' });
+    const increasePaxBtn = cartShell.getByRole('button', { name: 'Increase pax' });
+
+    for (const [label, locator] of [
+      ['remove', removeBtn],
+      ['override price', overrideBtn],
+      ['edit', editBtn],
+      ['minus', minusBtn],
+      ['plus', plusBtn],
+      ['decrease pax', decreasePaxBtn],
+      ['increase pax', increasePaxBtn],
+    ] as const) {
+      await expect(locator, `${label} button is visible`).toBeVisible();
+      const box = await locator.boundingBox();
+      expect(box, `${label} button has bounds`).not.toBeNull();
+      expect(box!.width, `${label} button width >= 28px`).toBeGreaterThanOrEqual(28);
+      expect(box!.height, `${label} button height >= 28px`).toBeGreaterThanOrEqual(28);
+    }
+
+    const overrideBox = (await overrideBtn.boundingBox())!;
+    const editBox = (await editBtn.boundingBox())!;
+    const minusBox = (await minusBtn.boundingBox())!;
+    const plusBox = (await plusBtn.boundingBox())!;
+
+    expect(
+      editBox.x - (overrideBox.x + overrideBox.width),
+      'Override price and Edit have non-overlapping horizontal separation',
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      minusBox.x - (editBox.x + editBox.width),
+      'Edit and Minus have non-overlapping horizontal separation',
+    ).toBeGreaterThanOrEqual(6);
+    expect(
+      plusBox.x - (minusBox.x + minusBox.width),
+      'Minus and Plus have non-overlapping horizontal separation',
+    ).toBeGreaterThanOrEqual(20);
+
+    const assertNoHitOverlap = async (dir: 'ltr' | 'rtl') =>
+      cartItem.evaluate((row, targetDir) => {
+        const html = document.documentElement;
+        const prevDir = html.getAttribute('dir');
+        try {
+          html.setAttribute('dir', targetDir);
+          const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>('button'));
+          const mismatches: string[] = [];
+          for (const btn of buttons) {
+            const rect = btn.getBoundingClientRect();
+            const label =
+              btn.getAttribute('data-testid') || btn.getAttribute('aria-label') || 'button';
+            const samplePoints = [
+              { name: 'left-edge', x: rect.left + 1.5, y: rect.top + rect.height / 2 },
+              { name: 'right-edge', x: rect.right - 1.5, y: rect.top + rect.height / 2 },
+              { name: 'top-edge', x: rect.left + rect.width / 2, y: rect.top + 1.5 },
+              { name: 'bottom-edge', x: rect.left + rect.width / 2, y: rect.bottom - 1.5 },
+              { name: 'center', x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+            ];
+            for (const pt of samplePoints) {
+              const hit = document.elementFromPoint(pt.x, pt.y);
+              if (!hit || !btn.contains(hit)) {
+                const hitDesc =
+                  hit?.closest('button')?.getAttribute('aria-label') || hit?.tagName || 'null';
+                mismatches.push(`${label}@${pt.name} hit ${hitDesc}`);
+              }
+            }
+          }
+          return mismatches;
+        } finally {
+          if (prevDir === null) html.removeAttribute('dir');
+          else html.setAttribute('dir', prevDir);
+        }
+      }, dir);
+
+    expect(
+      await assertNoHitOverlap('ltr'),
+      'every edge point inside a cart button hits that button in LTR',
+    ).toEqual([]);
+    expect(
+      await assertNoHitOverlap('rtl'),
+      'every edge point inside a cart button hits that button in RTL',
+    ).toEqual([]);
+
+    await overrideBtn.click({
+      position: { x: Math.max(1, overrideBox.width - 2), y: overrideBox.height / 2 },
+    });
+    const overrideDialog = page.getByRole('dialog');
+    await expect(overrideDialog).toBeVisible();
+    await overrideDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(overrideDialog).toBeHidden();
+    await expect(cartShell.getByTestId('cart-item')).toHaveCount(1);
+
+    await editBtn.click({
+      position: { x: Math.max(1, editBox.width - 2), y: editBox.height / 2 },
+    });
+    await expect(
+      cartShell.getByTestId('cart-item'),
+      'clicking near the right edge of Edit does not trigger Minus to remove the item',
+    ).toHaveCount(1);
+    const saveChangesBtn = page.getByRole('button', { name: /Save Changes/i });
+    await expect(saveChangesBtn).toBeVisible();
   });
 });
 
@@ -2804,13 +2930,15 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
         window.localStorage.getItem('flo.customerDisplayToken'),
       );
       expect(storedTokenAfter401).toBeNull();
+      await displayPage.close();
 
       // Signed-in staff fallback mode also drains multiple /api/orders cursor pages via before_id and deduplicates
       await page.setViewportSize({ width: 1920, height: 1080 });
       await loginAsManager(page);
       await page.clock.install();
       const staffBeforeIds: Array<string | null> = [];
-      const staffStatuses: Array<string | null> = [];
+      const staffViews: Array<string | null> = [];
+      const staffBoardStatuses: Array<string | null> = [];
       const staffPerPages: Array<string | null> = [];
       let staffSettingsMode: 'all' | 'ready-only' | 'preparing-only' | 'fail' = 'all';
       let staffOrdersFail = false;
@@ -2846,7 +2974,8 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
           const params = new URL(route.request().url()).searchParams;
           const beforeId = params.get('before_id');
           staffBeforeIds.push(beforeId);
-          staffStatuses.push(params.get('status'));
+          staffViews.push(params.get('view'));
+          staffBoardStatuses.push(params.get('board_status'));
           staffPerPages.push(params.get('per_page'));
           if (!beforeId) {
             return route.fulfill({
@@ -2872,7 +3001,11 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       await page.clock.runFor(1);
       const staffReady = page.getByTestId('customer-display-ready-scroll');
       await expect.poll(() => staffBeforeIds.slice(0, 2)).toEqual([null, 'staff-cursor-2']);
-      expect(staffStatuses[0]).toBe('pending,preparing,ready');
+      expect(staffViews[0]).toBe('active');
+      expect(staffBoardStatuses.slice(0, 2)).toEqual([
+        'pending,preparing,ready',
+        'pending,preparing,ready',
+      ]);
       expect(staffPerPages[0]).toBe('100');
       await expect
         .poll(() => readVisibleIds(staffReady))
@@ -2889,6 +3022,7 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       staffSettingsMode = 'ready-only';
       await page.clock.runFor(3000);
       await expect(page.getByTestId('customer-display-preparing-scroll')).toHaveCount(0);
+      expect(staffBoardStatuses).toContain('ready');
       await expect(staffReady.locator('[data-order-id="display-ready-1"]:visible')).toBeVisible();
 
       // Next poll reads preparing-only settings, but /api/orders fails; then settings fails while /api/orders succeeds.
@@ -2912,7 +3046,9 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       // when each individual page responds within 10000ms, and 5-page polling at refresh_seconds: 2 stays within 120 req/min
       const budgetPage = await displayContext.newPage();
       await budgetPage.setViewportSize({ width: 1920, height: 1080 });
-      await budgetPage.clock.install();
+      const initialClockMs = Date.now();
+      await budgetPage.clock.install({ time: initialClockMs - 60_000 });
+      await budgetPage.clock.pauseAt(initialClockMs);
       let slowMode = true;
       let rateWindowRequests = 0;
       let hit429 = false;
@@ -2992,6 +3128,14 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
 
       const slowPage1Arrived = waitForNextSlowPage();
       await budgetPage.goto(`${BASE}/customer-display/#token=${displayToken}`);
+      await expect
+        .poll(async () => {
+          await budgetPage.clock.runFor(1);
+          return budgetPage.locator('header').count();
+        })
+        .toBe(1);
+      await budgetPage.clock.runFor(1);
+      await expect(budgetPage.locator('header')).toBeVisible();
       await budgetPage.clock.runFor(1);
       await slowPage1Arrived;
 
@@ -3019,8 +3163,6 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       slowMode = false;
       rateWindowRequests = 0;
       hit429 = false;
-      const pauseBaseMs = await budgetPage.evaluate(() => Date.now());
-      await budgetPage.clock.pauseAt(pauseBaseMs);
       // Trigger one poll so the client observes a 5-page queue at refresh_seconds: 2
       await budgetPage.clock.runFor(2000);
       await expect.poll(() => rateWindowRequests).toBe(5);
@@ -3526,7 +3668,7 @@ test.describe('POS collapse rows and cart table control', () => {
     }
   });
 
-  test('the dine-in table control moves into the cart beside Pax', async ({ page }) => {
+  test('the dine-in table control sits in the top bar', async ({ page }) => {
     const token = getE2eToken('e2e-manager', 'manager@flo.local', 'manager');
     const businessResponse = await page.request.get(`${BASE}/api/settings/business`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -3542,11 +3684,10 @@ test.describe('POS collapse rows and cart table control', () => {
 
       await page.setViewportSize({ width: 1366, height: 768 });
       await loginAsManager(page);
-      const cart = page.getByTestId('cart-shell');
-      await expect(cart).toBeVisible();
+      await expect(page.getByTestId('cart-shell')).toBeVisible();
 
       await page.getByRole('button', { name: 'Dine in' }).first().click();
-      await expect(cart.getByRole('button', { name: /Select Table|Table / })).toBeVisible();
+      await expect(page.getByTestId('cart-table-button')).toBeVisible();
     } finally {
       await page.request.put(`${BASE}/api/settings/business`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -3555,7 +3696,7 @@ test.describe('POS collapse rows and cart table control', () => {
     }
   });
 
-  test('the cart table control opens the picker from the mobile drawer too', async ({ page }) => {
+  test('the top bar table control stays reachable on mobile', async ({ page }) => {
     const token = getE2eToken('e2e-manager', 'manager@flo.local', 'manager');
     const businessResponse = await page.request.get(`${BASE}/api/settings/business`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -3576,7 +3717,8 @@ test.describe('POS collapse rows and cart table control', () => {
       const drawerCart = page.getByTestId('cart-shell').last();
       await expect(drawerCart).toBeVisible();
       await drawerCart.getByRole('button', { name: 'Dine in' }).first().click();
-      await expect(drawerCart.getByRole('button', { name: /Select Table|Table / })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('cart-table-button')).toBeVisible();
     } finally {
       await page.request.put(`${BASE}/api/settings/business`, {
         headers: { Authorization: `Bearer ${token}` },

@@ -21,6 +21,7 @@ import {
   getSettingValue,
   isServerAppEnabled,
   isGuestQrOrderingEnabled,
+  isServerBillPrintingEnabled,
   revokeDatabaseMaintenanceHandoff,
 } from './db';
 import { getJWTSecret } from './security/jwt-secret';
@@ -46,6 +47,7 @@ import {
 } from './server-app-state';
 import { API_JSON_BODY_LIMIT, GUEST_JSON_BODY_LIMIT } from './http-limits';
 import { buildCspHeader } from './csp';
+import { readPosSortSettings } from './lib/pos-sort';
 import { resolveContainedPath } from './lib/path-containment';
 import { RegionalNotConfiguredError, resolveRegionalSnapshot } from './countries';
 import { nextDailyResetEpochSeconds } from './lib/daily-session-reset';
@@ -364,6 +366,7 @@ export function startServerApp(): Promise<void> {
         timezone: snapshot.timezone,
         server_time: clockNow().toISOString(),
         frontend_build: frontendBuild(),
+        ...readPosSortSettings(settings),
       });
     });
 
@@ -738,6 +741,12 @@ export function startServerApp(): Promise<void> {
       },
     );
 
+    app.get(
+      '/api/settings/auto_lock_minutes',
+      serverAppApiRateLimit,
+      requireServerAppAuth,
+      (req, res) => forwardToMainApi(req, res, '/settings/auto_lock_minutes'),
+    );
     app.get('/api/categories', serverAppApiRateLimit, requireServerAppAuth, (req, res) =>
       forwardToMainApi(req, res, '/categories'),
     );
@@ -757,6 +766,17 @@ export function startServerApp(): Promise<void> {
     });
     app.get('/api/tables', serverAppApiRateLimit, requireServerAppAuth, (req, res) =>
       forwardToMainApi(req, res, '/tables'),
+    );
+    app.post(
+      '/api/tables/:id/move-order',
+      serverAppApiRateLimit,
+      requireServerAppAuth,
+      (req, res) =>
+        forwardToMainApi(
+          req,
+          res,
+          `/tables/${encodeURIComponent(String(req.params.id))}/move-order`,
+        ),
     );
     app.get('/api/orders', serverAppApiRateLimit, requireServerAppAuth, (req, res) =>
       forwardToMainApi(req, res, '/orders'),
@@ -905,8 +925,20 @@ export function startServerApp(): Promise<void> {
     app.post('/api/printers/print-kot', printForwardRateLimit, requireServerAppAuth, (req, res) =>
       forwardToMainApi(req, res, '/printers/print-kot'),
     );
-    app.post('/api/printers/print-bill', printForwardRateLimit, requireServerAppAuth, (req, res) =>
-      forwardToMainApi(req, res, '/printers/print-bill'),
+    app.post(
+      '/api/printers/print-bill',
+      printForwardRateLimit,
+      requireServerAppAuth,
+      (req, res) => {
+        if (!isServerBillPrintingEnabled()) {
+          return res.status(403).json({
+            error:
+              'Bill printing is disabled for the Server Companion App. An owner or manager can enable it in Settings.',
+            code: 'BILL_PRINTING_DISABLED',
+          });
+        }
+        return forwardToMainApi(req, res, '/printers/print-bill');
+      },
     );
 
     const staticDir = getStaticDir();

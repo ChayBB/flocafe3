@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { Customer, Product, Addon, CartItem, ProductVariant } from '@/lib/types';
 import { generateCartItemId, normalizeCartItems } from '@/lib/cart-identity';
-import { cartVariantUnitPrice } from '@/lib/cart-price';
+import { cartLineUnitPrice, normalizeOverridePrice } from '@/lib/cart-price';
+import { onSessionBoundary } from './session-events';
 
 export { generateCartItemId, normalizeCartItems } from '@/lib/cart-identity';
 
@@ -25,10 +26,29 @@ interface CartState {
   onlinePlatform: string;
   externalOrderId: string;
   orderNotes: string;
+  scheduledFor: string;
 
-  addItem: (product: Product, quantity?: number, addons?: Addon[], specialInstructions?: string, variant?: ProductVariant | null) => void;
-  updateItemDetails: (cartItemId: string, quantity: number, addons: Addon[], specialInstructions: string, variant?: ProductVariant | null) => void;
+  addItem: (
+    product: Product,
+    quantity?: number,
+    addons?: Addon[],
+    specialInstructions?: string,
+    variant?: ProductVariant | null,
+  ) => void;
+  updateItemDetails: (
+    cartItemId: string,
+    quantity: number,
+    addons: Addon[],
+    specialInstructions: string,
+    variant?: ProductVariant | null,
+  ) => void;
   removeItem: (cartItemId: string) => void;
+  /** Sets (or with null clears) the owner-approved selling price for one line. */
+  setItemPriceOverride: (
+    cartItemId: string,
+    override: { price: number; reason: string } | null,
+  ) => void;
+  clearPriceOverrides: () => void;
   updateQuantity: (cartItemId: string, quantity: number) => void;
   clearCart: () => void;
   loadItems: (
@@ -53,6 +73,7 @@ interface CartState {
   setOnlinePlatform: (platform: string) => void;
   setExternalOrderId: (id: string) => void;
   setOrderNotes: (notes: string) => void;
+  setScheduledFor: (value: string) => void;
   /** Charge ids the cashier has waived in this cart. */
   waivedChargeIds: Set<string>;
   /** Opt-in (not default-active) charges the cashier has added to this cart. */
@@ -81,26 +102,30 @@ export const useCartStore = create<CartState>((set, get) => ({
   onlinePlatform: '',
   externalOrderId: '',
   orderNotes: '',
+  scheduledFor: '',
   waivedChargeIds: new Set<string>(),
   optedInChargeIds: new Set<string>(),
 
   // Waivers are explicit state, never inferred from a zero amount: a waived
   // charge and a fee configured at 0 must stay distinguishable.
-  toggleWaiveCharge: (chargeId) => set((state) => {
-    const waivedChargeIds = new Set(state.waivedChargeIds);
-    if (waivedChargeIds.has(chargeId)) waivedChargeIds.delete(chargeId);
-    else waivedChargeIds.add(chargeId);
-    return { waivedChargeIds };
-  }),
+  toggleWaiveCharge: (chargeId) =>
+    set((state) => {
+      const waivedChargeIds = new Set(state.waivedChargeIds);
+      if (waivedChargeIds.has(chargeId)) waivedChargeIds.delete(chargeId);
+      else waivedChargeIds.add(chargeId);
+      return { waivedChargeIds };
+    }),
 
-  toggleOptedInCharge: (chargeId) => set((state) => {
-    const optedInChargeIds = new Set(state.optedInChargeIds);
-    if (optedInChargeIds.has(chargeId)) optedInChargeIds.delete(chargeId);
-    else optedInChargeIds.add(chargeId);
-    return { optedInChargeIds };
-  }),
+  toggleOptedInCharge: (chargeId) =>
+    set((state) => {
+      const optedInChargeIds = new Set(state.optedInChargeIds);
+      if (optedInChargeIds.has(chargeId)) optedInChargeIds.delete(chargeId);
+      else optedInChargeIds.add(chargeId);
+      return { optedInChargeIds };
+    }),
 
-  resetCharges: () => set({ waivedChargeIds: new Set<string>(), optedInChargeIds: new Set<string>() }),
+  resetCharges: () =>
+    set({ waivedChargeIds: new Set<string>(), optedInChargeIds: new Set<string>() }),
 
   addItem: (product, quantity = 1, addons = [], specialInstructions = '', variant = null) => {
     const items = get().items;
@@ -109,13 +134,21 @@ export const useCartStore = create<CartState>((set, get) => ({
 
     if (existing) {
       set({
-        items: items.map((i) =>
-          i.id === itemId ? { ...i, quantity: i.quantity + quantity } : i
-        ),
+        items: items.map((i) => (i.id === itemId ? { ...i, quantity: i.quantity + quantity } : i)),
       });
     } else {
       set({
-        items: [...items, { id: itemId, product, quantity, addons, special_instructions: specialInstructions, variant }],
+        items: [
+          ...items,
+          {
+            id: itemId,
+            product,
+            quantity,
+            addons,
+            special_instructions: specialInstructions,
+            variant,
+          },
+        ],
       });
     }
   },
@@ -126,12 +159,26 @@ export const useCartStore = create<CartState>((set, get) => ({
     if (!target) return;
 
     // Omitting the variant keeps the one already chosen on the line.
-    const nextVariant = variant === undefined ? target.variant ?? null : variant;
-    const newId = generateCartItemId(target.product.id, nextVariant?.id ?? null, addons, specialInstructions);
+    const nextVariant = variant === undefined ? (target.variant ?? null) : variant;
+    const newId = generateCartItemId(
+      target.product.id,
+      nextVariant?.id ?? null,
+      addons,
+      specialInstructions,
+      target.price_override,
+    );
     if (newId === cartItemId) {
       set({
         items: items.map((i) =>
-          i.id === cartItemId ? { ...i, quantity, addons, special_instructions: specialInstructions, variant: nextVariant } : i
+          i.id === cartItemId
+            ? {
+                ...i,
+                quantity,
+                addons,
+                special_instructions: specialInstructions,
+                variant: nextVariant,
+              }
+            : i,
         ),
       });
       return;
@@ -148,7 +195,16 @@ export const useCartStore = create<CartState>((set, get) => ({
     } else {
       set({
         items: items.map((i) =>
-          i.id === cartItemId ? { ...i, id: newId, quantity, addons, special_instructions: specialInstructions, variant: nextVariant } : i
+          i.id === cartItemId
+            ? {
+                ...i,
+                id: newId,
+                quantity,
+                addons,
+                special_instructions: specialInstructions,
+                variant: nextVariant,
+              }
+            : i,
         ),
       });
     }
@@ -158,23 +214,101 @@ export const useCartStore = create<CartState>((set, get) => ({
     set({ items: get().items.filter((i) => i.id !== cartItemId) });
   },
 
+  setItemPriceOverride: (cartItemId, override) => {
+    const items = get().items;
+    const target = items.find((i) => i.id === cartItemId);
+    if (!target) return;
+    const nextOverride = override
+      ? { price: normalizeOverridePrice(override.price), reason: override.reason }
+      : null;
+    const newId = generateCartItemId(
+      target.product.id,
+      target.variant?.id ?? null,
+      target.addons,
+      target.special_instructions,
+      nextOverride,
+    );
+    const updated = { ...target, id: newId, price_override: nextOverride };
+    const collision = items.find((i) => i.id === newId && i.id !== cartItemId);
+    set({
+      items: collision
+        ? items
+            .filter((i) => i.id !== cartItemId)
+            .map((i) => (i.id === newId ? { ...i, quantity: i.quantity + target.quantity } : i))
+        : items.map((i) => (i.id === cartItemId ? updated : i)),
+    });
+  },
+
+  clearPriceOverrides: () => {
+    const items = get().items;
+    const hasOverrides = items.some((i) => Boolean(i.price_override));
+    const hasWaivers = get().waivedChargeIds.size > 0;
+    if (!hasOverrides && !hasWaivers) return;
+    const merged: CartItem[] = [];
+    for (const item of items) {
+      const cleanId = generateCartItemId(
+        item.product.id,
+        item.variant?.id ?? null,
+        item.addons,
+        item.special_instructions,
+        null,
+      );
+      const existing = merged.find((m) => m.id === cleanId);
+      if (existing) {
+        existing.quantity += item.quantity;
+      } else {
+        merged.push({ ...item, id: cleanId, price_override: null });
+      }
+    }
+    set({
+      items: merged,
+      waivedChargeIds: new Set<string>(),
+    });
+  },
+
   updateQuantity: (cartItemId, quantity) => {
     if (quantity <= 0) {
       get().removeItem(cartItemId);
       return;
     }
     set({
-      items: get().items.map((i) =>
-        i.id === cartItemId ? { ...i, quantity } : i
-      ),
+      items: get().items.map((i) => (i.id === cartItemId ? { ...i, quantity } : i)),
     });
   },
 
   clearCart: () => {
-    set({ items: [], tableId: null, heldOrderId: null, customerId: null, customer: null, customerSource: null, guestCount: 1, orderType: 'dine_in', deliveryAddress: '', expectedPaymentMethod: '', expectedPaymentMethodId: null, deliveryNote: '', onlinePlatform: '', externalOrderId: '', orderNotes: '', waivedChargeIds: new Set<string>(), optedInChargeIds: new Set<string>() });
+    set({
+      items: [],
+      tableId: null,
+      heldOrderId: null,
+      customerId: null,
+      customer: null,
+      customerSource: null,
+      guestCount: 1,
+      orderType: 'dine_in',
+      deliveryAddress: '',
+      expectedPaymentMethod: '',
+      expectedPaymentMethodId: null,
+      deliveryNote: '',
+      onlinePlatform: '',
+      externalOrderId: '',
+      orderNotes: '',
+      scheduledFor: '',
+      waivedChargeIds: new Set<string>(),
+      optedInChargeIds: new Set<string>(),
+    });
   },
 
-  loadItems: (items, tableId, customerId, guestCount, orderNotes, heldOrderId, waivedChargeIds, optedInChargeIds) => {
+  loadItems: (
+    items,
+    tableId,
+    customerId,
+    guestCount,
+    orderNotes,
+    heldOrderId,
+    waivedChargeIds,
+    optedInChargeIds,
+  ) => {
     set({
       items: normalizeCartItems(items),
       tableId,
@@ -183,46 +317,65 @@ export const useCartStore = create<CartState>((set, get) => ({
       customerSource: customerId == null ? null : 'explicit',
       guestCount,
       orderNotes: orderNotes || '',
+      scheduledFor: '',
       // Independent Sets: a resumed cart must not alias the arrays it came from.
       waivedChargeIds: new Set(waivedChargeIds ?? []),
       optedInChargeIds: new Set(optedInChargeIds ?? []),
     });
   },
 
-  setOrderType: (type) => set((state) => ({
-    orderType: type,
-    deliveryAddress: type !== 'delivery' ? '' : state.deliveryAddress,
-    expectedPaymentMethod: type !== 'delivery' ? '' : state.expectedPaymentMethod,
-    expectedPaymentMethodId: type !== 'delivery' ? null : state.expectedPaymentMethodId,
-    deliveryNote: type !== 'delivery' ? '' : state.deliveryNote,
-    onlinePlatform: type !== 'online' ? '' : state.onlinePlatform,
-    externalOrderId: type !== 'online' ? '' : state.externalOrderId,
-    // Only a real change of order type resets charges: re-selecting the type the
-    // cart already has must not silently un-waive a fee the cashier removed.
-    ...(state.orderType === type
-      ? {}
-      : { waivedChargeIds: new Set<string>(), optedInChargeIds: new Set<string>() }),
-  })),
+  setOrderType: (type) =>
+    set((state) => ({
+      orderType: type,
+      deliveryAddress: type !== 'delivery' ? '' : state.deliveryAddress,
+      expectedPaymentMethod: type !== 'delivery' ? '' : state.expectedPaymentMethod,
+      expectedPaymentMethodId: type !== 'delivery' ? null : state.expectedPaymentMethodId,
+      deliveryNote: type !== 'delivery' ? '' : state.deliveryNote,
+      onlinePlatform: type !== 'online' ? '' : state.onlinePlatform,
+      externalOrderId: type !== 'online' ? '' : state.externalOrderId,
+      scheduledFor: type === 'takeaway' || type === 'delivery' ? state.scheduledFor : '',
+      // Only a real change of order type resets charges: re-selecting the type the
+      // cart already has must not silently un-waive a fee the cashier removed.
+      ...(state.orderType === type
+        ? {}
+        : { waivedChargeIds: new Set<string>(), optedInChargeIds: new Set<string>() }),
+    })),
   setTableId: (id) => set({ tableId: id, heldOrderId: null }),
   setCustomerId: (id) => set({ customerId: id, customerSource: id == null ? null : 'explicit' }),
-  setCustomer: (customer) => set({ customer, customerId: customer?.id ?? null, customerSource: customer ? 'explicit' : null }),
-  setReservationCustomer: (customer) => set({ customer, customerId: customer?.id ?? null, customerSource: customer ? 'reservation' : null }),
+  setCustomer: (customer) =>
+    set({
+      customer,
+      customerId: customer?.id ?? null,
+      customerSource: customer ? 'explicit' : null,
+    }),
+  setReservationCustomer: (customer) =>
+    set({
+      customer,
+      customerId: customer?.id ?? null,
+      customerSource: customer ? 'reservation' : null,
+    }),
   setGuestCount: (count) => set({ guestCount: count }),
   setDeliveryAddress: (address) => set({ deliveryAddress: address }),
-  setExpectedPaymentMethod: (method, methodId) => set({ expectedPaymentMethod: method, expectedPaymentMethodId: methodId ?? null }),
+  setExpectedPaymentMethod: (method, methodId) =>
+    set({ expectedPaymentMethod: method, expectedPaymentMethodId: methodId ?? null }),
   setDeliveryNote: (note) => set({ deliveryNote: note }),
   setOnlinePlatform: (platform) => set({ onlinePlatform: platform }),
   setExternalOrderId: (id) => set({ externalOrderId: id }),
   setOrderNotes: (notes) => set({ orderNotes: notes }),
+  setScheduledFor: (value) => set({ scheduledFor: value }),
 
   subtotal: () => {
     const state = get();
-    const onlinePlatformSelected = state.orderType === 'online' && state.onlinePlatform.trim().length > 0;
+    const onlinePlatformSelected =
+      state.orderType === 'online' && state.onlinePlatform.trim().length > 0;
     return state.items.reduce((sum, item) => {
-      const itemPrice = cartVariantUnitPrice(item, onlinePlatformSelected);
+      const itemPrice = cartLineUnitPrice(item, onlinePlatformSelected);
       const itemQty = Number(item.quantity) || 1;
-      const addonTotal = (item.addons || []).reduce((a, addon) => a + (Number(addon.price) || 0) * (Number(addon.quantity) || 1), 0);
-      return sum + (itemPrice + addonTotal) * itemQty;
+      const addonTotal = (item.addons || []).reduce(
+        (a, addon) => a + (Number(addon.price) || 0) * (Number(addon.quantity) || 1),
+        0,
+      );
+      return normalizeOverridePrice(sum + (itemPrice + addonTotal) * itemQty);
     }, 0);
   },
 
@@ -230,3 +383,7 @@ export const useCartStore = create<CartState>((set, get) => ({
     return get().items.reduce((sum, item) => sum + item.quantity, 0);
   },
 }));
+
+onSessionBoundary(() => {
+  useCartStore.getState().clearPriceOverrides();
+});

@@ -31,6 +31,7 @@ import { type PaperSize, type BillTemplate, usePosSettingsStore } from '@/store/
 import { usePrinterStore } from '@/hooks/usePrinter';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import type { PrinterTextSize } from '@print/text-size';
 
 const SELECTABLE_LANGUAGES: Language[] = (Object.keys(LANGUAGES) as Language[]).filter(
   (lang) => LANGUAGES[lang].selectable,
@@ -45,6 +46,7 @@ export type HwPrinter = {
   port?: number;
   cash_drawer_pulse_enabled: number;
   paper_width: string;
+  text_size?: PrinterTextSize;
   is_default: number;
   profile_id?: string;
   profile_name?: string;
@@ -71,6 +73,7 @@ export type PrinterForm = {
   ip_address: string;
   port: string;
   paper_width: string;
+  text_size: PrinterTextSize;
 };
 
 export type PrintingForm = {
@@ -131,6 +134,7 @@ const emptyPrinterForm: PrinterForm = {
   ip_address: '',
   port: '9100',
   paper_width: 'cols-42',
+  text_size: 'normal',
 };
 
 export interface PrintersSettingsTabProps {
@@ -182,6 +186,7 @@ export function PrintersSettingsTab({
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
   const [detectedPrinters, setDetectedPrinters] = useState<DetectedPrinter[]>([]);
   const [detectingPrinters, setDetectingPrinters] = useState(false);
+  const [detectionSucceeded, setDetectionSucceeded] = useState(false);
   const [addingDetectedName, setAddingDetectedName] = useState<string | null>(null);
   const [installedPrintersOpen, setInstalledPrintersOpen] = useState(false);
   const [cashDrawerMethodsOpen, setCashDrawerMethodsOpen] = useState(false);
@@ -248,9 +253,15 @@ export function PrintersSettingsTab({
     setDetectingPrinters(true);
     try {
       const res = await api.get('/printers/detect', signal ? { signal } : undefined);
-      if (!signal?.aborted) setDetectedPrinters(res.data.printers || []);
+      if (!signal?.aborted) {
+        setDetectedPrinters(res.data.printers || []);
+        setDetectionSucceeded(true);
+      }
     } catch {
-      if (!signal?.aborted) setDetectedPrinters([]);
+      if (!signal?.aborted) {
+        setDetectedPrinters([]);
+        setDetectionSucceeded(false);
+      }
     } finally {
       if (!signal?.aborted) setDetectingPrinters(false);
     }
@@ -309,6 +320,7 @@ export function PrintersSettingsTab({
       ip_address: p.ip_address || '',
       port: String(p.port || 9100),
       paper_width: normalizePrinterWidthValue(p.paper_width),
+      text_size: p.text_size ?? 'normal',
     });
     setEditingPrinterId(p.id);
     setShowPrinterForm(true);
@@ -332,6 +344,7 @@ export function PrintersSettingsTab({
         ip_address: printerForm.connection_type === 'network' ? printerForm.ip_address : undefined,
         port: printerForm.connection_type === 'network' ? Number(printerForm.port) : undefined,
         paper_width: printerForm.paper_width,
+        text_size: printerForm.text_size,
       };
       if (editingPrinterId) {
         await api.put(`/printers/${editingPrinterId}`, payload);
@@ -730,7 +743,8 @@ export function PrintersSettingsTab({
                       ))}
                     </select>
                     {printerForm.device_name &&
-                      detectedPrinters.length > 0 &&
+                      !detectingPrinters &&
+                      detectionSucceeded &&
                       !detectedPrinters.some((dp) => dp.name === printerForm.device_name) && (
                         <p className="mt-1 text-xs text-amber-600">{t('printerDeviceNotFound')}</p>
                       )}
@@ -758,6 +772,26 @@ export function PrintersSettingsTab({
                     <option value="cols-42">{t('printColumns42')}</option>
                     <option value="cols-44">{t('printColumns44')}</option>
                     <option value="cols-48">{t('printColumns48')}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">
+                    {t('printerTextSize')}
+                  </label>
+                  <select
+                    value={printerForm.text_size}
+                    onChange={(e) =>
+                      setPrinterForm((p) => ({
+                        ...p,
+                        text_size: e.target.value as PrinterTextSize,
+                      }))
+                    }
+                    className="w-full px-3 py-2 text-sm border border-border rounded-lg outline-none focus:ring-2 focus:ring-brand"
+                  >
+                    <option value="normal">{t('printerTextSizeNormal')}</option>
+                    <option value="large">{t('printerTextSizeLarge')}</option>
+                    <option value="extra_large">{t('printerTextSizeExtraLarge')}</option>
                   </select>
                 </div>
               </div>

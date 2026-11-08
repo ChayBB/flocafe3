@@ -14,10 +14,14 @@ import {
   Pause,
   MapPin,
   SquarePen,
+  Tag,
   Users,
-  Wallet,
   StickyNote,
   QrCode,
+  CalendarClock,
+  CreditCard,
+  ChevronRight,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import api from '@/lib/api';
@@ -31,23 +35,34 @@ import toast from 'react-hot-toast';
 import type { Table, Order, OrderItem, CartItem } from '@/lib/types';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { fractionalQuantityStep, roundToQuantityPrecision } from '@/lib/utils';
-import { cartVariantUnitPrice } from '@/lib/cart-price';
+import { cartLineUnitPrice, cartVariantUnitPrice } from '@/lib/cart-price';
+import { tenantCan } from '@/lib/permissions';
+import { CartPriceOverrideModal } from '@/components/pos/CartPriceOverrideModal';
+import { OrderDetailsDrawer } from '@/components/pos/OrderDetailsDrawer';
 import { calculateAppliedCharges } from '@/lib/charges';
 import { chargesForOrderType, useChargesStore } from '@/store/charges';
 import { getCurrencyFractionDigits } from '@countries';
 import { isTerminalItemStatus } from '../../../../shared/order-item-status';
 import { kdsItemLine } from '@/lib/item-options-note';
 import GuestTableQrDialog from '@/components/tables/GuestTableQrDialog';
+import { formatScheduledInstantForDisplay, parseScheduledForInput } from '@/lib/scheduled-time';
 
 interface Props {
   tables: Table[];
   currency: string;
   submitting: boolean;
   onPlaceOrder: () => void;
-  onShowTablePicker: () => void;
+  onSendToPayment?: () => void;
+  onOpenPaymentQueue?: () => void;
+  counterRole?: 'ordering' | 'payment' | 'combined' | null;
+  multiCounterEnabled?: boolean;
+  scheduledOrdersEnabled?: boolean;
   onEditItem?: (item: CartItem) => void;
+  onModalOpenChange?: (open: boolean) => void;
   variant?: 'sidebar' | 'drawer';
   existingOrder?: Order | null;
+  storeTimezone?: string;
+  onCancelExistingOrderMode?: () => void;
 }
 
 const orderTypeIcons = {
@@ -99,24 +114,26 @@ function ItemQuantityControl({
     return (
       <>
         <button
+          type="button"
           onClick={() => stepBy(-1)}
-          className="touch-target rounded-full bg-muted transition-colors hover:bg-muted/70 active:bg-muted/70"
+          className="touch-target h-7 w-7 min-h-7 min-w-7 rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
           aria-label={t('remove')}
         >
-          <Minus size={16} />
+          <Minus size={13} />
         </button>
         <span
           data-testid="cart-item-qty"
-          className="w-6 text-center text-base font-semibold tabular-nums"
+          className="min-w-6 px-1 text-center text-xs font-semibold tabular-nums text-foreground"
         >
           {item.quantity}
         </span>
         <button
+          type="button"
           onClick={() => stepBy(1)}
-          className="touch-target rounded-full bg-muted transition-colors hover:bg-muted/70 active:bg-muted/70"
+          className="touch-target h-7 w-7 min-h-7 min-w-7 rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
           aria-label={t('addItems')}
         >
-          <Plus size={16} />
+          <Plus size={13} />
         </button>
       </>
     );
@@ -125,11 +142,12 @@ function ItemQuantityControl({
   return (
     <>
       <button
+        type="button"
         onClick={() => stepBy(-1)}
-        className="touch-target rounded-full bg-muted transition-colors hover:bg-muted/70 active:bg-muted/70"
+        className="touch-target h-7 w-7 min-h-7 min-w-7 rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
         aria-label={t('remove')}
       >
-        <Minus size={16} />
+        <Minus size={13} />
       </button>
       <input
         type="number"
@@ -143,14 +161,15 @@ function ItemQuantityControl({
           if (e.key === 'Enter') commitDraft();
         }}
         aria-label={t('quantity')}
-        className="w-14 text-center text-base font-semibold tabular-nums border border-border bg-card rounded-md px-1 py-0.5 outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+        className="w-12 text-center text-xs font-semibold tabular-nums border-0 bg-transparent px-0.5 outline-none focus:ring-1 focus:ring-brand/30 rounded"
       />
       <button
+        type="button"
         onClick={() => stepBy(1)}
-        className="touch-target rounded-full bg-muted transition-colors hover:bg-muted/70 active:bg-muted/70"
+        className="touch-target h-7 w-7 min-h-7 min-w-7 rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
         aria-label={t('addItems')}
       >
-        <Plus size={16} />
+        <Plus size={13} />
       </button>
     </>
   );
@@ -160,22 +179,81 @@ export default function CartPanel({
   tables,
   submitting,
   onPlaceOrder,
-  onShowTablePicker,
+  onSendToPayment,
+  onOpenPaymentQueue,
+  counterRole,
+  multiCounterEnabled = false,
+  scheduledOrdersEnabled = false,
   onEditItem,
+  onModalOpenChange,
   variant = 'sidebar',
   existingOrder,
+  storeTimezone,
+  onCancelExistingOrderMode,
 }: Props) {
   const cart = useCartStore();
   const heldOrders = useHeldOrdersStore();
-  const { currentTenant } = useAuthStore();
+  const { user, currentTenant } = useAuthStore();
+  const canOverridePrice = tenantCan(currentTenant, 'orders.item.price_override');
+  const [priceOverrideState, setPriceOverrideState] = useState<{
+    userId: string | number | undefined;
+    itemId: string;
+  } | null>(null);
+  const priceOverrideItemId =
+    canOverridePrice && priceOverrideState && priceOverrideState.userId === user?.id
+      ? priceOverrideState.itemId
+      : null;
+  const setPriceOverrideItemId = (itemId: string | null) =>
+    setPriceOverrideState(itemId ? { userId: user?.id, itemId } : null);
+  const priceOverrideTarget =
+    canOverridePrice && priceOverrideItemId
+      ? cart.items.find((i) => i.id === priceOverrideItemId)
+      : undefined;
+  const priceOverrideOpen = Boolean(priceOverrideTarget);
+  const [qrTableId, setQrTableId] = useState<string | null>(null);
+  const qrDialogOpen = Boolean(qrTableId && qrTableId === cart.tableId);
+  const tTables = useTranslations('tables');
+  const [detailsDrawerOpen, setDetailsDrawerOpen] = useState(false);
+  const [orderNotesExpanded, setOrderNotesExpanded] = useState(false);
+  const effectiveDetailsDrawerOpen = detailsDrawerOpen && !existingOrder;
+  useEffect(() => {
+    onModalOpenChange?.(priceOverrideOpen || effectiveDetailsDrawerOpen || qrDialogOpen);
+    return () => onModalOpenChange?.(false);
+  }, [priceOverrideOpen, effectiveDetailsDrawerOpen, qrDialogOpen, onModalOpenChange]);
   const billingType = usePosSettingsStore((s) => s.billingType);
-  const tablesRequired = usePosSettingsStore((s) => s.tablesRequired);
   const t = useTranslations('pos');
   const tCommon = useTranslations('common');
   const tOrders = useTranslations('orders');
-  const tSettings = useTranslations('settings');
   const isRestaurant = (currentTenant?.business_type ?? 'restaurant') === 'restaurant';
   const fmt = useFormatCurrency();
+  const effectiveTimezone = storeTimezone || currentTenant?.timezone || 'UTC';
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNowMs(Date.now()), 15000);
+    return () => clearInterval(interval);
+  }, []);
+  const canScheduleCart =
+    Boolean(scheduledOrdersEnabled) &&
+    !existingOrder &&
+    (cart.orderType === 'takeaway' || cart.orderType === 'delivery');
+  const scheduleValidation =
+    canScheduleCart && cart.scheduledFor.trim().length > 0
+      ? parseScheduledForInput({
+          input: cart.scheduledFor,
+          timezone: effectiveTimezone,
+          nowMs,
+        })
+      : null;
+  const scheduleErrorMessage =
+    scheduleValidation && !scheduleValidation.ok
+      ? scheduleValidation.code === 'PAST_SCHEDULED_TIME'
+        ? t('scheduledPastTimeError', { timezone: effectiveTimezone })
+        : scheduleValidation.code === 'DST_NONEXISTENT_TIME'
+          ? t('scheduledDstSkippedError', { timezone: effectiveTimezone })
+          : scheduleValidation.code === 'DST_AMBIGUOUS_TIME'
+            ? t('scheduledDstAmbiguousError', { timezone: effectiveTimezone })
+            : t('scheduledInvalidTimeError', { timezone: effectiveTimezone })
+      : null;
   const canHold =
     isRestaurant &&
     cart.orderType === 'dine_in' &&
@@ -185,15 +263,13 @@ export default function CartPanel({
 
   const isDeliveryOrder = cart.orderType === 'delivery';
   const [customPaymentMethods, setCustomPaymentMethods] = useState<CustomPaymentMethod[]>([]);
-  const [qrTableId, setQrTableId] = useState<string | null>(null);
-  const tTables = useTranslations('tables');
   useEffect(() => {
-    if (!isDeliveryOrder) return;
+    if (!isDeliveryOrder || existingOrder) return;
     api
       .get('/payment-methods')
       .then((res) => setCustomPaymentMethods(res.data.payment_methods || []))
       .catch(() => setCustomPaymentMethods([]));
-  }, [isDeliveryOrder]);
+  }, [isDeliveryOrder, existingOrder]);
 
   const charges = useChargesStore((s) => s.charges);
   const loadCharges = useChargesStore((s) => s.load);
@@ -251,6 +327,24 @@ export default function CartPanel({
 
   const isDrawer = variant === 'drawer';
 
+  const expectedPaymentSummaryLabel =
+    cart.expectedPaymentMethodId !== null
+      ? customPaymentMethods.find((m) => m.id === cart.expectedPaymentMethodId)?.name ||
+        cart.expectedPaymentMethod ||
+        tCommon('unknown')
+      : cart.expectedPaymentMethod === 'pending'
+        ? tOrders('pending')
+        : cart.expectedPaymentMethod === 'cash'
+          ? t('methodCash')
+          : cart.expectedPaymentMethod === 'card'
+            ? t('methodCard')
+            : tCommon('unknown');
+
+  const orderNotesShortLabel =
+    t('orderNotesPlaceholder')
+      .replace(/\s*\([^)]*\)\s*$/, '')
+      .trim() || t('orderNotesPlaceholder');
+
   return (
     <div
       data-testid="cart-shell"
@@ -260,9 +354,43 @@ export default function CartPanel({
           : 'pos-cart-shell w-full h-full bg-card rounded-xl border border-border dark:border-border flex flex-col shadow-sm'
       }
     >
-      {/* Order Type */}
-      <div className="p-4 border-b border-border dark:border-border space-y-2">
-        <div className="flex gap-1 bg-muted rounded-lg p-1">
+      {/* Order Type + Compact OrderDetailsSummary */}
+      <div className="px-2.5 py-1 border-b border-border dark:border-border space-y-1">
+        {existingOrder &&
+          existingOrder.release_status &&
+          existingOrder.release_status !== 'released' && (
+            <div
+              data-testid="cart-scheduled-existing-banner"
+              className="flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/70 px-2.5 py-1.5 text-xs text-blue-800 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-200"
+            >
+              <span className="inline-flex items-center gap-1.5 min-w-0">
+                <CalendarClock size={14} className="shrink-0" />
+                <span className="truncate font-medium">
+                  {t('scheduledAddingToBanner', {
+                    number: existingOrder.order_number,
+                    time: existingOrder.scheduled_for
+                      ? formatScheduledInstantForDisplay(
+                          existingOrder.scheduled_for,
+                          effectiveTimezone,
+                        )
+                      : '',
+                  })}
+                </span>
+              </span>
+              {onCancelExistingOrderMode && (
+                <button
+                  type="button"
+                  onClick={onCancelExistingOrderMode}
+                  aria-label={t('close')}
+                  className="rounded p-0.5 hover:bg-blue-100 dark:hover:bg-blue-900/50 shrink-0"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          )}
+
+        <div className="flex gap-0.5 h-7 p-0.5 rounded-lg bg-muted">
           {(['dine_in', 'takeaway', 'delivery', 'online'] as const)
             .filter((type) => isRestaurant || type !== 'dine_in')
             .map((type) => {
@@ -279,83 +407,52 @@ export default function CartPanel({
               return (
                 <button
                   key={type}
+                  type="button"
+                  disabled={Boolean(existingOrder && existingOrder.type !== type)}
                   onClick={() => cart.setOrderType(type)}
-                  className={`touch-target flex-1 gap-1 px-2 rounded-md text-xs font-medium transition-colors ${showIcon ? '' : 'whitespace-nowrap'} ${
+                  className={`touch-target h-6 min-h-6 flex-1 gap-1 px-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${showIcon ? '' : 'whitespace-nowrap'} ${
                     cart.orderType === type
                       ? 'bg-card text-brand shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  {showIcon && <Icon size={14} />}
+                  {showIcon && <Icon size={13} />}
                   {label}
                 </button>
               );
             })}
         </div>
 
-        {cart.orderType === 'dine_in' && (
-          <div className="flex flex-wrap items-stretch gap-2">
-            {isRestaurant &&
-              cart.orderType === 'dine_in' &&
-              tablesRequired &&
-              onShowTablePicker && (
+        {!existingOrder && cart.orderType === 'dine_in' && (
+          <div
+            data-testid="pos-order-details-summary"
+            className="flex min-h-7 items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/50 px-2.5"
+          >
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Users size={13} className="shrink-0" />
+              <span className="font-medium text-foreground">{t('pax')}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {isRestaurant && cart.tableId && (
                 <button
                   type="button"
-                  onClick={onShowTablePicker}
-                  data-testid="cart-table-button"
-                  className={`flex items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors whitespace-nowrap min-h-[38px] ${
-                    cart.tableId
-                      ? 'bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-200 dark:bg-orange-950/40 dark:text-orange-300 dark:border-orange-800 dark:hover:bg-orange-950/60'
-                      : 'bg-amber-50 border-amber-400 text-amber-700 hover:bg-amber-100'
-                  }`}
+                  onClick={() => setQrTableId(cart.tableId)}
+                  aria-label={tTables('guestQrButton')}
+                  title={tTables('guestQrButton')}
+                  data-testid="cart-table-qr-button"
+                  className="touch-target h-7 w-7 min-h-7 min-w-7 rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
-                  <UtensilsCrossed size={14} />
-                  {cart.tableId
-                    ? t('tableLabel', {
-                        name: tables.find((t) => t.id === cart.tableId)?.name || cart.tableId,
-                      })
-                    : t('selectTable')}
-                  <span
-                    aria-hidden="true"
-                    className="hidden sm:inline-flex ms-1 px-1 py-0.2 rounded border border-current text-[10px] font-mono opacity-80"
-                  >
-                    F2
-                  </span>
+                  <QrCode size={14} />
                 </button>
               )}
-            {isRestaurant && cart.tableId && (
-              <button
-                type="button"
-                onClick={() => setQrTableId(cart.tableId)}
-                aria-label={tTables('guestQrButton')}
-                title={tTables('guestQrButton')}
-                data-testid="cart-table-qr-button"
-                className="flex min-h-[38px] items-center justify-center rounded-lg border border-border px-3 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <QrCode size={16} />
-              </button>
-            )}
-            {qrTableId && (
-              <GuestTableQrDialog
-                tableId={qrTableId}
-                api={api}
-                apiPrefix=""
-                onClose={() => setQrTableId(null)}
-              />
-            )}
-            <div className="flex flex-1 min-w-[160px] items-center justify-between rounded-lg border border-border bg-card px-3 py-2">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Users size={15} />
-                <span>{t('pax')}</span>
-              </div>
-              <div className="flex items-center gap-2">
+              <div className="inline-flex items-center rounded-full border border-border bg-card p-0.5">
                 <button
                   type="button"
                   aria-label={t('decreasePax')}
                   onClick={() => cart.setGuestCount(Math.max(1, cart.guestCount - 1))}
-                  className="touch-target rounded-full bg-muted"
+                  className="touch-target h-7 w-7 min-h-7 min-w-7 rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
                 >
-                  <Minus size={15} />
+                  <Minus size={12} />
                 </button>
                 <input
                   aria-label={t('pax')}
@@ -367,125 +464,249 @@ export default function CartPanel({
                   onChange={(e) =>
                     cart.setGuestCount(Math.min(99, Math.max(1, Number(e.target.value) || 1)))
                   }
-                  className="w-12 text-center text-base font-semibold border-0 outline-none bg-transparent"
+                  className="w-8 text-center text-xs font-semibold tabular-nums border-0 outline-none bg-transparent"
                 />
                 <button
                   type="button"
                   aria-label={t('increasePax')}
                   onClick={() => cart.setGuestCount(Math.min(99, cart.guestCount + 1))}
-                  className="touch-target rounded-full bg-muted"
+                  className="touch-target h-7 w-7 min-h-7 min-w-7 rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
                 >
-                  <Plus size={15} />
+                  <Plus size={12} />
+                </button>
+              </div>
+              <button
+                type="button"
+                data-testid="pos-order-details-edit-btn"
+                onClick={() => setDetailsDrawerOpen(true)}
+                className="inline-flex items-center gap-0.5 text-xs font-medium text-brand hover:underline"
+              >
+                <span>{tCommon('edit')}</span>
+                <ChevronRight size={12} className="rtl-flip" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!existingOrder && cart.orderType === 'takeaway' && scheduledOrdersEnabled && (
+          <div data-testid="pos-schedule-section">
+            <div
+              data-testid="pos-order-details-summary"
+              role="button"
+              tabIndex={0}
+              onClick={() => setDetailsDrawerOpen(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setDetailsDrawerOpen(true);
+                }
+              }}
+              className="flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/50 px-2.5 py-0.5 text-xs transition-colors hover:bg-muted"
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+                <CalendarClock size={13} className="shrink-0 text-muted-foreground" />
+                {scheduleErrorMessage ? (
+                  <span
+                    role="alert"
+                    data-testid="pos-schedule-error"
+                    className="truncate font-medium text-red-600 dark:text-red-400"
+                  >
+                    {scheduleErrorMessage}
+                  </span>
+                ) : cart.scheduledFor && scheduleValidation?.ok ? (
+                  <span className="truncate font-medium text-brand">
+                    {t('sendToKitchenAt')} ·{' '}
+                    {formatScheduledInstantForDisplay(scheduleValidation.isoUtc, effectiveTimezone)}
+                  </span>
+                ) : (
+                  <span className="truncate text-muted-foreground">
+                    <span className="font-medium text-foreground">{t('sendToKitchenAt')}</span> ·{' '}
+                    {t('sendImmediately')}
+                  </span>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {cart.scheduledFor && (
+                  <button
+                    type="button"
+                    data-testid="pos-schedule-clear-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      cart.setScheduledFor('');
+                    }}
+                    aria-label={t('sendImmediately')}
+                    title={t('sendImmediately')}
+                    className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid="pos-order-details-edit-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDetailsDrawerOpen(true);
+                  }}
+                  className="inline-flex items-center gap-0.5 font-medium text-brand hover:underline"
+                >
+                  <span>{tCommon('edit')}</span>
+                  <ChevronRight size={12} className="rtl-flip" />
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Delivery address — shown inline when delivery is selected */}
-        {cart.orderType === 'delivery' && (
-          <div className="flex items-center gap-2">
-            <MapPin size={14} className="text-muted-foreground shrink-0" />
-            <input
-              type="text"
-              value={cart.deliveryAddress}
-              onChange={(e) => cart.setDeliveryAddress(e.target.value)}
-              placeholder={t('deliveryAddress')}
-              className="flex-1 min-h-11 px-3 py-2 text-sm border border-border bg-card rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
-            />
+        {!existingOrder && cart.orderType === 'delivery' && (
+          <div data-testid={scheduledOrdersEnabled ? 'pos-schedule-section' : undefined}>
+            <div
+              data-testid="pos-order-details-summary"
+              role="button"
+              tabIndex={0}
+              onClick={() => setDetailsDrawerOpen(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setDetailsDrawerOpen(true);
+                }
+              }}
+              className="flex min-h-7 cursor-pointer items-center justify-between gap-1.5 rounded-lg border border-border/60 bg-muted/50 px-2.5 py-0.5 text-xs transition-colors hover:bg-muted"
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate">
+                  <MapPin
+                    size={13}
+                    className={
+                      cart.deliveryAddress.trim()
+                        ? 'shrink-0 text-muted-foreground'
+                        : 'shrink-0 text-amber-600 dark:text-amber-400'
+                    }
+                  />
+                  {cart.deliveryAddress.trim() ? (
+                    <span className="truncate font-medium text-foreground">
+                      {cart.deliveryAddress}
+                    </span>
+                  ) : (
+                    <span className="truncate rounded bg-amber-500/15 px-1 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                      {t('deliveryAddress')}
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 text-muted-foreground/60">·</span>
+                <span className="max-w-16 shrink-0 truncate rounded border border-border/50 bg-background/80 px-1 py-0.5 text-[11px] text-muted-foreground">
+                  {expectedPaymentSummaryLabel}
+                </span>
+                {scheduledOrdersEnabled && (
+                  <>
+                    <span className="shrink-0 text-muted-foreground/60">·</span>
+                    <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px]">
+                      <CalendarClock size={12} className="shrink-0 text-muted-foreground" />
+                      <span className="sr-only">{t('sendToKitchenAt')}</span>
+                      {scheduleErrorMessage ? (
+                        <span
+                          role="alert"
+                          data-testid="pos-schedule-error"
+                          className="max-w-20 truncate font-medium text-red-600 dark:text-red-400"
+                        >
+                          {scheduleErrorMessage}
+                        </span>
+                      ) : cart.scheduledFor && scheduleValidation?.ok ? (
+                        <span className="max-w-20 truncate font-medium text-brand">
+                          {formatScheduledInstantForDisplay(
+                            scheduleValidation.isoUtc,
+                            effectiveTimezone,
+                          )}
+                        </span>
+                      ) : (
+                        <span className="max-w-14 truncate text-muted-foreground">
+                          {t('sendImmediately')}
+                        </span>
+                      )}
+                    </span>
+                  </>
+                )}
+                {cart.deliveryNote.trim().length > 0 && (
+                  <StickyNote
+                    size={12}
+                    className="shrink-0 text-brand"
+                    aria-label={cart.deliveryNote}
+                  />
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {scheduledOrdersEnabled && cart.scheduledFor && (
+                  <button
+                    type="button"
+                    data-testid="pos-schedule-clear-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      cart.setScheduledFor('');
+                    }}
+                    aria-label={t('sendImmediately')}
+                    title={t('sendImmediately')}
+                    className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid="pos-order-details-edit-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDetailsDrawerOpen(true);
+                  }}
+                  className="inline-flex items-center gap-0.5 font-medium text-brand hover:underline"
+                >
+                  <span>{tCommon('edit')}</span>
+                  <ChevronRight size={12} className="rtl-flip" />
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Expected collection and courier note: recorded with the order, never a payment */}
-        {isDeliveryOrder && (
-          <>
-            <label className="flex items-center gap-2">
-              <Wallet size={14} className="text-muted-foreground shrink-0" />
-              <span className="text-sm text-muted-foreground">{t('expectedPayment')}</span>
-              <select
-                value={
-                  cart.expectedPaymentMethodId !== null
-                    ? `custom:${cart.expectedPaymentMethodId}`
-                    : cart.expectedPaymentMethod
-                }
-                onChange={(e) => {
-                  const selected = e.target.value;
-                  // A configured method travels by identity, so a method named
-                  // "Pending" or "Unknown" cannot be read back as a sentinel.
-                  const customId = selected.startsWith('custom:')
-                    ? Number(selected.slice('custom:'.length))
-                    : null;
-                  if (customId !== null) {
-                    const method = customPaymentMethods.find(
-                      (candidate) => candidate.id === customId,
-                    );
-                    if (method) {
-                      cart.setExpectedPaymentMethod(method.name, method.id);
-                      return;
-                    }
-                    if (customId === cart.expectedPaymentMethodId) return;
-                  }
-                  cart.setExpectedPaymentMethod(selected, null);
-                }}
-                className="flex-1 min-w-0 min-h-11 px-3 py-2 text-sm border border-border bg-card rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
-              >
-                <option value="">{tCommon('unknown')}</option>
-                <option value="pending">{tOrders('pending')}</option>
-                <option value="cash">{t('methodCash')}</option>
-                <option value="card">{t('methodCard')}</option>
-                {customPaymentMethods.length > 0 && (
-                  <optgroup label={tSettings('paymentMethods')}>
-                    {customPaymentMethods.map((method) => (
-                      <option key={method.id} value={`custom:${method.id}`}>
-                        {method.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {cart.expectedPaymentMethodId !== null &&
-                  !customPaymentMethods.some(
-                    (method) => method.id === cart.expectedPaymentMethodId,
-                  ) && (
-                    <option value={`custom:${cart.expectedPaymentMethodId}`}>
-                      {cart.expectedPaymentMethod || tCommon('unknown')}
-                    </option>
-                  )}
-              </select>
-            </label>
-            <div className="flex items-center gap-2">
-              <StickyNote size={14} className="text-muted-foreground shrink-0" />
-              <input
-                type="text"
-                value={cart.deliveryNote}
-                onChange={(e) => cart.setDeliveryNote(e.target.value.slice(0, 200))}
-                placeholder={t('deliveryNotePlaceholder')}
-                maxLength={200}
-                className="flex-1 min-h-11 px-3 py-2 text-sm border border-border bg-card rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
-              />
+        {!existingOrder && cart.orderType === 'online' && (
+          <div
+            data-testid="pos-order-details-summary"
+            role="button"
+            tabIndex={0}
+            onClick={() => setDetailsDrawerOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setDetailsDrawerOpen(true);
+              }
+            }}
+            className="flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/50 px-2.5 py-0.5 text-xs transition-colors hover:bg-muted"
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+              <Globe size={13} className="shrink-0 text-muted-foreground" />
+              {cart.onlinePlatform.trim() ? (
+                <span className="truncate font-medium text-foreground">
+                  {cart.onlinePlatform}
+                  {cart.externalOrderId.trim() ? ` · #${cart.externalOrderId.trim()}` : ''}
+                </span>
+              ) : (
+                <span className="truncate text-muted-foreground">
+                  {t('onlinePlatformPlaceholder')}
+                  {cart.externalOrderId.trim() ? ` · #${cart.externalOrderId.trim()}` : ''}
+                </span>
+              )}
             </div>
-          </>
-        )}
-
-        {/* Online platform + external order id — shown inline when online is selected */}
-        {cart.orderType === 'online' && (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <Globe size={14} className="text-muted-foreground shrink-0" />
-              <input
-                type="text"
-                value={cart.onlinePlatform}
-                onChange={(e) => cart.setOnlinePlatform(e.target.value)}
-                placeholder={t('onlinePlatformPlaceholder')}
-                className="flex-1 min-h-11 px-3 py-2 text-sm border border-border bg-card rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
-              />
-            </div>
-            <input
-              type="text"
-              value={cart.externalOrderId}
-              onChange={(e) => cart.setExternalOrderId(e.target.value)}
-              placeholder={t('externalOrderIdPlaceholder')}
-              className="flex-1 min-h-11 px-3 py-2 text-sm border border-border bg-card rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
-            />
+            <button
+              type="button"
+              data-testid="pos-order-details-edit-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setDetailsDrawerOpen(true);
+              }}
+              className="inline-flex shrink-0 items-center gap-0.5 font-medium text-brand hover:underline"
+            >
+              <span>{tCommon('edit')}</span>
+              <ChevronRight size={12} className="rtl-flip" />
+            </button>
           </div>
         )}
       </div>
@@ -497,8 +718,8 @@ export default function CartPanel({
         data-testid="cart-items-scroll"
         className={
           isDrawer
-            ? 'overflow-y-auto p-4 max-h-[40vh]'
-            : 'pos-cart-items flex-1 min-h-0 overflow-y-auto p-4'
+            ? 'overflow-y-auto px-2.5 py-1.5 max-h-[40vh]'
+            : 'pos-cart-items flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5'
         }
       >
         {/* Previously ordered items (add-items mode) */}
@@ -506,11 +727,11 @@ export default function CartPanel({
           existingOrder.items &&
           existingOrder.items.filter((i: OrderItem) => !isTerminalItemStatus(i.status)).length >
             0 && (
-            <div className="mb-3 pb-3 border-b border-dashed border-border">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+            <div className="mb-2.5 pb-2.5 border-b border-dashed border-border">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
                 {t('alreadyOrdered')}
               </p>
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {existingOrder.items
                   .filter((i: OrderItem) => !isTerminalItemStatus(i.status))
                   .map((item: OrderItem) => (
@@ -518,7 +739,7 @@ export default function CartPanel({
                       <span className="text-xs text-muted-foreground">
                         {item.quantity}× {kdsItemLine(item).name}
                       </span>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-xs text-muted-foreground tabular-nums">
                         {fmt(Number(item.total))}
                       </span>
                     </div>
@@ -535,71 +756,104 @@ export default function CartPanel({
             <p className="mt-2 text-sm">{existingOrder ? t('addNewItemsAbove') : t('cartEmpty')}</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="divide-y divide-border/60">
             {cart.items.map((item) => {
+              const onlineSelected =
+                cart.orderType === 'online' && cart.onlinePlatform.trim().length > 0;
+              const unitPrice = cartLineUnitPrice(item, onlineSelected);
+              const addonUnitTotal = item.addons.reduce(
+                (sum, a) => sum + Number(a.price) * (a.quantity || 1),
+                0,
+              );
+              const effectiveUnitPrice = unitPrice + addonUnitTotal;
+              const lineTotal = effectiveUnitPrice * item.quantity;
               const line = kdsItemLine({
                 product_name: item.product.name,
                 variant_selection: item.variant ? { name: item.variant.name } : null,
                 addons: item.addons,
                 special_instructions: item.special_instructions,
               });
-              const pricedAddons = item.addons.filter((a) => Number(a.price) > 0);
+              const pricedAddons = item.addons.filter((addon) => Number(addon.price) > 0);
+              const hasSubtext = pricedAddons.length > 0 || Boolean(line.instructions);
               return (
-                <div
-                  key={item.id}
-                  data-testid="cart-item"
-                  className="border-b border-border/60 pb-3 last:border-b-0 last:pb-0"
-                >
-                  <div className="flex items-start gap-2">
+                <div key={item.id} data-testid="cart-item" className="py-1.5 first:pt-0 last:pb-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      data-testid="cart-item-remove-btn"
+                      onClick={() => cart.removeItem(item.id)}
+                      className="touch-target h-7 w-7 min-h-7 min-w-7 shrink-0 rounded-md text-red-500 dark:text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-300 active:bg-red-100 dark:active:bg-red-950/60"
+                      aria-label={t('remove')}
+                      title={t('remove')}
+                    >
+                      <Trash2 size={13} />
+                    </button>
                     <p className="min-w-0 flex-1 break-words text-sm font-medium leading-snug text-foreground">
                       {line.name}
                     </p>
-                    <button
-                      onClick={() => cart.removeItem(item.id)}
-                      className="touch-target -me-2 -mt-2 shrink-0 rounded-full text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40 dark:hover:text-red-400 active:bg-red-50 dark:active:bg-red-950/40"
-                      aria-label={t('remove')}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                  <div className="min-w-0">
-                    {pricedAddons.length > 0 && (
-                      <div className="mt-0.5">
-                        {pricedAddons.map((a) => (
-                          <p key={a.id} className="break-words text-xs text-muted-foreground">
-                            + {a.name}
-                            {(a.quantity || 1) > 1 ? ` ×${a.quantity}` : ''}{' '}
-                            {`(${fmt(Number(a.price) * (a.quantity || 1))})`}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                    {line.instructions && (
-                      <p className="text-xs text-muted-foreground italic mt-0.5 break-words">
-                        {line.instructions}
-                      </p>
-                    )}
-                  </div>
-                  <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm text-muted-foreground">
-                      {fmt(
-                        cartVariantUnitPrice(
-                          item,
-                          cart.orderType === 'online' && cart.onlinePlatform.trim().length > 0,
-                        ),
+                    <div className="flex items-baseline gap-1.5 shrink-0">
+                      {item.quantity > 1 && (
+                        <span className="text-[11px] text-muted-foreground tabular-nums">
+                          {fmt(effectiveUnitPrice)}
+                        </span>
                       )}
-                    </p>
-                    <div className="flex items-center gap-1.5">
-                      {onEditItem && (
+                      <span className="text-sm font-semibold tabular-nums text-foreground">
+                        {fmt(lineTotal)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      {item.price_override && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400 leading-snug break-words">
+                          {tOrders('priceOverriddenMenu', {
+                            price: fmt(cartVariantUnitPrice(item, onlineSelected)),
+                          })}
+                        </p>
+                      )}
+                      {hasSubtext && (
+                        <p className="text-xs text-muted-foreground leading-snug break-words">
+                          {pricedAddons.map((addon, index) => (
+                            <span key={addon.id}>
+                              {index > 0 && ' · '}
+                              {`+ ${addon.name}${(addon.quantity || 1) > 1 ? ` ×${addon.quantity}` : ''} (${fmt(Number(addon.price) * (addon.quantity || 1))})`}
+                            </span>
+                          ))}
+                          {line.instructions && (
+                            <>
+                              {pricedAddons.length > 0 && ' · '}
+                              <span className="italic">{line.instructions}</span>
+                            </>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                    <div className="ms-auto flex items-center gap-1.5 shrink-0">
+                      {canOverridePrice && (
                         <button
-                          onClick={() => onEditItem(item)}
-                          className="touch-target shrink-0 gap-1 rounded-full bg-amber-100 px-3 text-xs font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-950/60 dark:active:bg-amber-950/60 transition-colors hover:bg-amber-200 active:bg-amber-200"
+                          type="button"
+                          onClick={() => setPriceOverrideItemId(item.id)}
+                          className="touch-target h-7 w-7 min-h-7 min-w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
+                          aria-label={tOrders('overridePrice')}
+                          title={tOrders('overridePrice')}
                         >
-                          <SquarePen size={12} />
-                          {tCommon('edit')}
+                          <Tag size={13} />
                         </button>
                       )}
-                      <ItemQuantityControl item={item} updateQuantity={cart.updateQuantity} />
+                      {onEditItem && (
+                        <button
+                          type="button"
+                          onClick={() => onEditItem(item)}
+                          className="touch-target h-7 w-7 min-h-7 min-w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
+                          aria-label={tCommon('edit')}
+                          title={tCommon('edit')}
+                        >
+                          <SquarePen size={13} />
+                        </button>
+                      )}
+                      <div className="inline-flex items-center rounded-full border border-border bg-muted/50 p-0.5">
+                        <ItemQuantityControl item={item} updateQuantity={cart.updateQuantity} />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -610,38 +864,80 @@ export default function CartPanel({
       </div>
 
       {/* Cart Footer */}
-      <div data-testid="cart-footer" className="p-4 border-t border-border dark:border-border">
-        {/* Order Notes */}
-        {cart.items.length > 0 && (
-          <div className="mb-3">
-            <textarea
+      <div
+        data-testid="cart-footer"
+        className="px-2.5 py-1 border-t border-border dark:border-border bg-card space-y-1"
+      >
+        {/* Order Notes (shown only when non-empty or toggled open) */}
+        {(cart.orderNotes.length > 0 || orderNotesExpanded) && (
+          <div className="relative flex items-center">
+            <StickyNote
+              size={13}
+              className="pointer-events-none absolute start-2 text-muted-foreground"
+            />
+            <input
+              data-testid="pos-order-notes-input"
+              type="text"
               value={cart.orderNotes}
               onChange={(e) => cart.setOrderNotes(e.target.value.slice(0, 200))}
+              onBlur={() => {
+                if (!cart.orderNotes.trim()) {
+                  setOrderNotesExpanded(false);
+                }
+              }}
               placeholder={t('orderNotesPlaceholder')}
-              rows={2}
               maxLength={200}
-              className="w-full min-h-20 px-3 py-2 text-sm border border-border bg-card rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+              className="w-full h-7 ps-7 pe-7 text-xs border border-border bg-muted/40 rounded-md focus:outline-none focus:ring-1 focus:ring-brand/30 focus:border-brand"
             />
-            <p className="text-xs text-muted-foreground text-end mt-0.5">
-              {cart.orderNotes.length}/200
-            </p>
+            <button
+              type="button"
+              onClick={() => {
+                cart.setOrderNotes('');
+                setOrderNotesExpanded(false);
+              }}
+              aria-label={tCommon('clear')}
+              className="absolute end-1.5 inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X size={12} />
+            </button>
           </div>
         )}
-        <div className="flex justify-between mb-1 text-sm">
-          <span className="text-muted-foreground">{t('items')}</span>
-          <span className="font-medium">{cart.itemCount()}</span>
-        </div>
-        <div className="flex justify-between mb-4 text-lg">
-          <span className="font-semibold text-foreground">{t('subtotal')}</span>
-          <span className="font-bold text-brand">{fmt(cart.subtotal())}</span>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs">
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span>
+              {t('items')}{' '}
+              <span className="ms-0.5 font-semibold text-foreground tabular-nums">
+                {cart.itemCount()}
+              </span>
+            </span>
+            {cart.orderNotes.length === 0 && !orderNotesExpanded && (
+              <button
+                type="button"
+                data-testid="pos-order-note-toggle-btn"
+                onClick={() => setOrderNotesExpanded(true)}
+                className="inline-flex h-5 items-center gap-1 rounded border border-transparent px-1.5 text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground"
+              >
+                <span>+ {orderNotesShortLabel}</span>
+              </button>
+            )}
+          </span>
+          <span className="ms-auto flex flex-wrap items-baseline justify-end gap-1.5 min-w-0">
+            <span className="text-xs font-semibold text-foreground">{t('subtotal')}</span>
+            <span className="text-sm font-bold text-brand tabular-nums">
+              {fmt(cart.subtotal())}
+            </span>
+          </span>
         </div>
         {(appliedCharges.length > 0 || addableCharges.length > 0) && (
-          <div className="mb-4 space-y-1" data-testid="cart-charges">
+          <div className="space-y-1 text-[11px] leading-tight" data-testid="cart-charges">
             {appliedCharges.map((charge) => {
               const definition = applicableCharges.find((c) => c.id === charge.id);
               const isOptional = definition?.is_optional ?? false;
               return (
-                <div key={charge.id} className="flex items-center justify-between gap-2 text-sm">
+                <div
+                  key={charge.id}
+                  className="flex items-center justify-between gap-2 text-[11px] leading-tight"
+                >
                   <span
                     className={
                       charge.waived ? 'text-muted-foreground line-through' : 'text-muted-foreground'
@@ -649,7 +945,7 @@ export default function CartPanel({
                   >
                     {charge.name}
                   </span>
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-1.5">
                     <span
                       className={
                         charge.waived ? 'text-muted-foreground line-through' : 'font-medium'
@@ -662,7 +958,7 @@ export default function CartPanel({
                         type="button"
                         onClick={() => cart.toggleWaiveCharge(charge.id)}
                         aria-pressed={charge.waived}
-                        className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
+                        className="text-[11px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
                       >
                         {charge.waived ? t('applyCharge') : t('waiveCharge')}
                       </button>
@@ -672,7 +968,7 @@ export default function CartPanel({
                         type="button"
                         onClick={() => cart.toggleOptedInCharge(charge.id)}
                         aria-pressed={!cart.optedInChargeIds.has(charge.id)}
-                        className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
+                        className="text-[11px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
                       >
                         {cart.optedInChargeIds.has(charge.id) ? t('removeCharge') : t('addCharge')}
                       </button>
@@ -682,55 +978,199 @@ export default function CartPanel({
               );
             })}
             {addableCharges.map((charge) => (
-              <div key={charge.id} className="flex items-center justify-between gap-2 text-sm">
+              <div
+                key={charge.id}
+                className="flex items-center justify-between gap-2 text-[11px] leading-tight"
+              >
                 <span className="text-muted-foreground">{charge.name}</span>
                 <button
                   type="button"
                   onClick={() => cart.toggleOptedInCharge(charge.id)}
-                  className="text-xs px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
+                  className="text-[11px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
                 >
                   {t('addCharge')}
                 </button>
               </div>
             ))}
             {appliedCharges.length > 0 && (
-              <div className="flex justify-between text-sm font-medium">
+              <div className="flex justify-between text-[11px] leading-tight font-medium">
                 <span>{t('chargesTotal')}</span>
                 <span>{fmt(chargeTotal)}</span>
               </div>
             )}
           </div>
         )}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {canHold && (
-            <Button variant="outline" onClick={handleHold} className="flex-1">
-              <Pause size={14} className="me-1" /> {t('holdButton')}
+            <Button variant="outline" onClick={handleHold} className="shrink-0 px-3">
+              <Pause size={14} className="me-1 shrink-0" />
+              <span className="truncate">{t('holdButton')}</span>
               <span
                 aria-hidden="true"
-                className="hidden sm:inline-flex ms-1 px-1 py-0.2 rounded border border-border text-[10px] font-mono text-muted-foreground"
+                className="hidden sm:inline-flex shrink-0 ms-1 px-1 py-0.2 rounded border border-border text-[10px] font-mono text-muted-foreground"
               >
                 F8
               </span>
             </Button>
           )}
-          <Button
-            onClick={onPlaceOrder}
-            disabled={submitting || cart.items.length === 0}
-            className="flex-1 bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-70"
-            size="lg"
-          >
-            {submitting ? t('placing') : t('placeOrderButton')}
-            {!submitting && (
-              <span
-                aria-hidden="true"
-                className="hidden sm:inline-flex ms-1.5 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-mono font-medium"
+          {existingOrder ? (
+            <Button
+              onClick={onPlaceOrder}
+              disabled={submitting || cart.items.length === 0 || Boolean(scheduleErrorMessage)}
+              className="flex-1 min-w-0 bg-orange-600 px-3 text-white hover:bg-orange-700 disabled:opacity-70"
+              data-testid="pos-append-existing-order-btn"
+            >
+              <span className="truncate">{submitting ? t('placing') : t('placeOrderButton')}</span>
+              {!submitting && (
+                <span
+                  aria-hidden="true"
+                  className="hidden sm:inline-flex shrink-0 ms-1.5 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-mono font-medium"
+                >
+                  Space
+                </span>
+              )}
+            </Button>
+          ) : multiCounterEnabled && counterRole === 'payment' ? (
+            cart.items.length === 0 ? (
+              <Button
+                type="button"
+                onClick={onOpenPaymentQueue}
+                className="flex-1 min-w-0 px-3"
+                data-testid="pos-open-payment-queue-btn"
               >
-                Space
-              </span>
-            )}
-          </Button>
+                <CreditCard className="me-2 h-4 w-4 shrink-0" />
+                <span className="truncate">{t('paymentQueue')}</span>
+              </Button>
+            ) : (
+              <>
+                {onOpenPaymentQueue && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={onOpenPaymentQueue}
+                    className="flex-1 min-w-0 px-3"
+                    data-testid="pos-open-payment-queue-btn"
+                  >
+                    <CreditCard className="me-2 h-4 w-4 shrink-0" />
+                    <span className="truncate">{t('paymentQueue')}</span>
+                  </Button>
+                )}
+                <Button
+                  onClick={onPlaceOrder}
+                  disabled={submitting || Boolean(scheduleErrorMessage)}
+                  className="flex-1 min-w-0 px-3"
+                >
+                  <span className="truncate">
+                    {submitting ? t('placing') : t('placeOrderButton')}
+                  </span>
+                  {!submitting && (
+                    <span
+                      aria-hidden="true"
+                      className="hidden sm:inline-flex shrink-0 ms-1.5 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-mono font-medium"
+                    >
+                      Space
+                    </span>
+                  )}
+                </Button>
+              </>
+            )
+          ) : multiCounterEnabled &&
+            onSendToPayment &&
+            counterRole === 'ordering' &&
+            (cart.orderType === 'takeaway' || cart.orderType === 'dine_in') ? (
+            <Button
+              onClick={onSendToPayment}
+              disabled={submitting || cart.items.length === 0 || Boolean(scheduleErrorMessage)}
+              className="flex-1 min-w-0 px-3"
+              data-testid="pos-send-to-payment-btn"
+            >
+              <span className="truncate">{submitting ? t('placing') : t('sendToPayment')}</span>
+              {!submitting && (
+                <span
+                  aria-hidden="true"
+                  className="hidden sm:inline-flex shrink-0 ms-1.5 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-mono font-medium"
+                >
+                  Space
+                </span>
+              )}
+            </Button>
+          ) : multiCounterEnabled &&
+            onSendToPayment &&
+            counterRole === 'combined' &&
+            (cart.orderType === 'takeaway' || cart.orderType === 'dine_in') ? (
+            <>
+              <Button
+                variant="outline"
+                onClick={onSendToPayment}
+                disabled={submitting || cart.items.length === 0 || Boolean(scheduleErrorMessage)}
+                className="flex-1 min-w-0 px-3"
+                data-testid="pos-send-to-payment-btn"
+              >
+                <span className="truncate">{t('sendToPayment')}</span>
+              </Button>
+              <Button
+                onClick={onPlaceOrder}
+                disabled={submitting || cart.items.length === 0 || Boolean(scheduleErrorMessage)}
+                className="flex-1 min-w-0 px-3"
+              >
+                <span className="truncate">
+                  {submitting ? t('placing') : t('placeOrderButton')}
+                </span>
+                {!submitting && (
+                  <span
+                    aria-hidden="true"
+                    className="hidden sm:inline-flex shrink-0 ms-1.5 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-mono font-medium"
+                  >
+                    Space
+                  </span>
+                )}
+              </Button>
+            </>
+          ) : (
+            <Button
+              onClick={onPlaceOrder}
+              disabled={submitting || cart.items.length === 0 || Boolean(scheduleErrorMessage)}
+              className="flex-1 min-w-0 bg-orange-600 px-3 text-white hover:bg-orange-700 disabled:opacity-70"
+            >
+              <span className="truncate">{submitting ? t('placing') : t('placeOrderButton')}</span>
+              {!submitting && (
+                <span
+                  aria-hidden="true"
+                  className="hidden sm:inline-flex shrink-0 ms-1.5 px-1.5 py-0.5 rounded bg-white/20 text-[10px] font-mono font-medium"
+                >
+                  Space
+                </span>
+              )}
+            </Button>
+          )}
         </div>
       </div>
+      {priceOverrideTarget && (
+        <CartPriceOverrideModal
+          item={priceOverrideTarget}
+          onlinePlatformSelected={
+            cart.orderType === 'online' && cart.onlinePlatform.trim().length > 0
+          }
+          onApply={(override) => cart.setItemPriceOverride(priceOverrideTarget.id, override)}
+          onClose={() => setPriceOverrideItemId(null)}
+        />
+      )}
+      {qrDialogOpen && qrTableId && (
+        <GuestTableQrDialog
+          tableId={qrTableId}
+          api={api}
+          apiPrefix=""
+          onClose={() => setQrTableId(null)}
+        />
+      )}
+      <OrderDetailsDrawer
+        open={effectiveDetailsDrawerOpen}
+        onOpenChange={setDetailsDrawerOpen}
+        effectiveTimezone={effectiveTimezone}
+        scheduleErrorMessage={scheduleErrorMessage}
+        customPaymentMethods={customPaymentMethods}
+        scheduledOrdersEnabled={scheduledOrdersEnabled}
+      />
     </div>
   );
 }

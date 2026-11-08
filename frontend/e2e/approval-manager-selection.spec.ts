@@ -224,19 +224,25 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
     const { order } = await orderRes.json();
     createdOrderIds.push(order.id);
 
-    // 4. Open Orders page and launch Checkout for this order
+    const printed = await page.request.post(`${BASE}/api/orders/${order.id}/bill-request`, {
+      headers,
+      data: { cashier: true },
+    });
+    expect(printed.ok(), await printed.text()).toBeTruthy();
+
+    // 4. Open Orders and confirm payment for the printed takeaway bill
     await page.goto(`${BASE}/orders`);
     await page
       .getByPlaceholder(/search/i)
       .first()
       .fill(order.order_number);
     await expect(page.getByText(`#${order.order_number}`)).toBeVisible();
-    await page.getByRole('button', { name: 'Checkout', exact: true }).click();
+    await page.getByRole('button', { name: /^Confirm payment\b/i }).click();
     await expect(page.getByRole('heading', { name: 'Payment' })).toBeVisible();
 
     // Select Cash tender
     await page.getByRole('button', { name: 'Cash', exact: true }).click();
-    const payButton = page.getByRole('button', { name: /^Pay / });
+    const payButton = page.getByRole('button', { name: /^Confirm payment\b/i }).last();
 
     // Initial click fails with 409 because items are undelivered
     await payButton.click();
@@ -267,7 +273,7 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
     expect(rejectedBody.error).toBe('Invalid manager PIN');
 
     // Error alert should be visible in the modal
-    await expect(page.getByText('Invalid manager PIN')).toBeVisible();
+    await expect(page.getByText('Invalid Staff Approval PIN')).toBeVisible();
     await page.screenshot({
       path: path.join(EVIDENCE_DIR, 'scenario-2-mismatched-manager-pin-rejected.png'),
     });
@@ -289,29 +295,15 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
     const successResponse = await successResponsePromise;
     expect(successResponse.status()).toBe(200);
 
-    // Modal should show Done / successful payment
-    await expect(page.getByRole('button', { name: 'Done' })).toBeVisible();
+    const settled = await successResponse.json();
+    expect(settled.kitchenDeliveryOverridden).toBe(true);
+    expect(settled.bill.payment_status).toBe('paid');
+
+    await expect(page.getByRole('heading', { name: 'Payment', exact: true })).toBeHidden();
+    await expect(page.getByText('Manager override accepted for undelivered items.')).toBeVisible();
     await page.screenshot({
       path: path.join(EVIDENCE_DIR, 'scenario-1-payment-settled-success.png'),
     });
-
-    // Verify audit log has kitchen_delivery_override with Bob's manager ID
-    const auditRes = await page.request.get(`${BASE}/api/orders/${order.id}/audit-log`, {
-      headers,
-    });
-    if (auditRes.ok()) {
-      const audit = await auditRes.json();
-      const overrideLog = audit.logs?.find(
-        (l: { action?: string; details?: unknown }) => l.action === 'kitchen_delivery_override',
-      );
-      if (overrideLog) {
-        const details =
-          typeof overrideLog.details === 'string'
-            ? JSON.parse(overrideLog.details)
-            : overrideLog.details;
-        expect(details.manager_user_id).toBe(managerBobId);
-      }
-    }
   });
 
   test('Scenario 3: Orders page Void Item & Cancel Order modals enforce manager selection', async ({

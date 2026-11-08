@@ -3,7 +3,14 @@ import type { Bill, Order } from '@/lib/types';
 
 type BillPrintOrder = Pick<
   Order,
-  'id' | 'status' | 'bill' | 'bills' | 'bill_requested_at' | 'bill_payment_received_at'
+  | 'id'
+  | 'status'
+  | 'bill'
+  | 'bills'
+  | 'bill_requested_at'
+  | 'bill_payment_received_at'
+  | 'dispatch_policy'
+  | 'release_status'
 >;
 
 function orderBills(order: Pick<Order, 'bill' | 'bills'>): Bill[] {
@@ -20,6 +27,8 @@ export function isAwaitingBillPayment(
 /** An open order nobody has paid towards must have its bill printed before payment is taken. */
 export function needsBillPrintBeforePayment(order: BillPrintOrder): boolean {
   if (['completed', 'cancelled'].includes(order.status)) return false;
+  if (order.dispatch_policy === 'on_payment') return false;
+  if (order.release_status && order.release_status !== 'released') return false;
   if (isAwaitingBillPayment(order)) return false;
   return orderBills(order).every(
     (bill) => bill.payment_status === 'unpaid' && Number(bill.paid_amount || 0) === 0,

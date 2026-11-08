@@ -51,7 +51,8 @@ Everything monetary is resolved server-side inside one transaction:
 - The unit price comes from the catalog: `products.price`, or the variant price for an order with an
   `online_platform`. A client-sent price is never read.
 - Quantity rules are checked per sale unit, including fractional and weight-precision products.
-- Stock deduction and recipe depletion are written in the same transaction, so the order and its
+- Stock deduction and recipe depletion are written in the same transaction for immediate orders
+  (scheduled orders defer stock and recipe depletion until kitchen release), so the order and its
   inventory effects commit together.
 - Each line's tax is computed by the tax engine ([Taxation](taxation.md)) and stored on the line as
   `tax_amount`, `tax_breakdown`, `tax_snapshot`, and `tax_type`.
@@ -68,16 +69,127 @@ Order numbers are allocated inside the transaction. Request replay follows the
 The order starts `pending` with its totals snapshotted, and a `dine_in` order with a table marks the
 table `occupied`.
 
+## Scheduled orders and kitchen release
+
+Takeaway and delivery orders in the main POS (desktop and browser) can defer kitchen release by
+supplying `scheduled_for` ("Send to kitchen at") when `scheduled_orders_enabled` is enabled (`false`
+by default, configurable in Settings > POS; rejected with `409 SCHEDULED_ORDERS_DISABLED` when
+disabled). In the POS interface, kitchen scheduling creation controls are shown when
+`scheduled_orders_enabled` is enabled, while the scheduled orders queue remains visible whenever
+`scheduled_orders_enabled` is enabled or active scheduled/blocked orders exist. Scheduling is
+rejected (`400`) on `dine_in` and `online` orders.
+
+Scheduling separates kitchen release from order status via four columns on `orders`:
+
+- `scheduled_for`: canonical UTC ISO instant (`YYYY-MM-DDTHH:MM:SS.sssZ`), or `NULL` for immediate
+  orders; see [scheduled kitchen release](business-time.md#scheduled-kitchen-release) for store
+  timezone entry and daylight-saving rules.
+- `release_status`: `'scheduled'`, `'blocked'`, or `'released'` (default `'released'` for immediate
+  orders).
+- `released_at`: timestamp recorded when the order is released to the kitchen.
+- `release_blocked_reason`: actionable message recorded when a release attempt fails validation.
+
+Lifecycle rules before and at release:
+
+- **Creation without early side effects.** Creating an order with `scheduled_for` snapshots all
+  quoted items, unit prices, discounts, charges, taxes, and totals immediately, sets
+  `release_status = 'scheduled'`, leaves product, variant, add-on, and recipe supply stock
+  untouched, suppresses KDS notifications and automatic KOT printing, and excludes the order from
+  KDS endpoints, kitchen feeds, customer-display tokens, and `POST /api/printers/print-kot` (`409`).
+- **Due sweep and manual release.** [`main/services/scheduled-orders.ts`](../../main/services/scheduled-orders.ts)
+  runs a server-owned due sweep every 10 seconds, on server startup, and after system resume
+  (`powerMonitor` `resume`). The sweep releases due orders where `release_status = 'scheduled'` and
+  `scheduled_for <= now`. Orders in `release_status = 'blocked'` are skipped by automatic sweeps and
+  must be retried explicitly via `POST /api/orders/:id/release` after resolving the stock or catalog
+  problem. If all existing bills are refunded, release is blocked with reason `refunded`; cancel the
+  order and create a replacement if needed. Unexpected release errors during a sweep are isolated
+  and transition that order to `release_status = 'blocked'` with an actionable message so sweeps do not stall.
+- **Shared transactional release (`releaseScheduledOrder`).** Both automatic sweeps and manual
+  release execute the same SQLite transaction with an atomic compare-and-check on `release_status`
+  so concurrent sweeps and retries never deduct stock twice, plus an optional `checkPreconditions`
+  hook for gating release on payment stage. At release time, every non-terminal item re-validates
+  required catalog entries (active product, variant, add-on group rules, and add-ons) and deducts
+  product, variant, and add-on stock plus the recipe then in effect (preserving negative recipe
+  supply stock) while saving actual `inventory_deducted_quantity` and `recipe_snapshot` values on
+  each line. Saved prices, discounts, charges, taxes, and totals are never repriced. If any tracked
+  product, variant, or add-on stock is insufficient or a catalog entry is unusable, an inner
+  savepoint rolls back partial deductions and atomically sets `release_status = 'blocked'` with
+  `release_blocked_reason` (`release_blocked` in `order_audit_log`). On release, `release_status`
+  becomes `'released'`, `released_at` is set, KDS updates are broadcast, and configured backend
+  automatic KOT printing runs; an already-settled non-refunded order keeps `status = 'pending'` when
+  KDS is enabled and active unserved items exist, and becomes `status = 'completed'` (recording
+  `completed_at`) immediately when KDS is disabled or no active unserved items remain.
+- **Prepayment, edit lock, rescheduling, and cancellation.** Full or partial payment is allowed
+  before release without triggering early release, without kitchen-delivery blocking, and without
+  marking `orders.status = 'completed'`. Item additions, edits, removals, customer changes, manual
+  price overrides, discounts, and bill charge mutations are permitted on a scheduled order only
+  before the first payment is recorded (`409` with `SCHEDULED_ORDER_PAID` once paid). Timing-only
+  changes (`PATCH /api/orders/:id/schedule` or `POST /api/orders/:id/release`) remain allowed until
+  release even after payment and record `schedule_updated` or `order_released` in `order_audit_log`.
+  Rescheduling resets `release_status` to `'scheduled'` and clears `release_blocked_reason` for
+  orders in `'scheduled'`, while preserving `release_status = 'blocked'` and its reason for held
+  orders so only explicit manual release retries release. Cancelling a scheduled order before
+  release never restores inventory because none was deducted; cancelling a scheduled order with
+  collected funds requires refunding the collected amount in full through `/api/refunds` first (`409`
+  with `REFUND_REQUIRED_BEFORE_CANCEL`), preserving bills and audit history.
+
+## Multi-counter ordering (create here, pay there)
+
+FloCafe supports owner-configured multi-counter ordering (`multi_counter_enabled`, disabled by
+default). In this workflow, separate physical terminals act as ordering stations, payment cashiers,
+or combined stations:
+
+- **Named counters and roles.** The store owner defines counters with roles: `ordering` (create order
+  and send to payment), `payment` (manage awaiting payment queue and take tender), or `combined`
+  (both standard checkout and send to payment). Each POS terminal selects its active counter,
+  remembered locally on that device scoped to the active store.
+- **Workflow guidance without ownership gating.** Counter roles guide UI defaults without restricting
+  underlying staff permissions: ordering counters default to order building and 'Send to payment';
+  payment counters automatically open the shared payment queue and orient the cart CTA toward the
+  queue; combined counters retain standard direct checkout while allowing explicit 'Send to payment'.
+  Staff can view and act on any order across counters; orders are never ownership-gated.
+- **Real orders and bills.** "Send to payment" creates real `orders` and `bills` records, never
+  transient held-order JSON. Orders record `dispatch_policy = 'on_payment'` and start in
+  `checkout_stage = 'awaiting_payment'`.
+- **Supported order types.** Multi-counter checkout is supported for **takeaway and dine-in** orders.
+  Delivery and online orders use normal checkout on ordering and combined counters and cannot use
+  "Send to payment" (`400`). Takeaway can combine multi-counter checkout and scheduled kitchen
+  release.
+- **Feature availability.** New deferred tickets require `multi_counter_enabled = 'true'`; otherwise
+  creation returns `409` with `MULTI_COUNTER_DISABLED`. Replays of committed requests and actions on
+  existing deferred tickets remain available after the feature is disabled.
+- **Kitchen suppression prior to release.** Orders with `dispatch_policy = 'on_payment'` set
+  `release_status = 'scheduled'` and defer stock deduction, KDS display, active-order heartbeats, and
+  automatic KOT printing until full payment is collected.
+- **Shared transactional release gate.** When full payment across all bills settles:
+  - If unscheduled, the order is atomically released to the kitchen via `releaseScheduledOrder`.
+  - If scheduled for a future instant, `checkout_stage` transitions to `'paid'`, while
+    `release_status` stays `'scheduled'` until the scheduled instant arrives (or manual release is
+    triggered).
+  - Manual release (`POST /api/orders/:id/release`) on an unpaid `on_payment` order fails with `409`
+    (`ORDER_NOT_PAID`).
+  - Prepayment does not bypass kitchen preparation (orders with unserved kitchen items keep
+    `orders.status = 'pending'`) and does not clear occupied dine-in tables.
+- **Paid-but-blocked tickets.** If catalog preconditions or inventory levels fail at release time
+  after payment, the transaction atomically transitions `release_status = 'blocked'` with
+  `release_blocked_reason` without reverting the committed payment. The ticket remains clearly
+  visible in the payment queue for explicit staff retry after restocking or refund/cancellation.
+- **Shared LAN queue and QR ticket identification.** Terminals retrieve tickets via
+  `GET /api/orders/awaiting-payment` (cursor-paginated with counts) or lookup by ticket/order number
+  via `GET /api/orders/by-ticket/:ticket`. Tickets display a human-readable number and QR code
+  (`FLOCAFE-TICKET:<order_number>`), which carries zero authentication or payment authority, and can
+  be printed as a thermal ticket slip (`POST /api/printers/print-payment-ticket`).
+
 ## Discounts
 
 Three surfaces apply discounts, all gated by the discount permission for their scope and by the same
 settings:
 
-| Surface | Endpoint | Notes |
-| --- | --- | --- |
-| Order | `PATCH /api/orders/:id/discount` | Percentage or flat amount against the item subtotal; split or refunded bills or discounts below collected payments return `409`, and completed or cancelled orders return `400`. |
+| Surface    | Endpoint                                       | Notes                                                                                                                                                                                          |
+| ---------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Order      | `PATCH /api/orders/:id/discount`               | Percentage or flat amount against the item subtotal; split or refunded bills or discounts below collected payments return `409`, and completed or cancelled orders return `400`.               |
 | Order item | `PATCH /api/orders/:id/items/:itemId/discount` | One line; split or refunded bills or discounts below collected payments return `409`, and completed or cancelled orders or cancelled, voided, void-adjustment, or refunded items return `400`. |
-| Bill | `POST /api/bills/:id/applyDiscount` | Recomputes the bill and order; paid bills return `400`, split or refunded bills, completed or cancelled orders, and discounts below collected payments return `409`. |
+| Bill       | `POST /api/bills/:id/applyDiscount`            | Recomputes the bill and order; paid bills return `400`, split or refunded bills, completed or cancelled orders, and discounts below collected payments return `409`.                           |
 
 Common rules, enforced in the handlers:
 
@@ -90,9 +202,13 @@ Common rules, enforced in the handlers:
   `user_id`) on an order, item, or bill discount, PIN verification is restricted to that active user
   without falling back to scanning other managers.
 - A percentage discount applies to the fresh item subtotal, and a flat discount is capped at that
-  subtotal. Re-applying a discount never compounds on the previous one.
-- The discount rescales each line's tax by the discounted share of the subtotal and rounds to the
-  currency, so tax is charged on the discounted amount.
+  subtotal. Re-applying a discount never compounds on the previous one. When a later item addition,
+  edit, discount, price override, cancellation, or restoration, or a customer update changes the
+  order subtotal, an existing percentage order discount scales to the new subtotal while a flat
+  order discount stays at its fixed amount, capped at the new subtotal.
+- Order and bill discounts scale item taxes by the discounted share of the subtotal while keeping
+  stored `order_items` taxes un-order-discounted; see
+  [Taxation](taxation.md#where-the-amount-came-from).
 - Applying a discount to an order that has an unpaid bill re-syncs the bill's totals and balance.
   A zero `discount_value` clears an order discount, and a zero `value` clears a bill discount,
   subject to the bill endpoint's discount-mode checks. The item endpoint requires a positive
@@ -126,13 +242,63 @@ while the order or any active line carries a manual discount.
   `promotion_redemptions` (one use plus its discount toward the budget). A refund that leaves the
   bill fully refunded writes matching `reverse` rows, once; a partial refund keeps the use.
 
+## Manual item price overrides
+
+The owner (only) can sell one line at a price other than its menu price, including `0` for a
+complimentary item. The permission `orders.item.price_override` is owner-only and not configurable.
+
+- For a manual override, `PATCH /api/orders/:id/items/:itemId/price` takes `price` and a required
+  `reason`. The same
+  `price_override: { price, reason }` object is accepted on a line when an order is created or items
+  are added, and a request from any other role is a `403`.
+- The line's `unit_price` becomes the override, rounded half-up to the currency's decimal places. The
+  first menu price stays in `original_unit_price` across repeated overrides, and `price_overridden`,
+  `price_override_reason`, `price_overridden_by`, and `price_overridden_at` record the change.
+  Receipts and bills read `unit_price`, so they show the selling price.
+- The backend recomputes item tax, order totals, and an open bill. An existing item discount stays,
+  capped at the new line total.
+- Overrides are allowed once a line has been sent to the kitchen, because only the price changes.
+  They are refused (`409`) once a bill has payments, a split, or a refund, and (`400`) on completed or
+  cancelled orders and cancelled or voided lines.
+- In the POS the owner sees a price control on each cart line (also when adding items to an open
+  order). The normalized override is part of the line's cart identity, so it never merges into a
+  menu-price line, survives holding and resuming, and is quoted by `POST /api/tax/preview` through an
+  optional per-item `price_override: { price }`. The placed order re-checks the owner permission, so a
+  held cart with an override placed by another role is refused with `403`.
+- A quantity edit keeps the override flag and menu price on the replacement line; replacing the line
+  with a different product or variant starts at that product's menu price.
+- Each override records an `item_price_overridden` action in `order_audit_log`.
+- `GET /api/reports/price-exceptions` lists overridden, non-cancelled lines whose override time falls
+  in the selected store-timezone date range, or in one cash shift's window when `shift_id` is given.
+  The dashboard shows them as the price exceptions card with a shift selector.
+
 ## Bills
 
-`POST /api/bills/generate` creates the order's bill, or, when a bill already exists and is not paid,
-re-syncs its totals, discount, and charges from the order and recomputes `balance` against
-`paid_amount`. A paid bill is never rewritten. Bills snapshot subtotal, discount, tax, charges,
-`total`, `paid_amount`, `balance`, and `payment_status`; payable rounding may add a `round_off`
-adjustment for packs that define one.
+`POST /api/bills/generate` creates the order's bill, or, when a bill already exists in `unpaid`,
+`partial`, or `partially_paid` status, re-syncs its totals, discount, tax, and charges from the
+order and recomputes `balance` against `paid_amount`. A `paid`, `partially_refunded`, or `refunded`
+bill (including a zero-total `paid` bill) is never rewritten by bill generation or order-to-bill
+synchronization (`syncUnpaidBillsForOrder`), except for a zero-total `paid` split sibling during
+split-bill reallocation. Bills snapshot subtotal, discount, tax, charges, `total`, `paid_amount`,
+`balance`, and `payment_status`; payable rounding may add a `round_off` adjustment for packs that
+define one.
+
+Order mutations that change the customer (`PATCH /api/orders/:id/customer`) or convert a dine-in
+order to takeaway (`PATCH /api/orders/:id/convert-to-takeaway`) re-sync open bills under the same
+rules:
+
+- `PATCH /api/orders/:id/customer` requires an active order (`400` on `completed` or `cancelled`),
+  refuses changes on a paid scheduled order (`409` with `SCHEDULED_ORDER_PAID`) or once any bill has
+  payments, a split, or a refund (`409`), re-evaluates
+  non-terminal item taxes for the new customer against each item's saved `tax_snapshot` category,
+  behavior, and pack version when taxes are enabled and the customer's tax context (B2B status or
+  state code) changes, recomputes order and open-bill totals, and records `customer_updated` in
+  `order_audit_log`.
+- `PATCH /api/orders/:id/convert-to-takeaway` requires an active `dine_in` order (`400`), refuses
+  split, paid, or refunded bills (`409`), re-resolves charges for `takeaway`, rejects conversions
+  whose payable total would fall below already-collected payments (`409` with
+  `below_collected_funds`), re-syncs open bills, releases the table to `available`, and records
+  `converted_to_takeaway` in `order_audit_log`.
 
 A split order can have multiple bills, each with its own payments and balance. An order completes
 only once every bill of the order is settled; the API reference documents split eligibility and
@@ -152,7 +318,10 @@ same fields:
 - `transaction_id`: an external reference scoped to its payment method. Reusing it on another bill is
   a `409`; repeating it for the same method twice in a new multi-line batch is also a `409`, while
   reusing it across methods in that batch is a `400`. Replaying an identical committed payment
-  returns the bill without writing again.
+  returns the bill without writing again. When `card_transaction_id_required` is `true` (default
+  `false`, toggled under Settings → Payment methods), a built-in `card` line without one is a `400`
+  with display code `card_transaction_id_required`; custom methods are unaffected. The POS payment
+  and prepaid checkout dialogs then ask for the card terminal's number on the card line.
 - `notes` (up to 1024 UTF-16 code units); serialized payment-line JSON is limited to 8192 UTF-16
   code units.
 - `customer_id`: if neither the bill nor order has a customer, a non-wallet payment may attach one;
@@ -180,9 +349,10 @@ payments.
 Two gates sit between a valid request and the write:
 
 - **Shift gate.** When `require_open_shift` is on, a cash tender (including a custom method that
-  resolves to cash) needs an open shift, or the request is a `409`. The check runs after replay
-  detection, so a committed payment can be re-read with the same key after its shift closed. A cash
-  ledger line records the open `cash_session_id`.
+  resolves to cash) needs an open shift for the actor (see [business time](business-time.md#cash-closures)),
+  or the request is a `409`. The check runs after replay detection, so a committed payment can be
+  re-read with the same key after its shift closed. A cash ledger line records the open
+  `cash_session_id`.
 - **Kitchen-delivery gate.** When `require_kitchen_delivered_before_settlement` is on, `kds_enabled`
   is not `false`, and `billing_type` is not `prepaid`, paying while kitchen items are undelivered
   is a `409` with code `KITCHEN_ITEMS_UNDELIVERED` unless a manager PIN is supplied as `override_pin`.
@@ -198,18 +368,30 @@ effects; `bill.payment_details` is the
 settlement ledger, one entry per line with the applied amount, the requested amount, cash tendered
 and change, the `cash_session_id`, the staff member who received it (`received_by`,
 `received_by_name`, shown on the Orders page as Paid: name), and the timestamp.
+While a `paid` bill's cash shift and business
+day remain open, the tender method on a recorded non-wallet line can be corrected without changing
+its amount via `PATCH /api/bills/:id/payments/:index/method` (see [the Bills API reference](../reference/api.md#bills)).
 
 ## Settlement and completion
 
 A bill moves `unpaid` to `partial` to `paid`; refunds move it to `partially_refunded` or `refunded`.
-When a payment settles the last unpaid bill of an order, the order becomes `completed` (unless it was
-already completed or cancelled) and its dine-in table is released to `available`. A payment never
-resurrects a terminal order.
+When a payment settles the last unpaid bill of an order with immediate dispatch
+(`dispatch_policy = 'immediate'`), an already-released order becomes `completed` (unless it was
+already completed or cancelled) and its dine-in table is released to `available`. Prepayment under
+multi-counter ordering (`dispatch_policy = 'on_payment'`) preserves `orders.status = 'pending'` and
+keeps occupied dine-in tables occupied: completing payment transitions `checkout_stage = 'paid'` and
+triggers release to the kitchen (if unscheduled or due), but the order completes only after food
+service concludes. An unreleased scheduled or multi-counter order remains `pending` at payment time,
+then completes on release when KDS is disabled (or no active unserved items exist) or when its last
+active kitchen item transitions to `served` while KDS is enabled, provided the order is not a dine-in
+order with an active table and remains settled and non-refunded. A payment never resurrects a terminal
+order.
 
-When an order, item, or bill discount reduces the remaining balance of a partially paid bill to exactly
-zero (where collected funds equal the discounted total), auto-settlement to `paid` is gated by kitchen
-delivery status. When `require_kitchen_delivered_before_settlement` is enabled, `kds_enabled` is not
-`false`, and `billing_type` is not `prepaid`:
+When a discount, an order mutation (`syncUnpaidBillsForOrder`), or a `POST /api/bills/generate`
+re-sync reduces the remaining balance of a partially paid bill to exactly zero (where collected funds
+equal the updated payable total), auto-settlement to `paid` is gated by kitchen delivery status. When
+`require_kitchen_delivered_before_settlement` is enabled, `kds_enabled` is not `false`, and
+`billing_type` is not `prepaid`:
 
 - If kitchen items remain undelivered (`pending`, `preparing`, or `ready`), auto-settlement is held:
   the discount applies and reduces the balance to zero, but the bill remains in `partial` status
@@ -245,14 +427,55 @@ or delete.
 `PATCH /api/orders/:id/status` advances the order through preparation, service, and terminal
 statuses inside a single transaction. Its allowed transitions, terminal completion and cancellation
 safeguards, `override_pin` approval rules, pending-only restock rule, and audit fields are in the
-[API reference](../reference/api.md#orders). Kitchen item status is a separate surface
-(`/api/order-items`); see [order-item status](../reference/api.md#order-item-status).
+[API reference](../reference/api.md#orders). Kitchen item status endpoints are documented under
+[order-item status](../reference/api.md#order-item-status).
+
+When KDS is enabled (`kds_enabled` not `false`), [`reconcileActiveOrderStatusFromItems`](../../main/services/orders.ts)
+automatically reconciles active (`pending`, `preparing`, `ready`, `served`) parent `orders.status`
+inside the same transaction across all order types (`dine_in`, `takeaway`, `delivery`, `online`)
+whenever KDS item statuses change (`PATCH /api/order-items/:id/status`, embedded and standalone
+`PATCH /api/kds/items/:id/status`, and the KDS WebSocket `status_update` handler) or whenever active
+order items are appended, cancelled, edited, refunded, or restored:
+
+- Live items are non-terminal (`cancelled`, `voided`, `void_adjustment`, and `refunded` excluded)
+  positive-quantity lines across the full order, unfiltered by caller station or category scope
+  ([`shared/order-item-status.ts`](../../shared/order-item-status.ts)).
+- Starting kitchen work (`preparing`, `ready`, `served`, or `completed` on any live item while
+  unfinished items remain) promotes `pending` to `preparing` and sets `cooking_started_at`.
+- Once every live item is `ready` (or mixed `ready` with already `served` or `completed` lines), the
+  order transitions to `ready`, records `ready_at`, and clears `served_at`.
+- Once every live item is `served` or `completed`, the order promotes to `served` and records
+  `served_at`, removing handed-over active orders from `/customer-display`.
+- Appending, restoring, editing to add pending work, or requeuing items to `pending` or `preparing`
+  on a `ready` or `served` order demotes it back to `preparing` and clears stale `ready_at` and
+  `served_at` timestamps; `preparing` never regresses to `pending` when a started item is voided
+  while pending items remain.
+- Each resulting parent status change records an actor-attributed `status_changed` entry
+  (`source: 'kds_reconciliation'`) in `order_audit_log`.
+
+Terminal `completed` and `cancelled` orders are never reopened or mutated by item-status
+reconciliation. When KDS is enabled, upfront-paid orders created within the rolling 24-hour
+`orders.created_at` window that settle to `completed` before kitchen fulfillment finishes remain in
+`GET /api/orders?view=active` and `GET /api/orders?status=active` while positive-quantity live items
+stay in `pending`, `preparing`, or `ready` (non-`completed` active orders are not age-bounded). Both
+`/customer-display` surfaces (`GET /api/orders?board_status=...` and
+`GET /api/customer-display/feed`) project such an order's effective board status (`pending`,
+`preparing`, or `ready`) from live item statuses via `projectBoardStatusFromItems` and filter by
+configured statuses before pagination, omitting the order once no live item remains unfinished
+(for example once every remaining live item is `served` or `completed`). When KDS is disabled,
+automatic item-to-order reconciliation stands down and manual `PATCH /api/orders/:id/status`
+transitions govern preparation and service.
 
 ## Refunds
 
 `POST /api/refunds` reverses part or all of a paid bill. Cash refunds follow the same shift gate as
 cash payments. Refund approval tiers, cutoff, and store-credit requirements are in
 [product invariants](../reference/product-invariants.md#refunds-and-staff-approval-pins).
+
+The refund modal loads eligible staff before enabling PIN entry and submission. It retains an
+eligible approver and entered PIN while the modal remains open; when the time tier makes the
+selected approver ineligible, it clears the PIN and selects an eligible default when one is
+available. The backend rechecks the approver and approval tier when the refund is submitted.
 
 ## Failure behaviour
 
@@ -270,6 +493,7 @@ movements, and refunds have their own end-of-business-day cutoff described above
 ```sh
 npm run test:integration-order-hold-payment   # hold, discount, tax, installments, gates, replay
 npm run test:financial-safety-remediation     # payment replay idempotency, PIN decoupling, discount revalidation
+npm run test:issue-terminal-state-guards      # terminal bill/order guards, takeaway/customer sync, flat discount caps
 npm run test:issue-exact-balance-settlement    # auto-settle bill and complete order on exact-balance discount
 npm run test:integration-happy                # order to payment, discount recalculated
 npm run test:integration-payments             # payment methods and split lines
@@ -278,4 +502,7 @@ npm run test:integration-tax                  # tax extraction and rounding
 npm run test:held-orders                      # held-cart API and store
 npm run test:cash-sessions                    # shift gate
 npm run test:refunds                          # refund window and approvals
+npm run test:kds-contract                     # KDS item-to-order status reconciliation across write paths
+npm run test:customer-display-feed            # pickup board projection and board_status pagination
+npm run test:scheduled-orders                 # scheduled orders, DST, sweep, stock hold, prepay/refund rules
 ```

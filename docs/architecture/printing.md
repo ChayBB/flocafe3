@@ -46,8 +46,9 @@ checks the consumer boundary from outside the kernel; it does not close this gap
 | `width.ts` | Grapheme- and display-cell-aware measurement and truncation. |
 | `thermal-capabilities.ts` | Capability shape, code pages, representability, and warning policy. |
 | `merchant-template.ts` | Merchant template payload validation and canonical serialization. |
-| `raster.ts` | Raster band construction and ESC/POS raster encoding. |
+| `raster.ts`, `raster-canvas.ts`, `image-raster.ts` | Raster band construction, shared canvas painter (`paintRasterRequest`), ESC/POS raster encoding, and 1-bit logo trimming, contrast normalization, dithering, and packing. |
 | `z-report.ts`, `layout.ts`, `currency.ts`, `warnings.ts` | Z-report assembly, column layout, currency tokens, and warning shapes. |
+| `text-size.ts` | `PrinterTextSize`, column halving (`layoutColumnsForTextSize`), ESC/POS enlargement (`applyTextSizeToLines`), and encoder wrapping (`configureEncoderTextSize`). |
 
 ## Document models
 
@@ -166,15 +167,16 @@ four whitespace-separated tokens read as a sentence.
 | Kitchen ticket | `main/printers/document-kot.ts` | `KotDocument` |
 | Delivery slip | `main/printers/document-delivery-slip.ts` | `DeliverySlipDocument` |
 | Merchant | `main/printers/document-merchant.ts` | Wraps the classic renderer and applies a merchant template's block selection and order. |
-| Compliance line template | `renderEscposLineTemplateV1` in `main/printers/thermal.ts` | A pack-signed `escpos-line-template-v1` payload, as a plugin inside the thermal pipeline. |
+| Compliance line template | `escposLineTemplateV1Lines` in `main/printers/thermal.ts` | A pack-signed `escpos-line-template-v1` payload, as a plugin inside the thermal pipeline. |
 | Browser HTML | `frontend/src/lib/printer/web-print.ts` and `kot-web-print.ts` | A `PrintDocument` or `KotDocument`, rendered as HTML. |
 | WebUSB | `frontend/src/lib/printer/PrinterService.ts` | Encoder output, sent over the browser's WebUSB API. |
 | Delivery slip | `frontend/src/lib/printer/delivery-slip-encoder.ts` and `delivery-slip-web-print.ts` | A `DeliverySlipDocument`'s contact facts, rendered as bytes or HTML. |
 | Tax bill | `frontend/src/lib/printer/tax-bill-encoder.ts` | A raw `Bill` and `Tenant`, not a document. |
+| Payment ticket slip | `printPaymentTicket` in `main/printers/thermal.ts` | Order metadata, item lines, balance due, and ESC/POS QR code (`FLOCAFE-TICKET:<order_number>`) for multi-counter ordering. |
 
-The tax bill encoder is the single exception to "renderers consume documents". It targets the
-detailed per-component tax receipt, a different receipt shape from `PrintDocument` v1, and reads
-the bill directly.
+The tax bill encoder and payment ticket slip generator are exceptions to "renderers consume
+documents": the tax bill encoder reads `Bill` directly for per-component tax detail, while
+`printPaymentTicket` formats a compact payment ticket slip and QR code from order items and totals.
 
 ### Browser HTML printing
 
@@ -193,12 +195,18 @@ renderer.
 
 The business settings `receipt_logo` and `receipt_logo_raster` carry the browser image and the
 precomputed thermal data; `bill_show_logo` controls whether a bill renderer includes the logo.
-`processReceiptLogoFile()` uses a browser canvas to resize wide images to at most 576 pixels,
-composite transparency on white, and generate packed 1-bit raster variants for 384- and 576-dot
-printers. Browser bills center the image above the business header, use dashed rules, and call
-`print()` only after the logo and payment QR images decode (capped at two seconds). The classic ESC/POS renderer and
-frontend receipt encoders select a raster variant for the paper width and emit it with `GS v 0`.
-Kitchen tickets do not use the bill logo setting.
+`processReceiptLogoFile()` uses a browser canvas to composite transparency on white, trim
+surrounding transparent or white margins with a 4 px pad (`findLogoContentBounds()`), scale the
+cropped content to at most 576x240 dots (384x240 for 58 mm), normalize grayscale contrast
+(`normalizeGrayscaleContrast()`), and generate Floyd-Steinberg dithered 1-bit raster variants for
+384- and 576-dot printers. `receipt_logo` stores an adaptively compressed data URL (`<= 200 KB`
+target, `250 KB` cap) while `receipt_logo_raster` stores only the packed variants (`originalDataUrl`
+is left empty in new payloads, with `parseReceiptLogoData()` accepting both empty and populated
+values). Browser bills center the image above the business header and wait for the logo and payment QR images
+to decode before calling print (up to two seconds). The classic and compact ESC/POS
+renderers and frontend receipt encoders select a raster variant for the paper width and emit it with
+`GS v 0` via `{RAW_BYTES:...}`, which the mixed-mode text rasterizer skips so non-Latin headers
+never overwrite the logo bitmap. Kitchen tickets do not use the bill logo setting.
 
 ## Transports
 
@@ -207,7 +215,7 @@ Kitchen tickets do not use the bill logo setting.
 | Network | Raw socket. Data is sent in 4096-byte chunks (`NETWORK_PRINT_CHUNK_SIZE`) with a 10 ms delay between chunks (`NETWORK_PRINT_CHUNK_DELAY_MS`), so a large receipt does not overrun the printer's buffer. |
 | CUPS | `lp -d <printer> -o raw <tmpfile>`. |
 | Windows | `OpenPrinterW` with `pDataType` set to `RAW`. |
-| macOS Mac App Store | IPP over loopback HTTP to CUPS on `127.0.0.1:631`, using the minimal client in `main/printers/ipp-client.ts`, because a sandboxed App Store build cannot shell out to `lp`. |
+| macOS Mac App Store | IPP over the local CUPS UNIX domain socket `/private/var/run/cupsd` (with loopback HTTP fallback on `127.0.0.1:631`) using `main/printers/ipp-client.ts` and `document-format` `application/vnd.cups-raw`, because the macOS App Sandbox blocks shelling out to `lp` and blocks outbound TCP to `localhost:631` while permitting `/private/var/run/cupsd` under `com.apple.security.print`. |
 | WebUSB | The browser WebUSB API through the frontend bridge. |
 
 Dispatch failures are classified by `classifyPrintFailure()` into a stable, privacy-safe set:
@@ -245,17 +253,63 @@ does not raster at full width.
 scripts limited to `ascii`, transliteration enabled, unsupported text on a non-financial row is
 skipped, and unsupported text on a financial row refuses the print.
 
-When a financial row contains text the printer cannot represent, FloCafe refuses the whole receipt
-rather than printing a total that is not the real total. The refusal message is:
+When a financial row contains text the printer cannot represent natively and raster rendering is
+disabled or fails, FloCafe refuses the whole receipt rather than printing a total that is not the
+real total. The refusal message names the affected row, explains whether raster rendering failed or
+is unavailable, confirms that nothing was sent to the printer, and suggests retrying or using
+system/browser printing:
 
 ```text
-Receipt not printed: a financial row contains unsupported printer text: <text>
+Receipt not printed: a financial row contains unsupported printer text: <text>. The printer cannot print these characters as text, and no image fallback is available on this print path. Nothing was printed, so no amount is missing. Try again, or use system/browser printing.
 ```
-
-Use a supported printer profile or system/browser printing.
 
 `arabicShaping` on a profile is a deprecated compatibility input. Read `capabilities.shaping.arabic`
 instead; `getPrinterCapabilities()` merges the override into the capability set.
+
+### Text size
+
+`printers.text_size` (`normal`, `large`, `extra_large`; default `normal`) enlarges text per printer.
+On the backend, `resolvePrinterContext()` reads it (`printerShape()` and `printerReadinessShape()`
+also expose normalized `text_size`, and `printerShape()` sets `capabilities.textSize`, on
+`/api/printers` responses) and returns two things:
+`columns`, the layout width every document renderer targets, and `capabilities.textSize`, which
+`buildEscPos()` and the raster path read. On the frontend, `usePrinterStore` resolves the active
+printer's `text_size` (`resolveActivePrinterTextSize()` and `resolveWebUsbCapabilities()`) and passes
+it to WebUSB encoders (`capabilities.textSize`, applied via `configureEncoderTextSize()` and
+`layoutColumnsForTextSize()`), WebUSB main-process raster IPC (`rasterizePrintDocument` and
+`rasterizeKotDocument`), and browser HTML renderers (`web-print.ts`, `kot-web-print.ts`,
+`delivery-slip-web-print.ts`, and `order-slip-web-print.ts`). `shared/print/text-size.ts` owns the
+ESC/POS and column rules:
+
+- `normal` changes nothing; on the backend `resolvePrinterContext()` path the capability field is
+  left unset so output is byte-identical to a printer with no setting.
+- `large` wraps each text line in `{DOUBLE_HEIGHT}`. The column count is unchanged.
+- `extra_large` also wraps lines in `{DOUBLE_WIDTH}` and halves the layout columns, so renderers
+  wrap at half the paper's characters. `buildEscPos()` fits against the physical column count
+  (layout columns doubled).
+- `{FONT_B}` is dropped at both enlarged sizes, and blank, control, and raw-byte lines pass through.
+  `{DOUBLE_WIDTH}` is removed only from a line whose text is wider than the halved layout width and
+  still fits the physical width; that line prints at double height and single width. Text wider
+  than the physical width keeps double width and is truncated.
+- Tax-pack width profiles are selected against the physical column count, then laid out at the
+  text-size-adjusted columns; when `extra_large` narrows the column count,
+  `selectTemplateRenderProfile()` reflows the profile's `lineItems` and `taxSummary` column widths
+  to fit the halved width. When formatted financial values (`quantity`, `rate`, `taxRate`, `amount`,
+  addon prices, tax breakdown `@rate%` tokens, or summary amounts) across standard, compliance-pack,
+  or raster receipt rows still cannot fit on a single row after borrowing spare column width, the
+  renderer stacks the label and right-aligned financial continuation lines within the line budget
+  instead of truncating or ellipsizing digits, and fails before sending bytes with an explicit
+  overflow error if an unbreakable financial value is wider than the full line width.
+
+The enlargement is idempotent. The raster path applies it to the lines and to each group's
+`sourceControlLines` before `renderUnsupportedRasterLines()`, so rasterized rows render with the
+same `double-height` and `double-width` styles as native rows. On the browser HTML path,
+`web-print.ts`, `kot-web-print.ts`, `delivery-slip-web-print.ts`, and `order-slip-web-print.ts`
+render thermal output in solid `#000` (so 203 DPI GDI thermal drivers do not halftone-dither text or
+borders) with `@page` sizing (`58mm` or `80mm`) and scale font sizes and weights (`600`/`700`) for
+`normal`, `large`, and `extra_large`. `tests/printer-text-size.test.ts` and
+`tests/browser-receipts.test.ts` cover these paths; the ESC/POS column math is also pinned by the
+receipt column oracle.
 
 ## Cash drawer
 
@@ -301,6 +355,13 @@ variant that links to a recipe ingredient is not gated by its own pool, and `inc
 decides whether a sold-out variant row is emitted; the printed item count counts emitted rows on
 every destination.
 
+Unless `includeHidden` is set, products in an inactive category or with a missing or inactive
+ancestor category are omitted. Both renderers order root categories by sibling `sort_order, name`
+and group each root's subcategories immediately beneath it in sibling `sort_order, name` order,
+followed by uncategorized items. A root category with no direct visible products of its own emits
+its root heading once before its first visible subcategory section, while flat catalogs without
+subcategories emit only root headings.
+
 Products and POS expose a filtered menu print dialog with optional descriptions and effective
 add-on groups. The dialog can send ESC/POS to a selected receipt printer and roll width, open the
 system print dialog for A4 or Letter paper, or save a structured PDF. In Electron, the PDF uses the
@@ -315,9 +376,12 @@ steps are in the [printer setup guide](../printers.md#menu-printing).
 Raster is an additive, profile-owned capability, not a rendering mode a document selects. A
 profile that declares `raster.enabled` may render text it cannot represent as bitmaps; a profile
 that does not never takes that path. The two declared modes are `mixed`, which rasterizes only the
-rows that need it, and `whole-receipt`, which rasterizes the entire receipt and must be opted into
-explicitly by the caller. A Z report whose labels the code page cannot hold, such as Thai with an
-English second line, takes the `mixed` path in `printZReport`; without raster it is refused.
+rows that need it (across core classic/compact, merchant, and `escpos-line-template-v1` compliance
+pack receipts, Z-reports, kitchen tickets, delivery slips, payment tickets, menu prints, and printer
+test pages on the backend, and via `paintRasterRequest` canvas fallback on browser/WebUSB encoders),
+and `whole-receipt`, which rasterizes the entire receipt and must be opted into explicitly by the
+caller.
+A Z report whose labels the code page cannot hold takes the mixed raster path in printZReport.
 
 ### The diagnostic probe is not reachable from the UI
 

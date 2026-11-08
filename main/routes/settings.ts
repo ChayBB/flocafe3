@@ -1,7 +1,14 @@
 import { Router, Request, Response, RequestHandler } from 'express';
 import expressRateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
-import { getDatabase, getSettingValue, now, parseBackupPaginationQuery } from '../db';
+import {
+  getDatabase,
+  getSettingValue,
+  invoiceNumberIncludesPeriod,
+  now,
+  orderNumberIncludesDate,
+  parseBackupPaginationQuery,
+} from '../db';
 import {
   GUEST_QR_PUBLIC_URL_KEY,
   GUEST_QR_SECRET_KEY,
@@ -51,8 +58,14 @@ import {
   suggestedProfanityWords,
 } from '../services/profanity-filter';
 import { resolveTaxIdFormat, validateTaxRegistrationNumber } from '../services/tax';
-import { sendEvent } from '../services/telemetry';
+import { sendEvent, telemetry } from '../services/telemetry';
 import { readProductAnalyticsChoice, syncPostHogIdentity } from '../services/posthog';
+import {
+  OFFLINE_MODE_SETTING,
+  isOfflineMode,
+  notifyOfflineModeEnabled,
+} from '../services/offline-mode';
+import * as whatsapp from '../services/whatsapp';
 import {
   PRODUCT_ANALYTICS_LEVEL_SETTING,
   parseProductAnalyticsLevel,
@@ -71,6 +84,8 @@ import { countryConfirmationPatch } from '../services/country-provenance';
 import { getHttpRequestSignal, trackHttpRequestWork } from '../shutdown';
 import { asyncHandler } from '../middleware/async-handler';
 import { normalizeOptionalPhone } from '../lib/phone';
+import { MAX_PDF_HTML_BYTES, renderHtmlToPdfBuffer } from '../services/html-to-pdf';
+import { isPosCategorySort, isPosItemSort, readPosSortSettings } from '../lib/pos-sort';
 import {
   SERVER_APP_API_RATE_LIMIT_DEFAULT,
   SERVER_APP_API_RATE_LIMIT_KEY,
@@ -183,7 +198,15 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   receipt_logo: '',
   receipt_logo_raster: '',
   printer_trim_decimals: 'false',
+  auto_print_kot: 'false',
+  printer_use_unicode: 'false',
+  printer_arabic_shaping: 'false',
   split_checks_enabled: 'false',
+  card_transaction_id_required: 'false',
+  multi_counter_enabled: 'false',
+  scheduled_orders_enabled: 'false',
+  require_open_shift: 'false',
+  one_shift_per_staff: 'false',
   // Print language policies (#441) — inherit store language, no second
   // language. Defaults preserve pre-policy behavior for existing tenants.
   [BILL_LANGUAGE_POLICY_KEY]: defaultLanguagePolicySettingJson(),
@@ -200,7 +223,23 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   orders_layout: 'split',
   kot_print_layout: 'combined',
   [SERVER_APP_API_RATE_LIMIT_KEY]: String(SERVER_APP_API_RATE_LIMIT_DEFAULT),
+  // POS catalog ordering: 'saved' keeps the stored sort_order.
+  pos_category_sort: 'saved',
+  pos_item_sort: 'saved',
+  // Idle auto-lock timeout in minutes ('0' = off).
+  auto_lock_minutes: '0',
 };
+
+const VALID_AUTO_LOCK_MINUTES = new Set(['0', '1', '5', '15', '30']);
+
+function normalizeAutoLockMinutes(value: unknown): string | null {
+  if (value === 0 || value === '0' || value === 'off' || value === false || value === '') {
+    return '0';
+  }
+  const str =
+    typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+  return VALID_AUTO_LOCK_MINUTES.has(str) ? str : null;
+}
 
 /** Single authority for the orders_layout enum; both write transports gate on it. */
 export function isOrdersLayout(value: unknown): value is 'split' | 'cards' {
@@ -286,6 +325,7 @@ function businessShape(s: Record<string, string>) {
     ),
     number_digits: resolveStoredLocalePreference('number_digits', s.number_digits, s.country || ''),
     calendar: resolveStoredLocalePreference('calendar', s.calendar, s.country || ''),
+    auto_lock_minutes: Number(normalizeAutoLockMinutes(s.auto_lock_minutes) || 0),
     // Non-blocking informational tax format description for the UI.
     tax_id_format: resolveTaxIdFormat(s.country || ''),
   };
@@ -332,6 +372,7 @@ router.get('/business', requireBusinessSettingsRead, (req: Request, res: Respons
     const s = getAllSettings(getDatabase());
     res.json(businessShape(s));
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -523,6 +564,7 @@ router.put('/business', requirePermission('settings.manage'), (req: Request, res
 
     res.json(businessShape(getAllSettings(db)));
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -533,6 +575,7 @@ router.get('/tax', requirePermission('settings.view'), (req: Request, res: Respo
     const s = getAllSettings(getDatabase());
     res.json(taxShape(s));
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -578,6 +621,7 @@ router.put('/tax', requirePermission('tax-configuration.manage'), (req: Request,
     cloudSync.refreshRegistrationProfile();
     res.json(taxShape(getAllSettings(db)));
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -591,6 +635,7 @@ router.get('/loyalty', requirePermission('settings.view'), (req: Request, res: R
       global_cashback_percent: parseFloat(s.global_cashback_percent || '0'),
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -626,6 +671,7 @@ router.put('/loyalty', requirePermission('settings.manage'), (req: Request, res:
       global_cashback_percent: parseFloat(s.global_cashback_percent || '0'),
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -644,6 +690,7 @@ router.get('/discount', requirePermission('settings.view'), (req: Request, res: 
         s.discount_requires_approval === 'true' || s.discount_requires_approval === '1',
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -703,6 +750,7 @@ router.put('/discount', requirePermission('settings.manage'), (req: Request, res
         s.discount_requires_approval === 'true' || s.discount_requires_approval === '1',
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -718,6 +766,7 @@ router.get('/kds', requirePermission('settings.view'), (_req: Request, res: Resp
       kds_default_view: s.kds_default_view === 'kanban' ? 'kanban' : 'tabs',
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -737,6 +786,7 @@ router.put('/kds', requirePermission('settings.manage'), (req: Request, res: Res
       kds_default_view: s.kds_default_view === 'kanban' ? 'kanban' : 'tabs',
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -847,6 +897,7 @@ router.get(
     try {
       res.json(readProductAnalyticsChoice());
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -872,6 +923,25 @@ router.put(
       syncPostHogIdentity();
       res.json(readProductAnalyticsChoice());
     } catch (error: any) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+// ─── POS catalog sort (must come BEFORE /:key wildcard) ─────────────────────
+
+// Every role that can ring up orders needs the ordering, not only settings.view.
+router.get(
+  '/pos-sort',
+  settingsReadRateLimit,
+  requireAnyPermission('settings.view', 'orders.read', 'orders.create'),
+  (_req: Request, res: Response) => {
+    try {
+      res.json(readPosSortSettings(getAllSettings(getDatabase())));
+    } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -891,6 +961,7 @@ router.get(
         readStoredCustomerDisplayConfig(getAllSettings(getDatabase())[CUSTOMER_DISPLAY_KEY]),
       );
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -910,6 +981,7 @@ router.put(
       upsertSettings(getDatabase(), { [CUSTOMER_DISPLAY_KEY]: JSON.stringify(config) });
       res.json(config);
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -924,6 +996,7 @@ router.get(
     try {
       res.json({ tokens: listDisplayTokens() });
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -947,6 +1020,7 @@ router.post(
       const actor = (req as Request & { user?: { userId?: string } }).user?.userId ?? null;
       res.status(201).json(createDisplayToken(label, actor));
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -964,6 +1038,7 @@ router.delete(
       }
       res.json({ success: true });
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1023,18 +1098,26 @@ router.put(
 
 // ─── Order numbering settings (must come BEFORE /:key wildcard) ─────────────
 
+const INVOICE_RESET_PERIODS = new Set(['never', 'daily', 'monthly', 'financial_year']);
+
 function orderNumberingShape(s: Record<string, string>) {
+  const resetPeriod = INVOICE_RESET_PERIODS.has(s.invoice_number_reset_period)
+    ? s.invoice_number_reset_period
+    : 'daily';
+  const orderResetDaily = s.order_number_reset_daily !== 'false';
   return {
     order_number_prefix: s.order_number_prefix ?? 'ORD',
-    order_number_include_date: s.order_number_include_date !== 'false',
-    order_number_reset_daily: s.order_number_reset_daily !== 'false',
+    order_number_include_date: orderNumberIncludesDate(
+      s.order_number_include_date !== 'false',
+      orderResetDaily,
+    ),
+    order_number_reset_daily: orderResetDaily,
     invoice_number_prefix: s.invoice_number_prefix ?? 'INV',
-    invoice_number_include_period: s.invoice_number_include_period !== 'false',
-    invoice_number_reset_period: ['never', 'daily', 'monthly', 'financial_year'].includes(
-      s.invoice_number_reset_period,
-    )
-      ? s.invoice_number_reset_period
-      : 'daily',
+    invoice_number_include_period: invoiceNumberIncludesPeriod(
+      s.invoice_number_include_period !== 'false',
+      resetPeriod,
+    ),
+    invoice_number_reset_period: resetPeriod,
     invoice_financial_year_start_month: parseBoundedInt(
       s.invoice_financial_year_start_month,
       1,
@@ -1047,7 +1130,6 @@ function orderNumberingShape(s: Record<string, string>) {
 
 // Alphanumeric only to avoid collisions with automatic hyphen separators.
 const ORDER_NUMBER_PREFIX_PATTERN = /^[A-Za-z0-9]{0,12}$/;
-const INVOICE_RESET_PERIODS = new Set(['never', 'daily', 'monthly', 'financial_year']);
 
 function parseBoundedInt(value: unknown, min: number, max: number, fallback: number): number {
   const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
@@ -1062,6 +1144,7 @@ router.get(
       const s = getAllSettings(getDatabase());
       res.json(orderNumberingShape(s));
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1128,18 +1211,28 @@ router.put(
       }
 
       const db = getDatabase();
-      upsertSettings(db, {
-        order_number_prefix,
-        order_number_include_date: boolFlag(order_number_include_date),
-        order_number_reset_daily: boolFlag(order_number_reset_daily),
-        invoice_number_prefix,
-        invoice_number_include_period: boolFlag(invoice_number_include_period),
-        invoice_number_reset_period,
-        invoice_financial_year_start_month,
-        invoice_financial_year_start_day,
-      });
+      db.transaction(() => {
+        upsertSettings(db, {
+          order_number_prefix,
+          order_number_include_date: boolFlag(order_number_include_date),
+          order_number_reset_daily: boolFlag(order_number_reset_daily),
+          invoice_number_prefix,
+          invoice_number_include_period: boolFlag(invoice_number_include_period),
+          invoice_number_reset_period,
+          invoice_financial_year_start_month,
+          invoice_financial_year_start_day,
+        });
+        // Persist the effective flags so a series that must carry its date or period never
+        // stores a contradictory "off" that would resurface when the reset option changes.
+        const effective = orderNumberingShape(getAllSettings(db));
+        upsertSettings(db, {
+          order_number_include_date: String(effective.order_number_include_date),
+          invoice_number_include_period: String(effective.invoice_number_include_period),
+        });
+      })();
       res.json(orderNumberingShape(getAllSettings(db)));
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1201,6 +1294,16 @@ router.put('/cloud', requirePermission('cloud.manage'), (req: Request, res: Resp
       cloud_reports_enabled,
       cloud_command_polling_enabled,
     } = req.body;
+    const isOwner = (req as Request & { user?: { role?: string } }).user?.role === 'owner';
+    const hasUnmaskedApiKey = cloud_api_key !== undefined && !isMaskedSecret(cloud_api_key);
+    if (
+      !isOwner &&
+      (cloud_server_url !== undefined || hasUnmaskedApiKey || cloud_store_id !== undefined)
+    ) {
+      return res
+        .status(403)
+        .json({ error: 'Only the store owner can modify cloud credentials or server URL' });
+    }
     const db = getDatabase();
     const updates: Record<string, string | undefined> = {
       cloud_store_id: cloud_store_id === undefined ? undefined : String(cloud_store_id || ''),
@@ -1215,7 +1318,7 @@ router.put('/cloud', requirePermission('cloud.manage'), (req: Request, res: Resp
         cloud_server_url || DEFAULT_CLOUD_SERVER_URL,
       );
     }
-    if (cloud_api_key !== undefined && !isMaskedSecret(cloud_api_key)) {
+    if (hasUnmaskedApiKey) {
       updates.cloud_api_key = String(cloud_api_key || '');
     }
     const enablingCloud = [
@@ -1257,6 +1360,17 @@ router.post(
   requirePermission('cloud.manage'),
   asyncHandler(async (req: Request, res: Response) => {
     try {
+      let requestedUrl: string | undefined;
+      if (req.body?.cloud_server_url !== undefined) {
+        if ((req as Request & { user?: { role?: string } }).user?.role !== 'owner') {
+          return res
+            .status(403)
+            .json({ error: 'Only the store owner can modify cloud credentials or server URL' });
+        }
+        requestedUrl = normalizeCloudServerUrl(
+          req.body.cloud_server_url || DEFAULT_CLOUD_SERVER_URL,
+        );
+      }
       const deletionRequest = await cloudSync.getDeletionRequestStatus({
         allowRemote: cloudSync.isCloudAccountAvailable(),
         signal: getHttpRequestSignal(req),
@@ -1267,21 +1381,21 @@ router.post(
             'A cloud deletion request is pending review. Cancel it before re-enabling cloud services.',
         });
       }
-      if (cloudSync.getStatus().cloud_services_disabled_by_user) {
+      const currentStatus = cloudSync.getStatus();
+      if (currentStatus.cloud_services_disabled_by_user) {
         return res.status(409).json({ error: CLOUD_ACCOUNT_UNAVAILABLE_ERROR });
       }
-      if (req.body?.cloud_server_url !== undefined) {
-        upsertSettings(getDatabase(), {
-          cloud_server_url: normalizeCloudServerUrl(
-            req.body.cloud_server_url || DEFAULT_CLOUD_SERVER_URL,
-          ),
-        });
-      }
-      if (cloudSync.getStatus().cloud_deletion_blocked) {
+      if (currentStatus.cloud_deletion_blocked) {
         return res.status(409).json({
           error:
             'Cloud deletion is unresolved; retry or cancel it before re-enabling cloud services.',
         });
+      }
+      if (requestedUrl !== undefined) {
+        upsertSettings(getDatabase(), {
+          cloud_server_url: requestedUrl,
+        });
+        cloudSync.reload();
       }
       // Registration sends contact metadata for FloAdmin support; it does not
       // create a cloud owner account or grant authentication access.
@@ -1469,35 +1583,122 @@ router.post(
   }),
 );
 
-// Google Drive backups - every Drive route is owner-only and returns only the
-// service's redacted status or an allowlisted error code.
+// Google Drive endpoints return only redacted status or an allowlisted error code.
 function googleDriveErrorResponse(res: Response, error: unknown): Response {
   const code = getGoogleDriveErrorCode(error);
-  const status =
-    code === 'permission_denied'
-      ? 403
-      : code === 'conflict'
-        ? 409
-        : [
-              'warning_acknowledgement_required',
-              'restore_validation_failed',
-              'preferences_invalid',
-            ].includes(code)
-          ? 400
-          : ['offline', 'rate_limited'].includes(code)
-            ? 503
-            : [
-                  'configuration_unavailable',
-                  'secure_storage_unavailable',
-                  'not_connected',
-                  'reauth_required',
-                  'destination_required',
-                  'destination_invalid',
-                ].includes(code)
-              ? 409
-              : 502;
+  let status = 502;
+  if (code === 'menu_pdf_too_large') status = 413;
+  else if (code === 'menu_not_published') status = 404;
+  else if (code === 'permission_denied') status = 403;
+  else if (code === 'conflict') status = 409;
+  else if (
+    [
+      'warning_acknowledgement_required',
+      'restore_validation_failed',
+      'preferences_invalid',
+      'menu_pdf_invalid',
+    ].includes(code)
+  )
+    status = 400;
+  else if (['offline', 'rate_limited'].includes(code)) status = 503;
+  else if (
+    [
+      'configuration_unavailable',
+      'secure_storage_unavailable',
+      'not_connected',
+      'reauth_required',
+      'destination_required',
+      'destination_invalid',
+      'menu_file_invalid',
+    ].includes(code)
+  )
+    status = 409;
   return res.status(status).json({ error: code });
 }
+
+const requireQrMenuPermission = requireAnyPermission('catalog.manage', 'google-drive.manage');
+
+router.get(
+  '/google-drive/qr-menu',
+  requireQrMenuPermission,
+  asyncHandler(async (_req: Request, res: Response) => {
+    try {
+      return res.json(await googleDrive.getQrMenuStatus());
+    } catch (error) {
+      return googleDriveErrorResponse(res, error);
+    }
+  }),
+);
+
+router.put(
+  '/google-drive/qr-menu/preferences',
+  requireQrMenuPermission,
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      return res.json(await googleDrive.saveQrMenuGeneratorPrefs(req.body));
+    } catch (error) {
+      return googleDriveErrorResponse(res, error);
+    }
+  }),
+);
+
+router.post(
+  '/google-drive/qr-menu/generate',
+  requireQrMenuPermission,
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const html = req.body?.html;
+      if (typeof html !== 'string' || html.length === 0)
+        return res.status(400).json({ error: 'menu_pdf_invalid' });
+      if (Buffer.byteLength(html, 'utf8') > MAX_PDF_HTML_BYTES)
+        return res.status(413).json({ error: 'menu_pdf_too_large' });
+      const pdfBuffer = await renderHtmlToPdfBuffer({ html, pageSize: req.body?.pageSize });
+      return res.json(
+        await googleDrive.publishQrMenuPdf({
+          pdfBuffer,
+          source: 'generated',
+          generatorPrefs: req.body?.preferences,
+        }),
+      );
+    } catch (error) {
+      return googleDriveErrorResponse(res, error);
+    }
+  }),
+);
+
+router.post(
+  '/google-drive/qr-menu/upload',
+  requireQrMenuPermission,
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      if (
+        req.body?.mimeType !== 'application/pdf' ||
+        typeof req.body?.fileName !== 'string' ||
+        !req.body.fileName.toLowerCase().endsWith('.pdf') ||
+        typeof req.body?.data !== 'string'
+      )
+        return res.status(400).json({ error: 'menu_pdf_invalid' });
+      const pdfBuffer = Buffer.from(req.body.data, 'base64');
+      return res.json(await googleDrive.publishQrMenuPdf({ pdfBuffer, source: 'uploaded' }));
+    } catch (error) {
+      return googleDriveErrorResponse(res, error);
+    }
+  }),
+);
+
+router.put(
+  '/google-drive/qr-menu/sharing',
+  requireQrMenuPermission,
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      if (typeof req.body?.enabled !== 'boolean')
+        return res.status(400).json({ error: 'preferences_invalid' });
+      return res.json(await googleDrive.setQrMenuSharing(req.body.enabled));
+    } catch (error) {
+      return googleDriveErrorResponse(res, error);
+    }
+  }),
+);
 
 router.get(
   '/google-drive',
@@ -1569,6 +1770,7 @@ router.post(
       );
       return res.json(status);
     } catch (error) {
+      res.locals.postHogError = error;
       if (getHttpRequestSignal(req)?.aborted) {
         if (!res.headersSent) res.status(503).end();
         else if (!res.writableEnded) res.destroy();
@@ -1682,6 +1884,7 @@ router.get(
     try {
       return res.json({ charges: getChargeDefinitions() });
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
@@ -1714,6 +1917,7 @@ router.put(
 
       return res.json({ charges: definitions });
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
@@ -1745,6 +1949,144 @@ router.get(
         },
       });
     } catch (error) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/scheduled_orders_enabled',
+  settingsReadRateLimit,
+  requireAnyPermission('settings.view', 'orders.read', 'orders.create'),
+  (_req: Request, res: Response) => {
+    try {
+      const setting = getDatabase()
+        .prepare('SELECT * FROM settings WHERE key = ?')
+        .get('scheduled_orders_enabled');
+      if (setting) return res.json({ setting });
+      return res.json({
+        setting: {
+          key: 'scheduled_orders_enabled',
+          value: OPTIONAL_SETTING_DEFAULTS.scheduled_orders_enabled,
+          updated_at: null,
+        },
+      });
+    } catch (error) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+const requireAuthenticatedStaff: RequestHandler = (req, res, next) => {
+  const userId = String(
+    (req as Request & { user?: { userId?: string; id?: string } }).user?.userId ||
+      (req as any).user?.id ||
+      '',
+  );
+  if (!userId) {
+    return res
+      .status(401)
+      .json({ error: 'Authentication required', code: 'authentication_required' });
+  }
+  const db = getDatabase();
+  const user = db.prepare('SELECT id, is_active FROM users WHERE id = ?').get(userId) as
+    | { id: string; is_active: number }
+    | undefined;
+  if (!user || user.is_active !== 1) {
+    return res.status(401).json({ error: 'Invalid or expired token', code: 'invalid_token' });
+  }
+  next();
+};
+
+router.get(
+  '/auto_lock_minutes',
+  settingsReadRateLimit,
+  requireAuthenticatedStaff,
+  (_req: Request, res: Response) => {
+    try {
+      const setting = getDatabase()
+        .prepare('SELECT * FROM settings WHERE key = ?')
+        .get('auto_lock_minutes');
+      if (setting) return res.json({ setting });
+      return res.json({
+        setting: {
+          key: 'auto_lock_minutes',
+          value: OPTIONAL_SETTING_DEFAULTS.auto_lock_minutes,
+          updated_at: null,
+        },
+      });
+    } catch (error) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.get('/offline-mode', requirePermission('settings.view'), (_req: Request, res: Response) => {
+  res.json({ offline_mode: isOfflineMode() });
+});
+
+router.put(
+  '/offline-mode',
+  settingsWriteRateLimit,
+  requirePermission('offline-mode.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const value = req.body?.offline_mode;
+      if (typeof value !== 'boolean') {
+        return res.status(400).json({ error: 'offline_mode must be a boolean' });
+      }
+      getDatabase()
+        .prepare(
+          `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        )
+        .run(OFFLINE_MODE_SETTING, value ? 'true' : 'false', now());
+      syncPostHogIdentity();
+      if (value) {
+        cloudSync.suspendForOfflineMode();
+        whatsapp.suspendForOfflineMode();
+        googleDrive.suspendForOfflineMode();
+        notifyOfflineModeEnabled();
+      } else {
+        cloudSync.reload();
+        cloudSync.refreshRegistrationProfile();
+        whatsapp.initFromDb();
+        telemetry.resumeDailyChecks();
+      }
+      res.json({ offline_mode: isOfflineMode() });
+    } catch (error: unknown) {
+      res.locals.postHogError = error;
+      console.error('[API] Offline mode update failed:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/card_transaction_id_required',
+  settingsReadRateLimit,
+  requireAnyPermission('settings.view', 'payments.take', 'orders.create', 'bills.read'),
+  (_req: Request, res: Response) => {
+    try {
+      const setting = getDatabase()
+        .prepare('SELECT * FROM settings WHERE key = ?')
+        .get('card_transaction_id_required');
+      if (setting) return res.json({ setting });
+      return res.json({
+        setting: {
+          key: 'card_transaction_id_required',
+          value: OPTIONAL_SETTING_DEFAULTS.card_transaction_id_required,
+          updated_at: null,
+        },
+      });
+    } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
@@ -1798,6 +2140,9 @@ const ALLOWED_WILDCARD_KEYS = new Set([
   'server_app_bill_printing_enabled',
   SERVER_APP_API_RATE_LIMIT_KEY,
   'split_checks_enabled',
+  'card_transaction_id_required',
+  'multi_counter_enabled',
+  'scheduled_orders_enabled',
   BILL_LANGUAGE_POLICY_KEY,
   KOT_LANGUAGE_POLICY_KEY,
   Z_REPORT_LANGUAGE_POLICY_KEY,
@@ -1807,7 +2152,11 @@ const ALLOWED_WILDCARD_KEYS = new Set([
   'theme_mode',
   ...THEME_VARIANT_KEYS,
   'orders_layout',
+  'pos_category_sort',
+  'pos_item_sort',
   'require_open_shift',
+  'one_shift_per_staff',
+  'auto_lock_minutes',
 ]);
 
 /**
@@ -1829,6 +2178,7 @@ router.get('/', requirePermission('settings.view'), (req: Request, res: Response
     const s = getAllSettings(getDatabase());
     res.json({ settings: publicSettingsShape(s) });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -1877,6 +2227,7 @@ router.get(
       }));
       res.json({ core: [...CORE_BILL_TEMPLATES], plugins, merchant });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1896,7 +2247,12 @@ const PRINTING_BOOLEAN_KEYS = [
   'bill_delivery_show_customer_phone_always',
 ] as const;
 
-const OPTIONAL_PRINTING_BOOLEAN_KEYS = ['bill_show_logo'] as const;
+const OPTIONAL_PRINTING_BOOLEAN_KEYS = [
+  'bill_show_logo',
+  'auto_print_kot',
+  'printer_use_unicode',
+  'printer_arabic_shaping',
+] as const;
 
 const PRINTING_BATCH_KEYS = new Set<string>([
   ...PRINTING_BOOLEAN_KEYS,
@@ -2014,6 +2370,7 @@ router.put(
       upsertSettings(getDatabase(), entries);
       res.json({ settings: entries });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -2046,6 +2403,7 @@ router.get(
       }
       res.json({ setting });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -2090,10 +2448,39 @@ router.put(
       ) {
         return res.status(400).json({ error: 'server_app_api_rate_limit_max must be 60..100000' });
       }
+      if (req.params.key === 'pos_category_sort' && !isPosCategorySort(value)) {
+        return res.status(400).json({ error: 'pos_category_sort must be "saved" or "name"' });
+      }
+      if (req.params.key === 'pos_item_sort' && !isPosItemSort(value)) {
+        return res.status(400).json({
+          error: 'pos_item_sort must be "saved", "name", "price_asc" or "price_desc"',
+        });
+      }
       let valueToPersist: unknown = value;
-      if (req.params.key === 'require_open_shift') {
+      if (req.params.key === 'auto_lock_minutes') {
+        const normalizedAutoLock = normalizeAutoLockMinutes(value);
+        if (!normalizedAutoLock) {
+          return res.status(400).json({ error: 'auto_lock_minutes must be 0, 1, 5, 15, or 30' });
+        }
+        valueToPersist = normalizedAutoLock;
+      }
+      if (
+        req.params.key === 'require_open_shift' ||
+        req.params.key === 'one_shift_per_staff' ||
+        req.params.key === 'card_transaction_id_required' ||
+        req.params.key === 'multi_counter_enabled' ||
+        req.params.key === 'scheduled_orders_enabled'
+      ) {
+        if (req.params.key === 'multi_counter_enabled') {
+          const callerUser = (req as Request & { user?: { role?: string } }).user;
+          if (callerUser?.role !== 'owner') {
+            return res
+              .status(403)
+              .json({ error: 'Only the store owner can modify counter configuration' });
+          }
+        }
         if (value !== true && value !== false && value !== 'true' && value !== 'false') {
-          return res.status(400).json({ error: 'require_open_shift must be a boolean' });
+          return res.status(400).json({ error: `${req.params.key} must be a boolean` });
         }
         valueToPersist = value === true || value === 'true' ? 'true' : 'false';
       }
@@ -2118,6 +2505,17 @@ router.put(
         valueToPersist = validation.stored;
       }
       const db = getDatabase();
+      if (req.params.key === 'one_shift_per_staff' && valueToPersist === 'false') {
+        const openCount = db
+          .prepare(`SELECT COUNT(*) AS n FROM cash_sessions WHERE status = 'open'`)
+          .get() as { n: number } | undefined;
+        if (Number(openCount?.n || 0) > 1) {
+          return res.status(409).json({
+            error: 'Cannot disable one shift per staff member while multiple shifts are open',
+            code: 'multiple_shifts_open',
+          });
+        }
+      }
       if (
         diagnosticsChoice &&
         valueToPersist === 'true' &&
@@ -2224,6 +2622,7 @@ router.put(
       const setting = db.prepare('SELECT * FROM settings WHERE key = ?').get(req.params.key);
       res.json({ setting });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }

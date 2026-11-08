@@ -936,6 +936,91 @@ test('Save All preserves order numbering edits during hydration', async ({ page 
   expect(savedOrder?.invoice_number_reset_period).toBe('financial_year');
 });
 
+test('Editing only order numbering marks Settings dirty and saves or discards cleanly', async ({
+  page,
+}) => {
+  await startMockedSettingsSession(page);
+  let persistedOrderPrefix = 'ORD';
+  let savedOrder: Record<string, unknown> | undefined;
+  await page.route('**/api/settings/order-numbering', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      savedOrder = body;
+      persistedOrderPrefix = String(body.order_number_prefix ?? '');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          order_number_prefix: persistedOrderPrefix,
+          order_number_include_date: true,
+          order_number_reset_daily: true,
+          invoice_number_prefix: 'INV',
+          invoice_number_include_period: true,
+          invoice_number_reset_period: 'daily',
+          invoice_financial_year_start_month: 4,
+          invoice_financial_year_start_day: 1,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        order_number_prefix: persistedOrderPrefix,
+        order_number_include_date: true,
+        order_number_reset_daily: true,
+        invoice_number_prefix: 'INV',
+        invoice_number_include_period: true,
+        invoice_number_reset_period: 'daily',
+        invoice_financial_year_start_month: 4,
+        invoice_financial_year_start_day: 1,
+      }),
+    });
+  });
+
+  await page.goto(`${BASE}/settings?tab=store`);
+  await expect(page.getByRole('heading', { name: 'Store Details', exact: true })).toBeVisible();
+
+  const orderPrefix = page.locator('input[placeholder="ORD"]');
+  const invoicePrefix = page.locator('input[placeholder="INV"]');
+  const saveButton = page.getByRole('button', { name: 'Save Changes', exact: true });
+  const discardButton = page.getByRole('button', { name: 'Discard', exact: true });
+
+  await expect(orderPrefix).toHaveValue('ORD');
+  await expect(invoicePrefix).toHaveValue('INV');
+  await expect(saveButton).toHaveCount(0);
+  await expect(discardButton).toHaveCount(0);
+
+  await orderPrefix.fill('POS');
+  await expect(saveButton).toBeVisible();
+  await expect(discardButton).toBeVisible();
+
+  await discardButton.click();
+  await expect(orderPrefix).toHaveValue('ORD');
+  await expect(saveButton).toHaveCount(0);
+  await expect(discardButton).toHaveCount(0);
+
+  await invoicePrefix.fill('BILL');
+  await expect(saveButton).toBeVisible();
+  await expect(discardButton).toBeVisible();
+
+  await discardButton.click();
+  await expect(invoicePrefix).toHaveValue('INV');
+  await expect(saveButton).toHaveCount(0);
+  await expect(discardButton).toHaveCount(0);
+
+  await orderPrefix.fill('CAFE');
+  await expect(saveButton).toBeVisible();
+  await expect(discardButton).toBeVisible();
+
+  await saveButton.click();
+  await expect.poll(() => savedOrder?.order_number_prefix, { timeout: 10000 }).toBe('CAFE');
+  await expect(orderPrefix).toHaveValue('CAFE');
+  await expect(saveButton).toHaveCount(0);
+  await expect(discardButton).toHaveCount(0);
+});
+
 test('Save All preserves printing edits during business hydration', async ({ page }) => {
   await startMockedSettingsSession(page);
   const savedPrintingRequests: Record<string, unknown>[] = [];
@@ -959,6 +1044,9 @@ test('Save All preserves printing edits during business hydration', async ({ pag
 
   await expect.poll(() => savedPrintingRequests.length, { timeout: 10000 }).toBe(1);
   expect(savedPrintingRequests[0]).toEqual({
+    auto_print_kot: false,
+    printer_use_unicode: false,
+    printer_arabic_shaping: false,
     printer_trim_decimals: true,
     bill_language_policy: { primary: { mode: 'inherit' }, additional: [] },
     kot_language_policy: { primary: { mode: 'inherit' }, additional: [] },
@@ -972,6 +1060,54 @@ test('Save All preserves printing edits during business hydration', async ({ pag
     bill_show_customer_phone: true,
     bill_show_table_number: true,
     bill_delivery_show_customer_phone_always: true,
+  });
+});
+
+test('Printers tab hydrates KOT/Unicode/shaping flags and writes false', async ({ page }) => {
+  await startMockedSettingsSession(page);
+  const savedPrintingRequests: Record<string, unknown>[] = [];
+  for (const key of ['auto_print_kot', 'printer_use_unicode', 'printer_arabic_shaping']) {
+    await page.route(`**/api/settings/${key}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          setting: { key, value: 'true', updated_at: '2026-01-01T00:00:00.000Z' },
+        }),
+      });
+    });
+  }
+  page.on('request', (request) => {
+    if (
+      request.method() === 'PUT' &&
+      new URL(request.url()).pathname === '/api/settings/printing'
+    ) {
+      savedPrintingRequests.push(request.postDataJSON());
+    }
+  });
+
+  await page.goto(`${BASE}/settings?tab=receipts-printers`);
+  const autoKotSwitch = page.getByRole('switch', { name: 'Auto-print KOT', exact: true });
+  const utfSwitch = page.getByRole('switch', { name: 'Printer supports Unicode', exact: true });
+  const shapingSwitch = page.getByRole('switch', {
+    name: 'Printer supports Arabic/Persian shaping',
+    exact: true,
+  });
+
+  await expect(autoKotSwitch).toHaveAttribute('aria-checked', 'true');
+  await expect(utfSwitch).toHaveAttribute('aria-checked', 'true');
+  await expect(shapingSwitch).toHaveAttribute('aria-checked', 'true');
+
+  await autoKotSwitch.click();
+  await utfSwitch.click();
+  await shapingSwitch.click();
+  await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
+
+  await expect.poll(() => savedPrintingRequests.length, { timeout: 10000 }).toBe(1);
+  expect(savedPrintingRequests[0]).toMatchObject({
+    auto_print_kot: false,
+    printer_use_unicode: false,
+    printer_arabic_shaping: false,
   });
 });
 

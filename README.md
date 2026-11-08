@@ -194,13 +194,14 @@ Both scripts ask whether to keep application data. Do not choose their data-purg
 
 - **Offline-first architecture:** Local SQLite storage with auto-migrating schema and fail-closed safety.
 - **Granular roles & permissions:** Owner, Manager, Cashier, Server, and Chef roles with context-aware access policies.
-- **Multi-language support:** 25 localized languages with full bidirectional RTL rendering (Arabic, Persian, Urdu).
+- **Multi-language support:** 26 localized languages with full bidirectional RTL rendering (Arabic, Persian, Urdu).
 - **131 Country profiles:** 109 world currencies with localized phone parsing, number formatting, and timezone handling.
 - **Country tax packs:** Signed regional tax pack integration and manual rule engine.
 - **Automated database backups:** Pre-migration automatic snapshots, manual exports, and optional Google Drive sync.
 - **Customer loyalty & CRM:** Customer directory, purchase histories, and point redemption.
 - **Cash drawer management:** Cash pulse on checkout and end-of-shift cash drawer reconciliations.
 - **Daily sales & accounting export:** Audit-ready CSV/Excel reporting with financial reconciliation identities.
+- **Multi-counter ordering:** Separate order capture, cashier payment, or combined counter terminals with shared LAN queue and QR ticket lookup.
 
 ## Project status
 
@@ -242,6 +243,8 @@ FloCafe includes UI translations for:
 - Vietnamese
 - Thai
 - Nepali
+- Hausa
+- Javanese
 
 UI language is independent of store country and regional settings, and tax calculation rules remain a separate concern. For details on contributing translations or adding languages, see the [Internationalization and translation guide](docs/architecture/internationalization.md).
 

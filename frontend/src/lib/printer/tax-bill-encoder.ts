@@ -10,6 +10,11 @@ import {
   truncateToDisplayCellsFromEnd,
 } from '@print/width';
 import {
+  configureEncoderTextSize,
+  layoutColumnsForTextSize,
+  normalizePrinterTextSize,
+} from '@print/text-size';
+import {
   getCountryByCode,
   getCurrencyFractionDigits,
   getCurrencySymbol,
@@ -33,6 +38,7 @@ import {
   selectThermalCodePage,
   type ThermalPrinterCapabilities,
 } from '@print/thermal-capabilities';
+import { rasterCapabilityEnabled } from '@print/raster';
 import { isExcludedFromBillReceipt } from '../../../../shared/order-item-status';
 
 export interface TaxBillOptions {
@@ -205,7 +211,9 @@ export function buildTaxBillBytes(
     language = 'en',
   } = opts;
   const labelFor = (key: string): string => printLabelResolver(key, language);
-  const cols = opts.columns ?? CHARS[paperWidth];
+  const textSize = normalizePrinterTextSize(opts.capabilities?.textSize);
+  const physicalCols = opts.columns ?? CHARS[paperWidth];
+  const cols = layoutColumnsForTextSize(physicalCols, textSize);
   const safePrinterText = safePrinterTextForLanguage(language, useUnicode, opts.capabilities);
   const padRow = (left: string, right: string, _columns?: number): string => {
     void _columns;
@@ -231,7 +239,7 @@ export function buildTaxBillBytes(
     Number(bill.tax_amount) !== 0 ||
     taxComponents.some((component) => Number(component.amount) !== 0);
 
-  const enc = new ReceiptPrinterEncoder({ columns: cols });
+  const enc = new ReceiptPrinterEncoder({ columns: physicalCols });
   const safeFinancialRows = (left: string, right: string): string[] => {
     const rawFinancialRow = `${left}${right}`;
     const normalizedFinancialRow = normalizeThermalText(rawFinancialRow, opts.capabilities);
@@ -242,7 +250,11 @@ export function buildTaxBillBytes(
         : normalizeCurrencyToAscii(normalizedFinancialRow);
     return hasUnsupportedPrinterChars(printerFinancialRow) &&
       !(arabicShaping && isArabicShapingSafeLine(printerFinancialRow))
-      ? [rawFinancialRow]
+      ? [
+          rasterCapabilityEnabled(opts.capabilities, 'mixed')
+            ? `${left}  ${right}`
+            : rawFinancialRow,
+        ]
       : padRowsForLanguage(left, right, cols, opts.capabilities);
   };
   const writeSafeFinancialRow = (left: string, right: string): void => {
@@ -262,7 +274,9 @@ export function buildTaxBillBytes(
   };
 
   // ── Header ────────────────────────────────────────────────────────────────
-  enc.initialize().align('center');
+  enc.initialize();
+  configureEncoderTextSize(enc, textSize);
+  enc.align('center');
   if (showBusinessName && tenant.business_name) {
     enc.bold(true).width(2).height(2);
     safePrinterText(
@@ -271,7 +285,7 @@ export function buildTaxBillBytes(
       warnings,
       true,
       arabicShaping,
-      Math.floor(cols / 2),
+      Math.floor(physicalCols / 2),
       undefined,
       language,
     );

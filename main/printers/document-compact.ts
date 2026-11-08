@@ -8,7 +8,13 @@ import {
   type ThermalPrinterCapabilities,
 } from '../../shared/print/thermal-capabilities';
 import { receiptChargeLines } from '../../shared/charges';
-import type { RasterSemanticLineGroup, RasterTextLayout } from '../../shared/print/raster';
+import {
+  concatBytes,
+  encodeGsV0Band,
+  type RasterSemanticLineGroup,
+  type RasterTextLayout,
+} from '../../shared/print/raster';
+import { getLogoRasterBands } from '../../shared/print/image-raster';
 import {
   displayCellWidth,
   padToDisplayCells,
@@ -27,6 +33,7 @@ import {
   pushCenteredWrapped,
   pushWrapped,
   resolveCurrencyPrefix,
+  taxBreakdownRows,
   truncate,
   truncateShapedLine,
   type PrintWarning,
@@ -235,6 +242,15 @@ export function renderBillDocumentToCompactLines(
   markGroup('message', messageStart, messageSourceLines, messageSourceControlLines);
 
   // Business header (store name only — compact keeps contact facts in the footer).
+  if (header?.logoRaster) {
+    const widthDots = options.capabilities?.raster?.widthDots ?? (cols <= 32 ? 384 : 576);
+    const maxBandHeight = options.capabilities?.raster?.maxBandHeight ?? 200;
+    const bands = getLogoRasterBands(header.logoRaster, widthDots, maxBandHeight);
+    if (bands.length > 0) {
+      const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
+      lines.push(`{RAW_BYTES:${Buffer.from(rawBytes).toString('base64')}}`);
+    }
+  }
   const headerStart = lines.length;
   if (header?.name)
     lines.push(
@@ -547,7 +563,6 @@ export function renderBillDocumentToCompactLines(
       for (const line of breakdown.lines) {
         const rateSuffix = line.rate === null ? '' : ` @${line.rate}%`;
         const rawLabel = labelOf(line.label) + rateSuffix;
-        const label = truncate(rawLabel, cols - 12, options.language, options.capabilities);
         const value = formatCurrency(
           line.amount,
           prefix,
@@ -556,7 +571,14 @@ export function renderBillDocumentToCompactLines(
           fractionDigits,
         );
         pushTotalRow(
-          financialRows(label, value, cols, options.language, options.capabilities),
+          taxBreakdownRows(
+            labelOf(line.label),
+            line.rate,
+            value,
+            cols,
+            options.language,
+            options.capabilities,
+          ),
           false,
           rawLabel,
           value,

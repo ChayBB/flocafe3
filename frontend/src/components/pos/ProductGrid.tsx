@@ -22,6 +22,12 @@ import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { resolveScannedProduct } from '@/lib/scale-barcode';
 import { subscribeToQuickSearch } from '@/lib/quick-search';
 import { parseQuantitySearch } from '@/lib/quantity-search';
+import {
+  sortCategories,
+  sortProducts,
+  type PosCategorySort,
+  type PosItemSort,
+} from '@/lib/pos-sort';
 import CollapsiblePosChoices from './CollapsiblePosChoices';
 
 const FLAT_TAB =
@@ -182,7 +188,7 @@ function CategoryRow({
         <CategoryChip
           categoryName={cat.name}
           categoryColor={cat.color}
-          isSelected={selectedCategory === cat.id}
+          isSelected={selectedCategory != null && String(selectedCategory) === String(cat.id)}
           onSelect={() => setSelectedCategory(cat.id)}
           flat={flat}
         />
@@ -402,6 +408,8 @@ interface Props {
   disabled?: boolean;
   /** Cashier-POS opt-in: measured collapsed category row with a toggle. */
   collapseCategories?: boolean;
+  categorySort?: PosCategorySort;
+  itemSort?: PosItemSort;
   /**
    * Show every category in one scrolling list under its own heading. The highlighted category
    * follows the scroll position and choosing a category scrolls to it, instead of filtering.
@@ -444,6 +452,8 @@ export default function ProductGrid({
   loopSections = false,
   flat = false,
   quickFilters = [],
+  categorySort = 'saved',
+  itemSort = 'saved',
 }: Props) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const cart = useCartStore();
@@ -479,14 +489,52 @@ export default function ProductGrid({
   const parsedSearch = useMemo(() => parseQuantitySearch(search), [search]);
   const activeQuery = parsedSearch ? parsedSearch.query : search;
 
+  const categoryById = useMemo(
+    () => new Map(categories.map((cat) => [String(cat.id), cat])),
+    [categories],
+  );
+  const rootCategories = useMemo(
+    () => categories.filter((cat) => cat.is_active !== false && !cat.parent_id),
+    [categories],
+  );
+  const sortedCategories = useMemo(
+    () => sortCategories(rootCategories, categorySort),
+    [rootCategories, categorySort],
+  );
+  const selectedCategoryObj = selectedCategory ? categoryById.get(String(selectedCategory)) : null;
+  const activeRootId = selectedCategoryObj
+    ? selectedCategoryObj.parent_id && categoryById.has(String(selectedCategoryObj.parent_id))
+      ? String(selectedCategoryObj.parent_id)
+      : String(selectedCategoryObj.id)
+    : selectedCategory;
+  const activeSubcategoryId =
+    selectedCategoryObj?.parent_id && categoryById.has(String(selectedCategoryObj.parent_id))
+      ? String(selectedCategoryObj.id)
+      : null;
+
+  const activeSubcategories = useMemo(() => {
+    if (!activeRootId) return [];
+    const children = categories.filter(
+      (cat) => cat.is_active !== false && String(cat.parent_id) === String(activeRootId),
+    );
+    return sortCategories(children, categorySort);
+  }, [categories, activeRootId, categorySort]);
+
+  const filterCategoryId = selectedCategory ? activeSubcategoryId || String(activeRootId) : null;
+
+  const sortedProducts = useMemo(() => sortProducts(products, itemSort), [products, itemSort]);
+
   const [quickKey, setQuickKey] = useState<string | null>(null);
   const quickFilter = quickFilters.find((filter) => filter.key === quickKey) ?? null;
   // A quick filter shows one plain grid, so the category sections and their scroll tracking pause.
   const spying = scrollSpy && !quickFilter;
 
-  const filtered = products.filter((p) => {
+  const filtered = sortedProducts.filter((p) => {
     const matchCat =
-      scrollSpy || quickFilter || !selectedCategory || p.category_id === selectedCategory;
+      scrollSpy ||
+      quickFilter ||
+      filterCategoryId === null ||
+      (p.category_id != null && String(p.category_id) === filterCategoryId);
     const matchQuick = !quickFilter || quickFilter.match(p);
     const matchSearch = !activeQuery || p.name.toLowerCase().includes(activeQuery.toLowerCase());
     return matchCat && matchQuick && matchSearch;
@@ -500,7 +548,7 @@ export default function ProductGrid({
   const sections = useMemo(() => {
     if (!spying) return [];
     const known = new Set(categories.map((category) => category.id));
-    const groups = categories
+    const groups = sortCategories(categories, categorySort)
       .map((category) => ({
         id: category.id as string | null,
         name: category.name,
@@ -512,7 +560,7 @@ export default function ProductGrid({
     );
     if (other.length > 0) groups.push({ id: null, name: '', items: other });
     return groups;
-  }, [spying, categories, filtered]);
+  }, [spying, categories, categorySort, filtered]);
 
   // Looping moves a whole category from one end of the list to the other once it is out of sight,
   // shifting the scroll position by its height so nothing on screen moves.
@@ -811,6 +859,7 @@ export default function ProductGrid({
               const rawMatch = resolveScannedProduct(trimmed, products);
               const parsedQty = rawMatch ? null : parseQuantitySearch(trimmed);
               const targetCode = parsedQty ? parsedQty.query : trimmed;
+              if (!targetCode) return;
               const quantityToAdd = parsedQty ? parsedQty.quantity : 1;
               const match = rawMatch ?? resolveScannedProduct(targetCode, products);
               if (match) {
@@ -870,8 +919,8 @@ export default function ProductGrid({
         <CategoryRow
           className={`pb-1 ${flat ? 'min-w-0 flex-1 ms-2' : ''}`}
           collapse={collapseCategories}
-          categories={categories}
-          selectedCategory={quickFilter ? null : selectedCategory}
+          categories={scrollSpy ? sortCategories(categories, categorySort) : sortedCategories}
+          selectedCategory={quickFilter ? null : scrollSpy ? selectedCategory : activeRootId}
           setSelectedCategory={chooseCategory}
           allLabel={t('allCategories')}
           flat={flat}
@@ -890,6 +939,27 @@ export default function ProductGrid({
               : null
           }
         />
+        {!scrollSpy && activeSubcategories.length > 0 && (
+          <div
+            data-testid="pos-subcategory-row"
+            className="mt-1.5 flex flex-nowrap gap-2 overflow-x-auto pb-1"
+          >
+            {activeSubcategories.map((sub) => (
+              <CategoryChip
+                key={sub.id}
+                categoryName={sub.name}
+                flat={flat}
+                categoryColor={sub.color}
+                isSelected={activeSubcategoryId === String(sub.id)}
+                onSelect={() =>
+                  setSelectedCategory(
+                    activeSubcategoryId === String(sub.id) ? activeRootId : String(sub.id),
+                  )
+                }
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* min-h-0 overrides the content-based automatic minimum size, so a long

@@ -25,6 +25,7 @@ import { useTranslations } from 'use-intl';
 import { Ltr } from '@/components/layout/Ltr';
 import { Button } from '@/components/ui/button';
 import { SettingsTabShell } from '@/components/settings/SettingsTabShell';
+import { LocalBackupCard } from '@/components/settings/LocalBackupCard';
 import {
   Dialog,
   DialogContent,
@@ -317,6 +318,8 @@ export function DatabaseSettingsTab({
 
   return (
     <SettingsTabShell title={t('tabBackupData')}>
+      <LocalBackupCard />
+
       {/* Database Export */}
       <div className="bg-card rounded-xl border border-border p-6">
         <div className="flex items-center gap-2 mb-4">
@@ -745,18 +748,24 @@ export function DatabaseSettingsTab({
                 </div>
               </div>
 
-              {googleDriveStatus.last_error && (
-                <p className="text-xs text-red-600">
-                  {t('googleDriveLastError', { code: googleDriveStatus.last_error })}
+              {googleDriveStatus.last_error &&
+                googleDriveStatus.last_error !== 'retention_pending' && (
+                  <p className="text-xs text-red-600">
+                    {t('googleDriveLastError', { code: googleDriveStatus.last_error })}
+                  </p>
+                )}
+              {(googleDriveStatus.job?.state === 'retention_pending' ||
+                googleDriveStatus.last_error === 'retention_pending' ||
+                googleDriveStatus.retention_status === 'pending') && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {t('googleDriveRetentionPending')}
                 </p>
               )}
-              {googleDriveStatus.job && (
+              {googleDriveStatus.job && googleDriveStatus.job.state !== 'retention_pending' && (
                 <p className="text-xs text-muted-foreground">
                   {googleDriveStatus.job.state === 'offline_pending'
                     ? t('googleDriveBackupRetryPending')
-                    : googleDriveStatus.job.state === 'retention_pending'
-                      ? t('googleDriveRetentionPending')
-                      : t('googleDriveJobStatus', { state: googleDriveStatus.job.state })}
+                    : t('googleDriveJobStatus', { state: googleDriveStatus.job.state })}
                 </p>
               )}
 

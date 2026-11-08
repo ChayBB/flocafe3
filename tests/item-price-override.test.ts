@@ -1,0 +1,417 @@
+/**
+ * Owner-only manual item price override: route, create/add-items paths, totals, audit and report.
+ *
+ * Usage: node tests/run-electron-node-test.cjs tests/item-price-override.test.ts
+ */
+const Module = require('module');
+const originalLoad = Module._load;
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-item-price-override-'));
+Module._load = function (request: string) {
+  if (request === 'electron')
+    return { app: { isPackaged: true, getPath: () => testDir, getVersion: () => 'test' } };
+  return originalLoad.apply(this, arguments as any);
+};
+
+process.env.JWT_SECRET = 'test-secret-item-price-override';
+
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const {
+  initTestDb,
+  createApp,
+  startServer,
+  api,
+  assertOrThrow,
+  assertEqualOrThrow,
+  getResults,
+  resetCounters,
+  closeDatabase,
+  now,
+} = require('./helpers/test-setup');
+const { getJWTSecret } = require('../main/routes/auth');
+const { orderRoutes } = require('../main/routes/orders');
+const { billRoutes } = require('../main/routes/bills');
+const { registerRoutes } = require('../main/routes/index');
+
+function seedUser(db: any, id: string, role: string) {
+  const email = `${id}@test.local`;
+  db.prepare(
+    `INSERT INTO users (id, name, email, password, role, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+  ).run(id, id, email, bcrypt.hashSync('testpass123', 10), role, now(), now());
+  return {
+    Authorization: `Bearer ${jwt.sign({ userId: id, email, role }, getJWTSecret(), { expiresIn: '1h' })}`,
+  };
+}
+
+async function main() {
+  console.log('Item price override');
+  console.log('='.repeat(60));
+  resetCounters();
+  const db = initTestDb();
+  db.prepare(`INSERT INTO categories (id, name, sort_order) VALUES ('cat-po', 'PO', 1)`).run();
+  db.prepare(
+    `INSERT INTO products (id, category_id, name, price, tax_type, is_active, sort_order, created_at, updated_at)
+     VALUES ('prod-po', 'cat-po', 'Steak', 500, 'none', 1, 1, ?, ?)`,
+  ).run(now(), now());
+  const ownerAuth = seedUser(db, 'owner-po', 'owner');
+  const managerAuth = seedUser(db, 'mgr-po', 'manager');
+  const cashierAuth = seedUser(db, 'cash-po', 'cashier');
+
+  const app = createApp({ '/api/orders': orderRoutes, '/api/bills': billRoutes });
+  registerRoutes(app);
+  const { baseUrl, server } = await startServer(app);
+
+  const createOrder = (headers: any, item: Record<string, unknown> = {}) =>
+    api(baseUrl, '/api/orders', {
+      method: 'POST',
+      body: { type: 'takeaway', items: [{ product_id: 'prod-po', quantity: 2, ...item }] },
+      headers: { ...headers, 'Idempotency-Key': `po-${Math.random()}` },
+    });
+  const price = (orderId: any, itemId: any, body: any, headers: any) =>
+    api(baseUrl, `/api/orders/${orderId}/items/${itemId}/price`, {
+      method: 'PATCH',
+      body,
+      headers,
+    });
+  const itemRow = (id: any) => db.prepare('SELECT * FROM order_items WHERE id = ?').get(id) as any;
+  const orderRow = (id: any) => db.prepare('SELECT * FROM orders WHERE id = ?').get(id) as any;
+
+  try {
+    console.log('\n--- Override after the order exists ---');
+    const created = await createOrder(ownerAuth);
+    assertEqualOrThrow(created.status, 201, 'order is created at menu price');
+    const orderId = created.data.order.id;
+    const itemId = created.data.order.items[0].id;
+    assertEqualOrThrow(orderRow(orderId).total, 1000, 'menu total is 2 x 500');
+
+    for (const [name, headers] of [
+      ['manager', managerAuth],
+      ['cashier', cashierAuth],
+    ] as const) {
+      const denied = await price(orderId, itemId, { price: 350, reason: 'regular' }, headers);
+      assertEqualOrThrow(denied.status, 403, `${name} cannot override a price`);
+    }
+    assertEqualOrThrow(itemRow(itemId).unit_price, 500, 'a rejected request changes nothing');
+
+    assertEqualOrThrow(
+      (await price(orderId, itemId, { price: 350 }, ownerAuth)).status,
+      400,
+      'a reason is required',
+    );
+    assertEqualOrThrow(
+      (await price(orderId, itemId, { price: -1, reason: 'x' }, ownerAuth)).status,
+      400,
+      'a negative price is rejected',
+    );
+
+    const ok = await price(orderId, itemId, { price: 350, reason: 'Regular customer' }, ownerAuth);
+    assertEqualOrThrow(ok.status, 200, 'the owner can override a price');
+    const row = itemRow(itemId);
+    assertEqualOrThrow(row.unit_price, 350, 'effective price is the override');
+    assertEqualOrThrow(row.price_overridden, 1, 'the item is flagged');
+    assertEqualOrThrow(row.original_unit_price, 500, 'the menu price is retained');
+    assertEqualOrThrow(row.price_override_reason, 'Regular customer', 'the reason is stored');
+    assertEqualOrThrow(row.price_overridden_by, 'owner-po', 'the actor is stored');
+    assertOrThrow(!!row.price_overridden_at, 'the time is stored');
+    assertEqualOrThrow(row.subtotal, 700, 'item subtotal uses the override');
+    assertEqualOrThrow(orderRow(orderId).total, 700, 'order total is recomputed by the backend');
+
+    const second = await price(orderId, itemId, { price: 0, reason: 'Comp' }, ownerAuth);
+    assertEqualOrThrow(second.status, 200, 'a complimentary zero price is allowed');
+    assertEqualOrThrow(itemRow(itemId).unit_price, 0, 'price is zero');
+    assertEqualOrThrow(itemRow(itemId).original_unit_price, 500, 'the first menu price is kept');
+    assertEqualOrThrow(orderRow(orderId).total, 0, 'order total follows a zero price');
+
+    const audit = db
+      .prepare(
+        "SELECT details_json FROM order_audit_log WHERE order_id = ? AND action = 'item_price_overridden' ORDER BY id",
+      )
+      .all(orderId) as any[];
+    assertEqualOrThrow(audit.length, 2, 'every override is audited');
+    assertEqualOrThrow(
+      JSON.parse(audit[1].details_json).previous_unit_price,
+      350,
+      'audit has the previous price',
+    );
+
+    console.log('\n--- Quantity edits keep the override ---');
+    const edited = await api(baseUrl, `/api/orders/${orderId}/items/${itemId}/edit`, {
+      method: 'PATCH',
+      body: { expected_edit_version: ok.data.item.edit_version + 1, quantity: 1 },
+      headers: { ...ownerAuth, 'Idempotency-Key': `po-edit-${Math.random()}` },
+    });
+    assertEqualOrThrow(edited.status, 200, 'the quantity edit succeeds');
+    const activeLine = db
+      .prepare(
+        "SELECT * FROM order_items WHERE order_id = ? AND status NOT IN ('cancelled', 'voided')",
+      )
+      .get(orderId) as any;
+    assertEqualOrThrow(activeLine.unit_price, 0, 'the override price survives a quantity edit');
+    assertEqualOrThrow(
+      activeLine.price_overridden,
+      1,
+      'the override flag survives a quantity edit',
+    );
+    assertEqualOrThrow(
+      activeLine.original_unit_price,
+      500,
+      'the menu price survives a quantity edit',
+    );
+
+    console.log('\n--- Cart-time override on create and add-items ---');
+    const denied = await createOrder(managerAuth, { price_override: { price: 1, reason: 'x' } });
+    assertEqualOrThrow(denied.status, 403, 'a non-owner cannot override on create');
+    const viaCart = await createOrder(ownerAuth, {
+      price_override: { price: 300, reason: 'Negotiated' },
+    });
+    assertEqualOrThrow(viaCart.status, 201, 'the owner can override on create');
+    const cartItem = itemRow(viaCart.data.order.items[0].id);
+    assertEqualOrThrow(cartItem.unit_price, 300, 'cart override sets the price');
+    assertEqualOrThrow(cartItem.original_unit_price, 500, 'cart override keeps the menu price');
+    assertEqualOrThrow(
+      orderRow(viaCart.data.order.id).total,
+      600,
+      'create total uses the override',
+    );
+
+    console.log('\n--- Add-items and tax preview ---');
+    const addItems = (headers: any, item: Record<string, unknown>) =>
+      api(baseUrl, `/api/orders/${viaCart.data.order.id}/items`, {
+        method: 'POST',
+        body: { items: [{ product_id: 'prod-po', quantity: 1, ...item }] },
+        headers: { ...headers, 'Idempotency-Key': `po-add-${Math.random()}` },
+      });
+    assertEqualOrThrow(
+      (await addItems(managerAuth, { price_override: { price: 1, reason: 'x' } })).status,
+      403,
+      'a non-owner cannot override when adding items',
+    );
+    const added = await addItems(ownerAuth, {
+      price_override: { price: 100, reason: 'Comp half' },
+    });
+    assertEqualOrThrow(added.status, 200, 'the owner can override when adding items');
+    const addedRow = db
+      .prepare('SELECT * FROM order_items WHERE order_id = ? AND unit_price = 100')
+      .get(viaCart.data.order.id) as any;
+    assertEqualOrThrow(addedRow.original_unit_price, 500, 'add-items keeps the menu price');
+    assertEqualOrThrow(
+      orderRow(viaCart.data.order.id).total,
+      700,
+      'order total includes the added override',
+    );
+
+    const preview = await api(baseUrl, '/api/tax/preview', {
+      method: 'POST',
+      body: {
+        items: [{ product_id: 'prod-po', quantity: 2, price_override: { price: 300 } }],
+      },
+      headers: ownerAuth,
+    });
+    assertEqualOrThrow(preview.status, 200, 'the tax preview accepts an override');
+    assertEqualOrThrow(preview.data.summary.subtotal, 600, 'the preview quotes the override price');
+    const menuPreview = await api(baseUrl, '/api/tax/preview', {
+      method: 'POST',
+      body: { items: [{ product_id: 'prod-po', quantity: 2 }] },
+      headers: ownerAuth,
+    });
+    assertEqualOrThrow(
+      menuPreview.data.summary.subtotal,
+      1000,
+      'the preview quotes the menu price without one',
+    );
+
+    for (const [rawPrice, expectedUnitPrice, expectedTotal] of [
+      [10.005, 10.01, 30.03],
+      [3.333, 3.33, 9.99],
+      [0.015, 0.02, 0.06],
+    ] as const) {
+      const items = [
+        {
+          product_id: 'prod-po',
+          quantity: 3,
+          price_override: { price: rawPrice, reason: 'Precision check' },
+        },
+      ];
+      const quoteRes = await api(baseUrl, '/api/tax/preview', {
+        method: 'POST',
+        body: { items },
+        headers: ownerAuth,
+      });
+      assertEqualOrThrow(quoteRes.status, 200, `preview succeeds for ${rawPrice}`);
+      assertEqualOrThrow(
+        quoteRes.data.summary.subtotal,
+        expectedTotal,
+        `preview subtotal normalizes ${rawPrice} before qty 3`,
+      );
+      assertEqualOrThrow(
+        quoteRes.data.summary.total,
+        expectedTotal,
+        `preview total normalizes ${rawPrice} before qty 3`,
+      );
+      const orderRes = await api(baseUrl, '/api/orders', {
+        method: 'POST',
+        body: { type: 'takeaway', items },
+        headers: { ...ownerAuth, 'Idempotency-Key': `po-prec-${rawPrice}-${Math.random()}` },
+      });
+      assertEqualOrThrow(orderRes.status, 201, `order succeeds for ${rawPrice}`);
+      assertEqualOrThrow(
+        orderRes.data.order.items[0].unit_price,
+        expectedUnitPrice,
+        `order unit_price normalizes ${rawPrice} -> ${expectedUnitPrice}`,
+      );
+      assertEqualOrThrow(
+        orderRes.data.order.total,
+        expectedTotal,
+        `order total matches preview for ${rawPrice}`,
+      );
+      const billRes = await api(baseUrl, '/api/bills/generate', {
+        method: 'POST',
+        body: { order_id: orderRes.data.order.id },
+        headers: ownerAuth,
+      });
+      assertEqualOrThrow(billRes.status, 201, `bill generation succeeds for ${rawPrice}`);
+      assertEqualOrThrow(
+        billRes.data.bill.total,
+        expectedTotal,
+        `bill total matches preview for ${rawPrice}`,
+      );
+      const payRes = await api(baseUrl, `/api/bills/${billRes.data.bill.id}/payments`, {
+        method: 'POST',
+        body: { payments: [{ method: 'card', amount: quoteRes.data.summary.total }] },
+        headers: ownerAuth,
+      });
+      assertEqualOrThrow(
+        payRes.status,
+        200,
+        `card payment of preview quote succeeds for ${rawPrice}`,
+      );
+      assertEqualOrThrow(
+        payRes.data.bill.payment_status,
+        'paid',
+        `bill is fully paid for ${rawPrice}`,
+      );
+    }
+
+    console.log('\n--- Blocked states ---');
+    const paidOrder = await createOrder(ownerAuth);
+    const paidOrderId = paidOrder.data.order.id;
+    db.prepare(
+      `INSERT INTO bills (bill_number, order_id, subtotal, total, paid_amount, balance, payment_status, created_at, updated_at)
+       VALUES ('BILL-PO-1', ?, 1000, 1000, 1000, 0, 'paid', ?, ?)`,
+    ).run(paidOrderId, now(), now());
+    const blocked = await price(
+      paidOrderId,
+      paidOrder.data.order.items[0].id,
+      { price: 1, reason: 'late' },
+      ownerAuth,
+    );
+    assertEqualOrThrow(blocked.status, 409, 'a paid bill blocks an override');
+
+    db.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(orderId);
+    assertEqualOrThrow(
+      (await price(orderId, itemId, { price: 10, reason: 'x' }, ownerAuth)).status,
+      400,
+      'a cancelled order blocks an override',
+    );
+    db.prepare("UPDATE orders SET status = 'pending' WHERE id = ?").run(orderId);
+
+    console.log('\n--- Price exceptions report ---');
+    const dayOffset = (days: number) =>
+      new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+    const from = dayOffset(-1);
+    const to = dayOffset(1);
+    const report = await api(
+      baseUrl,
+      `/api/reports/price-exceptions?start_date=${from}&end_date=${to}`,
+      { headers: ownerAuth },
+    );
+    assertEqualOrThrow(report.status, 200, 'the report loads');
+    const rows = report.data.priceExceptions.rows as any[];
+    assertOrThrow(rows.length >= 2, 'overridden lines are listed');
+    const zero = rows.find((r) => r.order_id === orderId);
+    assertEqualOrThrow(zero.original_unit_price, 500, 'report shows the menu price');
+    assertEqualOrThrow(zero.billed_unit_price, 0, 'report shows the billed price');
+    assertEqualOrThrow(zero.difference, -500, 'report shows the difference');
+    assertEqualOrThrow(zero.changed_by_id, 'owner-po', 'report shows who changed it');
+    assertEqualOrThrow(zero.reason, 'Comp', 'report shows the reason');
+    assertEqualOrThrow(
+      report.data.priceExceptions.complimentaryCount >= 1,
+      true,
+      'comps are counted',
+    );
+    const shiftId = Number(
+      db
+        .prepare(
+          `INSERT INTO cash_sessions (opened_by, opened_by_name, opened_at, status)
+           VALUES ('owner-po', 'Owner', '2000-01-01 00:00:00', 'open')`,
+        )
+        .run().lastInsertRowid,
+    );
+    const inShift = await api(
+      baseUrl,
+      `/api/reports/price-exceptions?start_date=${from}&end_date=${to}&shift_id=${shiftId}`,
+      { headers: ownerAuth },
+    );
+    assertEqualOrThrow(inShift.status, 200, 'the report filters by shift');
+    assertEqualOrThrow(
+      inShift.data.priceExceptions.count,
+      rows.length,
+      'an open shift covers every override since it opened',
+    );
+    assertEqualOrThrow(inShift.data.priceExceptions.shiftId, shiftId, 'the shift is echoed');
+    assertOrThrow(
+      (inShift.data.priceExceptions.shifts as { id: number }[]).some((s) => s.id === shiftId),
+      'the report lists shifts that overlap the range',
+    );
+    db.prepare(
+      "UPDATE cash_sessions SET status = 'closed', closed_at = '2000-01-01 08:00:00' WHERE id = ?",
+    ).run(shiftId);
+    const closedShift = await api(
+      baseUrl,
+      `/api/reports/price-exceptions?start_date=${from}&end_date=${to}&shift_id=${shiftId}`,
+      { headers: ownerAuth },
+    );
+    assertEqualOrThrow(
+      closedShift.data.priceExceptions.count,
+      0,
+      'overrides outside the shift are excluded',
+    );
+    assertEqualOrThrow(
+      (
+        await api(
+          baseUrl,
+          `/api/reports/price-exceptions?start_date=${from}&end_date=${to}&shift_id=999999`,
+          { headers: ownerAuth },
+        )
+      ).status,
+      404,
+      'an unknown shift is rejected',
+    );
+    assertEqualOrThrow(
+      (
+        await api(baseUrl, `/api/reports/price-exceptions?start_date=${from}&end_date=${to}`, {
+          headers: cashierAuth,
+        })
+      ).status,
+      403,
+      'a role without reports.view is refused',
+    );
+  } finally {
+    server.close();
+    closeDatabase();
+    fs.rmSync(testDir, { recursive: true, force: true });
+  }
+
+  const results = getResults();
+  console.log(`\n${results.passed}/${results.total} passed`);
+  process.exit(results.failed > 0 ? 1 : 0);
+}
+
+main().catch((error: any) => {
+  console.error(error);
+  process.exit(1);
+});

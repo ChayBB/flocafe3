@@ -2,7 +2,14 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { getCurrentSchemaVersion, getDatabase, getSettingValue, now } from '../db';
+import {
+  getCurrentSchemaVersion,
+  getDatabase,
+  getSettingValue,
+  now,
+  recordAuthAudit,
+  verifyPinAsync,
+} from '../db';
 import { getJWTSecret } from '../security/jwt-secret';
 import { seedSetupProfile } from '../setup/seed-data';
 import { authorizeMasterPin, isMasterPinAvailable, setMasterPin } from '../services/master-pin';
@@ -13,6 +20,8 @@ import {
   incrementFailedLogin,
   resetSuccessfulLogin,
   FAILED_LOGIN_LOCKOUT_MINUTES,
+  normalizeIpForRateLimit,
+  withPinVerificationLock,
   validatePassword,
   revokeToken,
   isTokenRevoked,
@@ -29,10 +38,14 @@ import {
 import { countryConfirmationPatch } from '../services/country-provenance';
 import {
   cloudSync,
+  CloudRequestError,
   DEFAULT_CLOUD_SERVER_URL,
   normalizeCloudServerUrl,
 } from '../services/cloud-sync';
 import { asyncHandler } from '../middleware/async-handler';
+import { handleRestoreFromPickedFile } from './database';
+import { getHttpRequestSignal } from '../shutdown';
+import { PASSWORD_POLICY_MESSAGE } from '../../shared/password-policy';
 import { normalizeOptionalPhone } from '../lib/phone';
 import { isSupportedCurrencyCode } from '../../shared/currencies';
 import {
@@ -300,7 +313,249 @@ router.post(
         tenants: [tenant],
       });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[Auth] Login error:', error);
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }),
+);
+
+// ── GET /api/auth/pin-users ───────────────────────────────────────────────────
+// Public quick-switch user picker directory: active users with a PIN configured.
+
+router.get('/pin-users', authRateLimit({ max: 600 }), (_req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const rows = db
+      .prepare(
+        `SELECT id, name, role
+         FROM users
+         WHERE is_active = 1 AND pin_hash IS NOT NULL
+         ORDER BY CASE role
+           WHEN 'owner' THEN 1
+           WHEN 'manager' THEN 2
+           WHEN 'cashier' THEN 3
+           WHEN 'server' THEN 4
+           WHEN 'chef' THEN 5
+           ELSE 6
+         END, name COLLATE NOCASE ASC`,
+      )
+      .all() as Array<{ id: string; name: string; role: string }>;
+
+    res.json({
+      users: rows.map((row) => ({
+        id: String(row.id),
+        name: String(row.name),
+        role: String(row.role),
+      })),
+    });
+  } catch (error: unknown) {
+    res.locals.postHogError = error;
+    console.error('[Auth] PIN users error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── POST /api/auth/pin-login ──────────────────────────────────────────────────
+// Quick user switch via PIN for a specifically selected user_id.
+
+router.post(
+  '/pin-login',
+  authRateLimit({
+    max: 600,
+    skipSuccessfulRequests: true,
+    onRateLimited: (req: Request) => {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const rawUserId = req.body?.user_id;
+      const userId = typeof rawUserId === 'string' && rawUserId.trim() ? rawUserId.trim() : null;
+      recordAuthAudit(getDatabase(), {
+        userId,
+        eventType: 'pin_login',
+        outcome: 'rate_limited',
+        ipAddress: ip,
+        details: { reason: 'endpoint_rate_limited' },
+      });
+    },
+  }),
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const { user_id, pin, rememberMe } = req.body || {};
+      const userId = typeof user_id === 'string' ? user_id.trim() : '';
+      const rawPin = typeof pin === 'string' || typeof pin === 'number' ? String(pin) : '';
+
+      const db = getDatabase();
+      if (!userId || !rawPin) {
+        recordAuthAudit(db, {
+          userId: userId || null,
+          eventType: 'pin_login',
+          outcome: 'failure',
+          ipAddress: ip,
+          details: {
+            reason:
+              !userId && !rawPin
+                ? 'missing_credentials'
+                : !userId
+                  ? 'missing_user_id'
+                  : 'missing_pin',
+          },
+        });
+        return res.status(400).json({ error: 'user_id and pin are required' });
+      }
+
+      const canonicalIp = normalizeIpForRateLimit(ip);
+      const pinRateKey = `${canonicalIp}:pin:${userId}`;
+      const accountRateKey = `pin-user:${userId}`;
+      type VerifiedUser = {
+        id: string;
+        name: string;
+        email: string;
+        role: string;
+        is_active: number;
+        pin_hash: string | null;
+        category_ids: string | null;
+      };
+      type PinLoginOutcome =
+        | { status: 429; body: Record<string, unknown> }
+        | { status: 401; body: Record<string, unknown> }
+        | { status: 200; user: VerifiedUser };
+
+      const verificationResult = await withPinVerificationLock<PinLoginOutcome>(
+        accountRateKey,
+        async () => {
+          const ipRateLimit = checkLoginRateLimit(pinRateKey);
+          const accountRateLimit = checkLoginRateLimit(accountRateKey);
+          if (!ipRateLimit.allowed || !accountRateLimit.allowed) {
+            const waitMinutes = Math.max(
+              ipRateLimit.allowed ? 0 : ipRateLimit.waitMinutes || 0,
+              accountRateLimit.allowed ? 0 : accountRateLimit.waitMinutes || 0,
+            );
+            recordAuthAudit(db, {
+              userId,
+              eventType: 'pin_login',
+              outcome: 'rate_limited',
+              ipAddress: ip,
+              details: { wait_minutes: waitMinutes },
+            });
+            return {
+              status: 429,
+              body: {
+                error: `Too many failed attempts. Try again in ${waitMinutes} minutes.`,
+              },
+            };
+          }
+
+          if (!/^\d{4,6}$/.test(rawPin)) {
+            const ipAttemptsRemaining = incrementFailedLogin(pinRateKey);
+            const accountAttemptsRemaining = incrementFailedLogin(accountRateKey);
+            const attemptsRemaining = Math.min(ipAttemptsRemaining, accountAttemptsRemaining);
+            recordAuthAudit(db, {
+              userId,
+              eventType: 'pin_login',
+              outcome: 'failure',
+              ipAddress: ip,
+              details: {
+                reason: 'invalid_pin_format',
+                attempts_remaining: attemptsRemaining,
+              },
+            });
+            return {
+              status: 401,
+              body: {
+                error: 'Invalid credentials',
+                attempts_remaining: attemptsRemaining,
+                lockout_minutes: attemptsRemaining === 0 ? FAILED_LOGIN_LOCKOUT_MINUTES : undefined,
+              },
+            };
+          }
+
+          const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as
+            | VerifiedUser
+            | undefined;
+          let pinMatches = false;
+          if (user && user.is_active === 1 && user.pin_hash) {
+            try {
+              pinMatches = await verifyPinAsync(user.pin_hash, rawPin);
+            } catch {
+              pinMatches = false;
+            }
+          }
+
+          if (!user || user.is_active !== 1 || !user.pin_hash || !pinMatches) {
+            const ipAttemptsRemaining = incrementFailedLogin(pinRateKey);
+            const accountAttemptsRemaining = incrementFailedLogin(accountRateKey);
+            const attemptsRemaining = Math.min(ipAttemptsRemaining, accountAttemptsRemaining);
+            recordAuthAudit(db, {
+              userId,
+              eventType: 'pin_login',
+              outcome: 'failure',
+              ipAddress: ip,
+              details: {
+                reason: !user
+                  ? 'user_not_found'
+                  : user.is_active !== 1
+                    ? 'user_inactive'
+                    : !user.pin_hash
+                      ? 'pin_not_set'
+                      : 'invalid_pin',
+                attempts_remaining: attemptsRemaining,
+              },
+            });
+            return {
+              status: 401,
+              body: {
+                error: 'Invalid credentials',
+                attempts_remaining: attemptsRemaining,
+                lockout_minutes: attemptsRemaining === 0 ? FAILED_LOGIN_LOCKOUT_MINUTES : undefined,
+              },
+            };
+          }
+
+          resetSuccessfulLogin(pinRateKey);
+          resetSuccessfulLogin(accountRateKey);
+          recordAuthAudit(db, {
+            userId: user.id,
+            eventType: 'pin_login',
+            outcome: 'success',
+            ipAddress: ip,
+            details: { role: user.role },
+          });
+          return { status: 200, user };
+        },
+      );
+
+      if (verificationResult.status !== 200) {
+        return res.status(verificationResult.status).json(verificationResult.body);
+      }
+
+      const { user } = verificationResult;
+      const remember = !!rememberMe;
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, role: user.role, remember, jti: randomUUID() },
+        getJWTSecret(),
+        { expiresIn: expiresInFor(remember) },
+      );
+
+      const tenant = buildLocalTenant(db, user.id, user.role);
+
+      res.json({
+        access_token: token,
+        token_type: 'bearer',
+        expires_in: remember ? JWT_REMEMBER_EXPIRES_IN_SECONDS : 86400,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          category_ids: parseCategoryIds(user.category_ids),
+        },
+        tenant,
+        tenants: [tenant],
+      });
+    } catch (error: unknown) {
+      res.locals.postHogError = error;
+      console.error('[Auth] PIN login error:', error);
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -513,8 +768,7 @@ router.post('/password/change', authRateLimit(), (req: Request, res: Response) =
     resetPasswordChangeRateLimit(user.id);
     if (!validatePassword(password)) {
       return res.status(400).json({
-        error:
-          'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.',
+        error: PASSWORD_POLICY_MESSAGE,
       });
     }
 
@@ -527,10 +781,70 @@ router.post('/password/change', authRateLimit(), (req: Request, res: Response) =
 
     res.json({ message: 'Password changed successfully' });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+/** Writes the recovered password and audit trail; shared by Master PIN and cloud email recovery. */
+function applyOwnerRecovery(
+  db: ReturnType<typeof getDatabase>,
+  user: { id: string },
+  newPassword: string,
+  via: string,
+): { ok: true; restoredOwnerAccess: boolean } | { ok: false } {
+  const hashedPassword = bcrypt.hashSync(newPassword, 10);
+  const changedAt = now();
+  let restoredOwnerAccess = false;
+  const updated = db.transaction(() => {
+    // Re-checked in the transaction, so a concurrent write cannot turn a
+    // plain reset into a promotion.
+    if (via === 'FloAdmin email approval' || hasActiveAdministrator()) {
+      return db
+        .prepare(
+          'UPDATE users SET password = ?, tokens_valid_after = ?, updated_at = ? WHERE id = ? AND role = ? AND is_active = 1',
+        )
+        .run(hashedPassword, changedAt, changedAt, user.id, INITIAL_ADMIN_ROLE);
+    }
+
+    restoredOwnerAccess = true;
+    return db
+      .prepare(`
+        UPDATE users SET password = ?, role = ?, tokens_valid_after = ?, updated_at = ?
+        WHERE id = ? AND is_active = 1
+      `)
+      .run(hashedPassword, INITIAL_ADMIN_ROLE, changedAt, changedAt, user.id);
+  })();
+  if (updated.changes === 0) {
+    const failure = serializeOperationFailure({
+      capture_point: 'fc.backend.auth.recovery.owner_state_changed',
+      outcome: 'not_applied',
+    });
+    try {
+      if (failure) cloudSync.captureOperationFailure(failure);
+    } catch {
+      // Diagnostics cannot change the recovery conflict response.
+    }
+    return { ok: false };
+  }
+  invalidateUserAuthCache(user.id);
+
+  upsertSettings(db, {
+    last_password_recovery_at: now(),
+    last_password_recovery_user_id: String(user.id),
+    ...(restoredOwnerAccess
+      ? {
+          last_owner_recovery_at: now(),
+          last_owner_recovery_user_id: String(user.id),
+        }
+      : {}),
+  });
+  console.warn(
+    `[Auth] Password recovery: ${restoredOwnerAccess ? 'owner access' : 'owner password'} was reset locally via ${via} for user ${user.id}`,
+  );
+  return { ok: true, restoredOwnerAccess };
+}
 
 // ── POST /api/auth/recover-password ───────────────────────────────────────────
 // Local password recovery for locked-out owner gated by Master PIN; requires no active JWT.
@@ -556,8 +870,7 @@ router.post('/recover-password', authRateLimit(), (req: Request, res: Response) 
     }
     if (!new_password || !validatePassword(new_password)) {
       return res.status(400).json({
-        error:
-          'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.',
+        error: PASSWORD_POLICY_MESSAGE,
       });
     }
 
@@ -584,56 +897,11 @@ router.post('/recover-password', authRateLimit(), (req: Request, res: Response) 
       });
     }
 
-    const hashedPassword = bcrypt.hashSync(new_password, 10);
-    const changedAt = now();
-    let restoredOwnerAccess = false;
-    const updated = db.transaction(() => {
-      // Re-checked in the transaction, so a concurrent write cannot turn a
-      // plain reset into a promotion.
-      if (hasActiveAdministrator()) {
-        return db
-          .prepare(
-            'UPDATE users SET password = ?, tokens_valid_after = ?, updated_at = ? WHERE id = ? AND role = ? AND is_active = 1',
-          )
-          .run(hashedPassword, changedAt, changedAt, user.id, INITIAL_ADMIN_ROLE);
-      }
-
-      restoredOwnerAccess = true;
-      return db
-        .prepare(`
-        UPDATE users SET password = ?, role = ?, tokens_valid_after = ?, updated_at = ?
-        WHERE id = ? AND is_active = 1
-      `)
-        .run(hashedPassword, INITIAL_ADMIN_ROLE, changedAt, changedAt, user.id);
-    })();
-    if (updated.changes === 0) {
-      const failure = serializeOperationFailure({
-        capture_point: 'fc.backend.auth.recovery.owner_state_changed',
-        outcome: 'not_applied',
-      });
-      try {
-        if (failure) cloudSync.captureOperationFailure(failure);
-      } catch {
-        // Diagnostics cannot change the recovery conflict response.
-      }
+    const recovery = applyOwnerRecovery(db, user, new_password, 'Master PIN');
+    if (!recovery.ok) {
       return res.status(409).json({ error: 'Owner access changed during recovery. Try again.' });
     }
-    invalidateUserAuthCache(user.id);
-
-    // Record recovery timestamp and user ID in settings table for audit purposes.
-    upsertSettings(db, {
-      last_password_recovery_at: now(),
-      last_password_recovery_user_id: String(user.id),
-      ...(restoredOwnerAccess
-        ? {
-            last_owner_recovery_at: now(),
-            last_owner_recovery_user_id: String(user.id),
-          }
-        : {}),
-    });
-    console.warn(
-      `[Auth] Password recovery: ${restoredOwnerAccess ? 'owner access' : 'owner password'} was reset locally via Master PIN for user ${user.id}`,
-    );
+    const { restoredOwnerAccess } = recovery;
 
     res.json({
       message: restoredOwnerAccess
@@ -641,11 +909,171 @@ router.post('/recover-password', authRateLimit(), (req: Request, res: Response) 
         : 'Password reset successfully. You can now log in with your new password.',
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[Auth] Password recovery error:', error);
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// ── Cloud email recovery (FloAdmin) ───────────────────────────────────────────
+// The owner approves a reset from the email FloAdmin sends; the new password is
+// chosen and stored here and never leaves this device.
+
+const RESET_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
+
+function cloudRecoveryPrecheck(req: Request, res: Response): boolean {
+  if (!requireLocalSetup(req, res)) return false;
+  if (getUserCount(getDatabase()) === 0) {
+    res.status(409).json({
+      error: 'Setup has not been completed yet. Use first-run setup to create the owner account.',
+    });
+    return false;
+  }
+  if (!cloudSync.isEmailRecoveryAvailable()) {
+    res.status(409).json({ error: 'Email recovery is not available on this install.' });
+    return false;
+  }
+  return true;
+}
+
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  return local && domain ? `${local[0]}***@${domain}` : '';
+}
+
+function sendCloudRecoveryFailure(res: Response, error: unknown) {
+  if (error instanceof CloudRequestError) {
+    if (error.status === 429) {
+      return res.status(429).json({ error: 'Too many reset requests. Try again later.' });
+    }
+    if (error.status === 409) {
+      return res.status(409).json({ error: 'Email recovery is not available on this install.' });
+    }
+    if (error.status === 404) {
+      return res.status(404).json({ error: 'Reset request not found.' });
+    }
+  }
+  console.error('[Auth] Cloud password recovery error:', error);
+  return res.status(502).json({ error: 'Could not reach FloAdmin.' });
+}
+
+router.post(
+  '/recover-password/cloud/request',
+  authRateLimit(),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!cloudRecoveryPrecheck(req, res)) return;
+    const email = cloudSync.getRegisteredOwnerEmail();
+    const owner = getDatabase()
+      .prepare('SELECT id FROM users WHERE lower(email) = ? AND role = ? AND is_active = 1')
+      .get(email, INITIAL_ADMIN_ROLE);
+    if (!owner) {
+      return res.status(409).json({ error: 'Email recovery is not available on this install.' });
+    }
+    try {
+      const signal = getHttpRequestSignal(req);
+      // An unverified owner email gets the verification email first; the reset follows once verified.
+      if (!(await cloudSync.ensureOwnerEmailVerification(signal))) {
+        return res.status(202).json({
+          step: 'verify_email',
+          email_hint: maskEmail(email),
+        });
+      }
+      const data = await cloudSync.requestPasswordReset(signal);
+      res.status(202).json({
+        step: 'reset',
+        reset_id: String(data.reset_id || ''),
+        expires_at: typeof data.expires_at === 'string' ? data.expires_at : null,
+        email_hint: typeof data.email_hint === 'string' ? data.email_hint : null,
+      });
+    } catch (error) {
+      sendCloudRecoveryFailure(res, error);
+    }
+  }),
+);
+
+router.get(
+  '/recover-password/cloud/verification',
+  authRateLimit({ max: 600 }),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!cloudRecoveryPrecheck(req, res)) return;
+    try {
+      res.json({ verified: await cloudSync.isOwnerEmailVerified(getHttpRequestSignal(req)) });
+    } catch (error) {
+      sendCloudRecoveryFailure(res, error);
+    }
+  }),
+);
+
+router.get(
+  '/recover-password/cloud/status',
+  authRateLimit({ max: 600 }),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!cloudRecoveryPrecheck(req, res)) return;
+    const resetId = String(req.query.reset_id || '');
+    if (!RESET_ID_PATTERN.test(resetId)) {
+      return res.status(400).json({ error: 'A valid reset_id is required' });
+    }
+    try {
+      const data = await cloudSync.getPasswordResetStatus(resetId, getHttpRequestSignal(req));
+      res.json({ status: String(data.status || 'pending') });
+    } catch (error) {
+      sendCloudRecoveryFailure(res, error);
+    }
+  }),
+);
+
+router.post(
+  '/recover-password/cloud/complete',
+  authRateLimit(),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!cloudRecoveryPrecheck(req, res)) return;
+    const db = getDatabase();
+    const resetId = String(req.body?.reset_id || '');
+    const newPassword = req.body?.new_password;
+    if (!RESET_ID_PATTERN.test(resetId)) {
+      return res.status(400).json({ error: 'A valid reset_id is required' });
+    }
+    if (!newPassword || !validatePassword(newPassword)) {
+      return res.status(400).json({
+        error: PASSWORD_POLICY_MESSAGE,
+      });
+    }
+
+    // Resolve the account before consuming the single-use grant.
+    const email = cloudSync.getRegisteredOwnerEmail();
+    const user = db
+      .prepare('SELECT * FROM users WHERE lower(email) = ? AND role = ? AND is_active = 1')
+      .get(email, INITIAL_ADMIN_ROLE) as any;
+    if (!user) {
+      return res
+        .status(404)
+        .json({ error: 'No active owner account matches the registered email.' });
+    }
+
+    try {
+      await cloudSync.redeemPasswordReset(resetId, getHttpRequestSignal(req));
+    } catch (error) {
+      if (error instanceof CloudRequestError && error.status === 409) {
+        return res.status(409).json({ error: 'This reset has not been approved or has expired.' });
+      }
+      return sendCloudRecoveryFailure(res, error);
+    }
+
+    const recovery = applyOwnerRecovery(db, user, newPassword, 'FloAdmin email approval');
+    if (!recovery.ok) {
+      return res.status(409).json({
+        error:
+          'Owner access changed during recovery. This reset approval was used and cannot be reused. Request a new password reset.',
+      });
+    }
+    res.json({
+      message: recovery.restoredOwnerAccess
+        ? 'Owner access restored. You can now log in with your new password.'
+        : 'Password reset successfully. You can now log in with your new password.',
+    });
+  }),
+);
 
 // ── GET /api/auth/setup/status ──────────────────────────────────────────────────
 // Returns whether the app needs setup (no users exist yet)
@@ -662,13 +1090,31 @@ router.get('/setup/status', (_req: Request, res: Response) => {
       initialRole: INITIAL_ADMIN_ROLE,
       schemaVersion: getCurrentSchemaVersion(),
       masterPinAvailable: isMasterPinAvailable(),
+      cloudRecoveryAvailable: cloudSync.isEmailRecoveryAvailable(),
       currencyReset,
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// ── POST /api/auth/setup/restore ────────────────────────────────────────────────
+// A brand-new install has no accounts to authorise against and nothing to lose,
+// so the POS computer may restore a backup before the first sign-in.
+
+router.post(
+  '/setup/restore',
+  authRateLimit(),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!requireLocalSetup(req, res)) return;
+    if (getUserCount(getDatabase()) > 0) {
+      return res.status(403).json({ error: 'Sign in to restore a backup on an existing install.' });
+    }
+    return handleRestoreFromPickedFile(req, res);
+  }),
+);
 
 // ── POST /api/auth/setup/initialize ─────────────────────────────────────────────
 // Creates the initial owner user. This endpoint is disabled after any user exists.
@@ -766,8 +1212,7 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
     }
     if (!validatePassword(password)) {
       return res.status(400).json({
-        error:
-          'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.',
+        error: PASSWORD_POLICY_MESSAGE,
       });
     }
 
@@ -954,6 +1399,7 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
       tenants: [tenant],
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[Auth] Setup error:', error);
     const message = error.message || 'Setup failed';
     const status = message.includes('already complete')

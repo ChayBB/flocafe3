@@ -1,6 +1,11 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { E2E_BASE_URL } from './helpers/urls';
-import { E2E_PASSWORD, getE2eToken, setLanguage } from './helpers/test-auth';
+import {
+  E2E_OPERATIONAL_PASSWORD,
+  E2E_PASSWORD,
+  getE2eToken,
+  setLanguage,
+} from './helpers/test-auth';
 
 const RUN = Date.now().toString(36);
 
@@ -26,7 +31,7 @@ async function createAccount(
   const email = `auth-guard-${tag}-${RUN}@flo.local`;
   const res = await request.post(`${E2E_BASE_URL}/api/staff`, {
     headers: ownerHeaders(),
-    data: { name: `AuthGuard ${tag}`, email, password: E2E_PASSWORD, role },
+    data: { name: `AuthGuard ${tag}`, email, password: E2E_OPERATIONAL_PASSWORD, role },
   });
   expect(
     res.status(),
@@ -62,14 +67,18 @@ async function setUserPermissionOverrides(
 
 async function loginForToken(request: APIRequestContext, email: string): Promise<string> {
   const res = await request.post(`${E2E_BASE_URL}/api/auth/login`, {
-    data: { email, password: E2E_PASSWORD },
+    data: { email, password: E2E_OPERATIONAL_PASSWORD },
   });
   expect(res.ok(), `login for ${email} must succeed (got ${res.status()})`).toBeTruthy();
   const body = (await res.json()) as { access_token: string };
   return body.access_token;
 }
 
-async function signInThroughUi(page: Page, email: string): Promise<void> {
+async function signInThroughUi(
+  page: Page,
+  email: string,
+  password = E2E_OPERATIONAL_PASSWORD,
+): Promise<void> {
   await page.goto(`${E2E_BASE_URL}/auth/login`);
   await page.evaluate(() => {
     localStorage.removeItem('token');
@@ -77,7 +86,7 @@ async function signInThroughUi(page: Page, email: string): Promise<void> {
   });
   await page.goto(`${E2E_BASE_URL}/auth/login`);
   await page.locator('#email').fill(email);
-  await page.locator('#password').fill(E2E_PASSWORD);
+  await page.locator('#password').fill(password);
   await page.locator('button[type="submit"]').click();
   await page.waitForURL((url) => !url.pathname.includes('/auth/login'), { timeout: 20_000 });
 }
@@ -158,11 +167,12 @@ test.describe('AuthGuard route normalization and permission gates (#1078)', () =
     page,
   }) => {
     await setLanguage(page, 'en');
-    await signInThroughUi(page, 'owner@flo.local');
+    await signInThroughUi(page, 'owner@flo.local', E2E_PASSWORD);
     await expect(page).toHaveURL(/\/pos\/?$/);
 
     for (const staffPath of ['/staff', '/staff/', '/staff//']) {
       await page.goto(`${E2E_BASE_URL}${staffPath}`);
+      await page.getByRole('tab', { name: 'Role permissions', exact: true }).click();
       await expect(
         page.getByRole('heading', { name: 'Role permissions', exact: true }),
       ).toBeVisible({ timeout: 20_000 });
@@ -200,7 +210,7 @@ test.describe('AuthGuard route normalization and permission gates (#1078)', () =
       data: {
         name: 'Unauthorized Create',
         email: `unauth-${RUN}@flo.local`,
-        password: E2E_PASSWORD,
+        password: E2E_OPERATIONAL_PASSWORD,
         role: 'cashier',
       },
     });

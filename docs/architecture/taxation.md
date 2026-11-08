@@ -76,9 +76,9 @@ remainders across both rather than rounding items or charges in isolation.
 **Payable rounding** is `payableRounding`, which has its own `increment` and its own `method`. It
 decides the smallest amount a customer can actually be charged, which is a cash-handling question
 rather than a tax-arithmetic one, so it is never inferred from `taxRounding`. A pack that declares
-`currency: 'XXX'` and a configured currency with more fraction digits resolves its increment from
-the configured currency instead, so a placeholder-currency pack still produces a payable amount in
-real minor units.
+`currency: 'XXX'` and a configured currency whose fraction digits differ from the pack's increment
+resolves its increment from the configured currency instead, so a placeholder-currency pack still
+produces a payable amount in real minor units.
 
 `decimalPlaces` is bounded at install: an integer from 0 to 6. The payable increment must be finite,
 positive, and at most 1000.
@@ -153,12 +153,25 @@ stored on `orders`, `order_items`, and `bills`, holding the item-level line amou
 During active order mutations (such as item edits, cancellations, discounts, or charge updates),
 `recomputeOrderTotals()` preserves existing items' saved `tax_snapshot` rules without re-evaluating
 them against the active catalog, evaluates configured charge taxes against the active pack via
-`calculateConfiguredChargeTaxes()`, and reallocates document tax rounding across the combined active
-item and charge snapshots before persisting updated line snapshots to `order_items`.
-Once bills are settled or paid, transactions preserve the recorded snapshots.
-`aggregateTaxSnapshots()` in `main/services/tax.ts` folds the item snapshots into an order or bill
-level array, and `invertTaxSnapshot()` negates the line amounts for a void or refund adjustment
-row, so an adjustment reverses the recorded numbers rather than recomputing them.
+`calculateConfiguredChargeTaxes()`, and calls `allocateDocumentTaxRounding()` to reallocate
+undiscounted document tax rounding across active item and charge snapshots before persisting those
+un-order-discounted line allocations to `order_items`, so subsequent discount edits never compound
+on a prior order discount. For the order, bill, and tax-preview (`calculateTaxPreview()`) rollup,
+`rollupOrderTaxes()` in `main/services/tax.ts` applies any order-discount ratio
+(`computeDiscountTaxRatio(discountedSubtotal, subtotal)`) before combining item and charge taxes:
+on `document`-scoped lines, `allocateDocumentTaxRounding()` scales raw unrounded item tax
+components (`amount + roundingRemainder`) by the 40-digit `Decimal` ratio before performing
+document-scope `largest_remainder` allocation across the combined discounted-item and
+unchanged-charge components, while non-document lines scale via `scaleTaxBreakdowns()` and
+`scaleTaxSnapshots()` before `combineItemAndChargeTaxes()` folds the item and charge snapshots into
+an order or bill level array with `aggregateTaxSnapshots()`. Bill item projection
+(`projectOrderItems()` in `main/routes/bills.ts`) reads each item's saved discounted document
+allocation from `order.tax_snapshot` (falling back to `allocateDocumentTaxRounding()` when no
+saved order-level item snapshots are present) so projected line taxes and component reports match
+both new and historical bill rollups.
+Once bills are settled or paid, transactions preserve the recorded snapshots, and
+`invertTaxSnapshot()` negates the line amounts for a void or refund adjustment row, so an adjustment
+reverses the recorded numbers rather than recomputing them.
 
 A split bill produces child snapshots carrying `splitAllocation: 'minor-unit-v1'`, recorded by
 `SPLIT_TAX_SNAPSHOT_VERSION` in `main/routes/bills.ts` and read back in
@@ -169,10 +182,20 @@ reinterpreted as a per-line amount.
 Refunds read the snapshot. Recomputing tax at refund time would produce a different answer if the
 pack had been updated in between, which is the exact failure the snapshot exists to prevent.
 
-The reporting counterpart is `GET /api/reports/tax-components`, backed by
-[`main/services/tax-components.ts`](../../main/services/tax-components.ts). It derives components
-item by item so a bill that mixes categorized and uncategorized lines cannot double-count the
-categorized portion against the bill-level `tax_breakdown`.
+The reporting counterparts are `GET /api/reports/tax-components` and X/Z cash-closure reporting in
+[`main/routes/cash-closures.ts`](../../main/routes/cash-closures.ts), both backed by
+[`main/services/tax-components.ts`](../../main/services/tax-components.ts). `resolveTaxComponents()`
+derives components item by item from stored snapshots and breakdowns so a bill mixing categorized and
+uncategorized lines cannot double-count the categorized portion against the bill-level
+`tax_breakdown`, and never recomputes historical tax from live tax settings. Whole-day X/Z reports
+aggregate paid bills in the day window through `aggregateTaxComponents()`. Session-scoped X/Z reports
+(`computeSessionAggregates()`) include settled bills and partially paid bills on non-cancelled
+orders: a bill settled wholly within
+one shift keeps `resolveTaxComponents()` as-is, while partial or cross-shift bills allocate resolved
+components sequentially across payment lines against the remaining bill total in minor units
+(`allocateSignedMinorUnits()`, `reconcileSnapshotAllocations()`, and `mergeDisplayTaxComponents()`),
+so a shift closed before settlement keeps its collected tax share in its immutable Z snapshot and
+subsequent shifts receive the exact remaining tax.
 
 ## Bundled packs
 
@@ -305,8 +328,9 @@ author cannot rely on any of them.
 - **`storeId` on a pack.** No pack schema field references a store.
 - **Customer tax fields.** A customer carries a registration number, state code, and exempt flag
   through `TaxCustomer`, and nothing tax-address-shaped beyond that.
-- **Reporting by anything other than tax component.** The report surface is
-  `GET /api/reports/tax-components`. There is no reporting by rule, by category, or by jurisdiction.
+- **Reporting by anything other than tax component.** Tax reporting surfaces (such as
+  `GET /api/reports/tax-components` and X/Z cash-closure reports) group only by resolved tax
+  component; there is no reporting by rule, by category, or by jurisdiction.
 
 ## Verification
 
@@ -314,6 +338,7 @@ author cannot rely on any of them.
 npm run test:tax-engine
 npm run test:tax-components
 npm run test:integration-tax
+npm run test:order-totals-recompute
 npm run test:tax-pack-catalog
 npm run test:tax-pack-management
 npm run test:manual-tax-config

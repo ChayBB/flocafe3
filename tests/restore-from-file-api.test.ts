@@ -143,6 +143,35 @@ async function run() {
     assert.equal(anonymous.status, 401, 'restore is refused without a session');
     clearRestoreFileSelection();
 
+    // --- failed pre-validation (missing or invalid backup) does not consume token ---
+    const missingBackupPath = path.join(testDir, 'missing-backup.db');
+    const missingSelection = rememberRestoreFileSelection(missingBackupPath);
+    const missingRes = await request(app)
+      .post('/api/db/restore')
+      .set('Authorization', `Bearer ${ownerToken()}`)
+      .send({ confirmation: RESTORE_CONFIRMATION, selection_token: missingSelection.token });
+    assert.equal(missingRes.status, 404, 'restore of missing file returns 404');
+    assert.equal(
+      consumeRestoreFileSelection(missingSelection.token),
+      missingBackupPath,
+      'missing-file failure does not consume the selection token',
+    );
+
+    const invalidBackupPath = path.join(testDir, 'invalid-backup.db');
+    fs.writeFileSync(invalidBackupPath, 'not a valid backup');
+    const invalidSelection = rememberRestoreFileSelection(invalidBackupPath);
+    const invalidRes = await request(app)
+      .post('/api/db/restore')
+      .set('Authorization', `Bearer ${ownerToken()}`)
+      .send({ confirmation: RESTORE_CONFIRMATION, selection_token: invalidSelection.token });
+    assert.equal(invalidRes.status, 400, 'restore of invalid backup file returns 400');
+    assert.equal(
+      consumeRestoreFileSelection(invalidSelection.token),
+      invalidBackupPath,
+      'invalid-file failure does not consume the selection token',
+    );
+    clearRestoreFileSelection();
+
     // --- a valid single-use selection restores --------------------------------
     const selection = rememberRestoreFileSelection(backupSource);
     const restored = await request(app)
@@ -217,6 +246,36 @@ async function run() {
       'trailing-slash backup succeeds without maintenance deadlock',
     );
     assert.equal(trailingSlashBackup.body.success, true, 'trailing-slash backup reports success');
+
+    // --- fresh install: no session needed, but only while no account exists ---
+    const guardedSelection = rememberRestoreFileSelection(backupSource);
+    const guarded = await request(app)
+      .post('/api/auth/setup/restore')
+      .send({ confirmation: RESTORE_CONFIRMATION, selection_token: guardedSelection.token });
+    assert.equal(guarded.status, 403, 'fresh-install restore is refused once accounts exist');
+    clearRestoreFileSelection();
+
+    getDatabase().pragma('foreign_keys = OFF');
+    getDatabase().prepare('DELETE FROM users').run();
+    getDatabase().pragma('foreign_keys = ON');
+    const freshSelection = rememberRestoreFileSelection(backupSource);
+    const fresh = await request(app)
+      .post('/api/auth/setup/restore')
+      .send({ confirmation: RESTORE_CONFIRMATION, selection_token: freshSelection.token });
+    assert.equal(
+      fresh.status,
+      200,
+      `fresh-install restore needs no session (got ${fresh.status}: ${JSON.stringify(fresh.body)})`,
+    );
+    assert.equal(
+      (
+        getDatabase()
+          .prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND is_active = 1")
+          .get() as { n: number }
+      ).n > 0,
+      true,
+      'an active owner can sign in after the fresh-install restore',
+    );
 
     console.log('✅ Restore-from-file API and authorisation tests passed');
   } finally {

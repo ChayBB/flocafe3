@@ -11,6 +11,7 @@ import { useTranslations, type AppConfig } from 'use-intl';
 import { useAuthStore } from '@/store/auth';
 import { PermissionMatrix } from '@/components/settings/PermissionMatrix';
 import { PermissionAuditLog } from '@/components/settings/PermissionAuditLog';
+import { validatePassword } from '@shared/password-policy';
 import { AttendancePanel } from '@/components/staff/AttendancePanel';
 import { ZoneResponsibilityPanel } from '@/components/staff/ZoneResponsibilityPanel';
 import { StaffProfileDialog } from '@/components/staff/StaffProfileDialog';
@@ -44,6 +45,10 @@ function extractErrorMessage(error: unknown, fallback: string): string {
 }
 
 const isOperationalRole = (role: string) => hasRole(role, OPERATIONAL_ROLES);
+
+function validateStaffPassword(role: string, password: string): boolean {
+  return isOperationalRole(role) ? /^\d{4}$/.test(password) : validatePassword(password);
+}
 
 type StaffTab = 'staff' | 'attendance' | 'zones' | 'permissions';
 const STAFF_TABS = [
@@ -93,6 +98,8 @@ export default function StaffPage() {
     staff_code: '',
     station_ids: [] as string[],
   });
+  const requiresPassword =
+    !editingStaff || (isOperationalRole(editingStaff.role) && !isOperationalRole(form.role));
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -183,6 +190,14 @@ export default function StaffPage() {
       toast.error(tSetup('passwordsMismatch'));
       return;
     }
+    if ((requiresPassword || form.password) && !validateStaffPassword(form.role, form.password)) {
+      toast.error(
+        isOperationalRole(form.role)
+          ? t('operationalPasswordHint')
+          : tSetup('errorPasswordRequirementsNotMet'),
+      );
+      return;
+    }
     try {
       if (editingStaff) {
         await api.put(`/staff/${editingStaff.id}`, {
@@ -217,6 +232,14 @@ export default function StaffPage() {
     if (!resetPwStaff || !newPassword) return;
     if (newPassword !== confirmNewPassword) {
       toast.error(tSetup('passwordsMismatch'));
+      return;
+    }
+    if (!validateStaffPassword(resetPwStaff.role, newPassword)) {
+      toast.error(
+        isOperationalRole(resetPwStaff.role)
+          ? t('operationalPasswordHint')
+          : tSetup('errorPasswordRequirementsNotMet'),
+      );
       return;
     }
     try {
@@ -458,7 +481,7 @@ export default function StaffPage() {
                     })
                   }
                   className="w-full px-3 py-2 pe-10 border rounded-lg outline-none focus:ring-2 focus:ring-brand"
-                  required={!editingStaff}
+                  required={requiresPassword}
                   {...(isOperationalRole(form.role)
                     ? { inputMode: 'numeric' as const, maxLength: 4, pattern: '[0-9]{4}' }
                     : {})}
@@ -486,7 +509,7 @@ export default function StaffPage() {
                   })
                 }
                 className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-brand"
-                required={!editingStaff || Boolean(form.password)}
+                required={requiresPassword || Boolean(form.password)}
                 {...(isOperationalRole(form.role)
                   ? { inputMode: 'numeric' as const, maxLength: 4, pattern: '[0-9]{4}' }
                   : {})}
@@ -506,7 +529,6 @@ export default function StaffPage() {
                     ...form,
                     role,
                     ...(passwordKindChanged ? { password: '', confirmPassword: '' } : {}),
-                    pin: hasRole(role, ROLE_ACCESS.ownerManager) ? form.pin : '',
                     station_ids: role === 'chef' ? form.station_ids : [],
                   });
                 }}
@@ -580,34 +602,32 @@ export default function StaffPage() {
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('staffCodeHint')}</p>
               </div>
-              {hasRole(form.role, ROLE_ACCESS.ownerManager) && (
-                <div>
-                  <div className="relative">
-                    <input
-                      type={showPin ? 'text' : 'password'}
-                      placeholder={editingStaff ? t('pinPlaceholderEdit') : t('pinPlaceholderAdd')}
-                      value={form.pin}
-                      onChange={(e) =>
-                        setForm({ ...form, pin: e.target.value.replace(/\D/g, '').slice(0, 6) })
-                      }
-                      className="w-full px-3 py-2 pe-10 border rounded-lg outline-none focus:ring-2 focus:ring-brand"
-                      maxLength={6}
-                      pattern="[0-9]*"
-                      inputMode="numeric"
-                    />
-                    <button
-                      type="button"
-                      aria-label="Toggle PIN visibility"
-                      title="Toggle PIN visibility"
-                      onClick={() => setShowPin(!showPin)}
-                      className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showPin ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">{t('pinHint')}</p>
+              <div>
+                <div className="relative">
+                  <input
+                    type={showPin ? 'text' : 'password'}
+                    placeholder={editingStaff ? t('pinPlaceholderEdit') : t('pinPlaceholderAdd')}
+                    value={form.pin}
+                    onChange={(e) =>
+                      setForm({ ...form, pin: e.target.value.replace(/\D/g, '').slice(0, 6) })
+                    }
+                    className="w-full px-3 py-2 pe-10 border rounded-lg outline-none focus:ring-2 focus:ring-brand"
+                    maxLength={6}
+                    pattern="[0-9]*"
+                    inputMode="numeric"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Toggle PIN visibility"
+                    title="Toggle PIN visibility"
+                    onClick={() => setShowPin(!showPin)}
+                    className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPin ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
-              )}
+                <p className="text-xs text-muted-foreground mt-1">{t('pinHint')}</p>
+              </div>
               <Button type="submit" className="w-full">
                 {editingStaff ? t('updateButton') : t('addButton')}
               </Button>

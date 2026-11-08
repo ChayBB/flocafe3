@@ -16,7 +16,22 @@ test('a browser bill waits for its logo to decode before it prints', async ({ pa
   const tableNumber = `E2E-LOGO-${Date.now()}`;
   let tableId: string | undefined;
   let orderId: number | undefined;
+  let cleanupApproverId: string | undefined;
+  const ownerHeaders = { Authorization: `Bearer ${getE2eToken()}` };
+  const cleanupPin = '6523';
   try {
+    const approver = await page.request.post(`${BASE}/api/staff`, {
+      headers: ownerHeaders,
+      data: {
+        name: `Cleanup ${tableNumber}`,
+        email: `${tableNumber.toLowerCase()}@flo.local`,
+        password: E2E_PASSWORD,
+        role: 'manager',
+        pin: cleanupPin,
+      },
+    });
+    expect(approver.status(), await approver.text()).toBe(201);
+    cleanupApproverId = (await approver.json()).staff.id;
     const put = await page.request.put(`${BASE}/api/settings/business`, {
       headers,
       data: {
@@ -43,7 +58,21 @@ test('a browser bill waits for its logo to decode before it prints', async ({ pa
       },
     });
     expect(orderRes.ok()).toBeTruthy();
-    orderId = (await orderRes.json()).order.id;
+    const { order } = (await orderRes.json()) as {
+      order: { id: number; items: { id: number }[] };
+    };
+    orderId = order.id;
+    const itemId = order.items[0].id;
+    const served = await page.request.patch(`${BASE}/api/order-items/${itemId}/status`, {
+      headers,
+      data: { status: 'served' },
+    });
+    expect(served.ok(), await served.text()).toBeTruthy();
+    const confirmed = await page.request.post(`${BASE}/api/orders/${orderId}/items/confirm-served`, {
+      headers,
+      data: { item_ids: [itemId] },
+    });
+    expect(confirmed.ok(), await confirmed.text()).toBeTruthy();
     const billRes = await page.request.post(`${BASE}/api/bills/generate`, {
       headers,
       data: { order_id: orderId },
@@ -93,18 +122,27 @@ test('a browser bill waits for its logo to decode before it prints', async ({ pa
     expect(images.length).toBeGreaterThan(0);
     expect(images.every(Boolean)).toBe(true);
   } finally {
-    if (orderId) {
-      await page.request.patch(`${BASE}/api/orders/${orderId}/status`, {
-        headers,
-        data: { status: 'cancelled' },
-      });
+    try {
+      if (orderId) {
+        const cancelled = await page.request.patch(`${BASE}/api/orders/${orderId}/status`, {
+          headers,
+          data: { status: 'cancelled', override_pin: cleanupPin, approver_id: cleanupApproverId },
+        });
+        expect(cancelled.ok(), await cancelled.text()).toBeTruthy();
+      }
+    } finally {
+      if (tableId) {
+        await page.request.patch(`${BASE}/api/tables/${tableId}/status`, {
+          headers,
+          data: { status: 'available' },
+        });
+      }
+      await page.request.put(`${BASE}/api/settings/business`, { headers, data: original });
+      if (cleanupApproverId) {
+        await page.request.post(`${BASE}/api/staff/${cleanupApproverId}/deactivate`, {
+          headers: ownerHeaders,
+        });
+      }
     }
-    if (tableId) {
-      await page.request.patch(`${BASE}/api/tables/${tableId}/status`, {
-        headers,
-        data: { status: 'available' },
-      });
-    }
-    await page.request.put(`${BASE}/api/settings/business`, { headers, data: original });
   }
 });

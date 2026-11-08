@@ -1,3 +1,9 @@
+import {
+  assertOnlineAllowed,
+  getOfflineModeAbortSignal,
+  isOfflineMode,
+  OfflineModeError,
+} from '../services/offline-mode';
 import { createHash, verify, type KeyLike } from 'crypto';
 import type { CountryPack, CountryTaxPackPluginArtifact, PluginPrintTemplate } from './types';
 import { TRUSTED_TAX_PACK_SIGNING_PUBLIC_KEY } from './trusted-signing-key';
@@ -128,11 +134,13 @@ export function taxPackSha256(value: string): string {
 function trustedReleaseDownloadUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:'
-      && url.hostname === 'github.com'
-      && !url.username
-      && !url.password
-      && url.pathname.startsWith(RELEASE_DOWNLOAD_PATH_PREFIX);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      !url.username &&
+      !url.password &&
+      url.pathname.startsWith(RELEASE_DOWNLOAD_PATH_PREFIX)
+    );
   } catch {
     return false;
   }
@@ -141,23 +149,38 @@ function trustedReleaseDownloadUrl(value: string): boolean {
 function validCatalogEntry(value: unknown): value is TaxPackCatalogEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
-  return typeof entry.id === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(entry.id)
-    && typeof entry.publisher === 'string' && entry.publisher.length > 0
-    && typeof entry.country === 'string' && /^([A-Z]{2}|\*)$/.test(entry.country)
-    && typeof entry.jurisdiction === 'string' && entry.jurisdiction.length > 0
-    && typeof entry.version === 'string' && /^\d+\.\d+\.\d+$/.test(entry.version)
-    && typeof entry.publishedAt === 'string' && Number.isFinite(Date.parse(entry.publishedAt))
-    && typeof entry.minFloVersion === 'string' && /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(entry.minFloVersion)
-    && typeof entry.digest === 'string' && /^[a-f0-9]{64}$/.test(entry.digest)
-    && typeof entry.downloadUrl === 'string' && trustedReleaseDownloadUrl(entry.downloadUrl)
-    && typeof entry.signatureUrl === 'string' && trustedReleaseDownloadUrl(entry.signatureUrl);
+  return (
+    typeof entry.id === 'string' &&
+    /^[a-z0-9][a-z0-9-]*$/.test(entry.id) &&
+    typeof entry.publisher === 'string' &&
+    entry.publisher.length > 0 &&
+    typeof entry.country === 'string' &&
+    /^([A-Z]{2}|\*)$/.test(entry.country) &&
+    typeof entry.jurisdiction === 'string' &&
+    entry.jurisdiction.length > 0 &&
+    typeof entry.version === 'string' &&
+    /^\d+\.\d+\.\d+$/.test(entry.version) &&
+    typeof entry.publishedAt === 'string' &&
+    Number.isFinite(Date.parse(entry.publishedAt)) &&
+    typeof entry.minFloVersion === 'string' &&
+    /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(entry.minFloVersion) &&
+    typeof entry.digest === 'string' &&
+    /^[a-f0-9]{64}$/.test(entry.digest) &&
+    typeof entry.downloadUrl === 'string' &&
+    trustedReleaseDownloadUrl(entry.downloadUrl) &&
+    typeof entry.signatureUrl === 'string' &&
+    trustedReleaseDownloadUrl(entry.signatureUrl)
+  );
 }
 
 export function parseTaxPackCatalog(value: unknown): TaxPackCatalog {
   if (!value || typeof value !== 'object') throw new Error('Tax pack catalog is not an object');
   const catalog = value as Record<string, unknown>;
   if (catalog.schemaVersion !== 1) throw new Error('Unsupported tax pack catalog schema');
-  if (typeof catalog.generatedAt !== 'string' || !Number.isFinite(Date.parse(catalog.generatedAt))) {
+  if (
+    typeof catalog.generatedAt !== 'string' ||
+    !Number.isFinite(Date.parse(catalog.generatedAt))
+  ) {
     throw new Error('Tax pack catalog generatedAt is invalid');
   }
   if (!Array.isArray(catalog.packs) || !catalog.packs.every(validCatalogEntry)) {
@@ -176,22 +199,48 @@ async function fetchText(
   fetchImpl: FetchLike,
   headers?: Record<string, string>,
   signal?: AbortSignal,
+  feature = 'Tax pack download',
 ): Promise<string> {
-  const response = await fetchImpl(url, {
-    headers: {
-      'User-Agent': 'FloCafe-Tax-Pack-Manager',
-      Accept: 'application/json',
-      ...headers,
-    },
-    redirect: 'follow',
-    signal: signal
-      ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
-      : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  assertOnlineAllowed(feature);
+  const offlineSignal = getOfflineModeAbortSignal();
+  const signals: AbortSignal[] = [offlineSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)];
+  if (signal) signals.push(signal);
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      headers: {
+        'User-Agent': 'FloCafe-Tax-Pack-Manager',
+        Accept: 'application/json',
+        ...headers,
+      },
+      redirect: 'follow',
+      signal: AbortSignal.any(signals),
+    });
+  } catch (error) {
+    if (isOfflineMode() || offlineSignal.aborted) {
+      throw new OfflineModeError(feature);
+    }
+    throw error;
+  }
+  if (isOfflineMode() || offlineSignal.aborted) {
+    await response.body?.cancel().catch(() => {});
+    throw new OfflineModeError(feature);
+  }
   if (!response.ok) throw new Error(`Download failed with HTTP ${response.status}`);
   const declaredLength = Number(response.headers.get('content-length') || 0);
   if (declaredLength > maxBytes) throw new Error('Downloaded artifact exceeds the size limit');
-  const bytes = Buffer.from(await response.arrayBuffer());
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch (error) {
+    if (isOfflineMode() || offlineSignal.aborted) {
+      throw new OfflineModeError(feature);
+    }
+    throw error;
+  }
+  if (isOfflineMode() || offlineSignal.aborted) {
+    throw new OfflineModeError(feature);
+  }
   if (bytes.length > maxBytes) throw new Error('Downloaded artifact exceeds the size limit');
   return bytes.toString('utf8');
 }
@@ -200,13 +249,16 @@ export async function fetchRemoteTaxPackCatalog(
   fetchImpl: FetchLike = fetch,
   signal?: AbortSignal,
 ): Promise<RemoteTaxPackCatalog> {
+  assertOnlineAllowed('Tax pack catalog');
   for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
+    assertOnlineAllowed('Tax pack catalog');
     const releasesJson = await fetchText(
       `${RELEASES_API_URL}?per_page=100&page=${page}`,
       MAX_CATALOG_BYTES,
       fetchImpl,
       { Accept: 'application/vnd.github+json' },
       signal,
+      'Tax pack catalog',
     );
     let releases: GitHubRelease[];
     try {
@@ -217,25 +269,32 @@ export async function fetchRemoteTaxPackCatalog(
     if (!Array.isArray(releases)) throw new Error('GitHub Releases response is invalid');
 
     for (const release of releases) {
-      if (release.draft === true
-        || typeof release.tag_name !== 'string'
-        || !/^tax-pack-[a-z0-9][a-z0-9-]*-v\d+\.\d+\.\d+$/.test(release.tag_name)
-        || !Array.isArray(release.assets)) {
+      if (
+        release.draft === true ||
+        typeof release.tag_name !== 'string' ||
+        !/^tax-pack-[a-z0-9][a-z0-9-]*-v\d+\.\d+\.\d+$/.test(release.tag_name) ||
+        !Array.isArray(release.assets)
+      ) {
         continue;
       }
       const catalogAsset = (release.assets as GitHubReleaseAsset[]).find(
         (asset) => asset.name === 'catalog.json' && typeof asset.browser_download_url === 'string',
       );
-      if (!catalogAsset || typeof catalogAsset.browser_download_url !== 'string'
-        || !trustedReleaseDownloadUrl(catalogAsset.browser_download_url)) {
+      if (
+        !catalogAsset ||
+        typeof catalogAsset.browser_download_url !== 'string' ||
+        !trustedReleaseDownloadUrl(catalogAsset.browser_download_url)
+      ) {
         continue;
       }
+      assertOnlineAllowed('Tax pack catalog');
       const catalogJson = await fetchText(
         catalogAsset.browser_download_url,
         MAX_CATALOG_BYTES,
         fetchImpl,
         undefined,
         signal,
+        'Tax pack catalog',
       );
       let parsed: unknown;
       try {
@@ -272,38 +331,56 @@ function validPluginPrintTemplate(value: unknown): value is PluginPrintTemplate 
     ? template.templatePayload
     : template.payload;
   const paperColumns = Array.isArray(template.paperColumns) ? template.paperColumns : [];
-  const hasPaperColumns = paperColumns.length > 0
-    && paperColumns.every((width) => Number.isInteger(width) && [32, 36, 40, 42, 44, 48].includes(width as number));
-  const payloadObject = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const hasPaperColumns =
+    paperColumns.length > 0 &&
+    paperColumns.every(
+      (width) => Number.isInteger(width) && [32, 36, 40, 42, 44, 48].includes(width as number),
+    );
+  const payloadObject =
+    payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
   // Validate optional additive labels map fail-closed at install time.
   validateTemplateLabelsMap(payloadObject.labels);
   // Charge rows are an additive v1 capability declaration. Validate only when
   // present so older signed templates retain their existing contract.
   if (payloadObject.format === 'escpos-line-template-v1') {
-    const totals = payloadObject.totals && typeof payloadObject.totals === 'object' && !Array.isArray(payloadObject.totals)
-      ? payloadObject.totals as Record<string, unknown>
-      : {};
+    const totals =
+      payloadObject.totals &&
+      typeof payloadObject.totals === 'object' &&
+      !Array.isArray(payloadObject.totals)
+        ? (payloadObject.totals as Record<string, unknown>)
+        : {};
     validateTemplateChargeRows(totals.chargeRows);
   }
-  const payloadProfiles = Array.isArray(payloadObject.widthProfiles) ? payloadObject.widthProfiles : [];
-  const hasMatchingProfiles = payloadObject.format === 'escpos-line-template-v1'
-    && payloadProfiles.length > 0
-    && paperColumns.every((width) => payloadProfiles.some((profile) => {
-      if (!profile || typeof profile !== 'object') return false;
-      return (profile as Record<string, unknown>).columns === width;
-    }));
-  return typeof template.id === 'string' && /^[a-z0-9][a-z0-9._-]*$/.test(template.id)
-    && typeof template.displayName === 'string' && template.displayName.trim().length > 0
-    && typeof template.country === 'string' && /^([A-Z]{2}|\*)$/.test(template.country)
-    && typeof template.jurisdiction === 'string' && template.jurisdiction.length > 0
-    && hasPaperColumns
-    && hasMatchingProfiles
-    && !!renderer
-    && typeof renderer.id === 'string'
-    && typeof renderer.version === 'number'
-    && Number.isInteger(renderer.version)
-    && renderer.version > 0
-    && payload !== undefined;
+  const payloadProfiles = Array.isArray(payloadObject.widthProfiles)
+    ? payloadObject.widthProfiles
+    : [];
+  const hasMatchingProfiles =
+    payloadObject.format === 'escpos-line-template-v1' &&
+    payloadProfiles.length > 0 &&
+    paperColumns.every((width) =>
+      payloadProfiles.some((profile) => {
+        if (!profile || typeof profile !== 'object') return false;
+        return (profile as Record<string, unknown>).columns === width;
+      }),
+    );
+  return (
+    typeof template.id === 'string' &&
+    /^[a-z0-9][a-z0-9._-]*$/.test(template.id) &&
+    typeof template.displayName === 'string' &&
+    template.displayName.trim().length > 0 &&
+    typeof template.country === 'string' &&
+    /^([A-Z]{2}|\*)$/.test(template.country) &&
+    typeof template.jurisdiction === 'string' &&
+    template.jurisdiction.length > 0 &&
+    hasPaperColumns &&
+    hasMatchingProfiles &&
+    !!renderer &&
+    typeof renderer.id === 'string' &&
+    typeof renderer.version === 'number' &&
+    Number.isInteger(renderer.version) &&
+    renderer.version > 0 &&
+    payload !== undefined
+  );
 }
 
 function normalizePluginPrintTemplate(template: PluginPrintTemplate): PluginPrintTemplate {
@@ -314,7 +391,11 @@ function normalizePluginPrintTemplate(template: PluginPrintTemplate): PluginPrin
   };
 }
 
-function parseSignedArtifact(rawJson: string): { pack: CountryPack; packJson: string; printTemplates: PluginPrintTemplate[] } {
+function parseSignedArtifact(rawJson: string): {
+  pack: CountryPack;
+  packJson: string;
+  printTemplates: PluginPrintTemplate[];
+} {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawJson);
@@ -365,11 +446,20 @@ export async function downloadAndVerifyTaxPack(
   publicKey: KeyLike = TRUSTED_TAX_PACK_SIGNING_PUBLIC_KEY,
   signal?: AbortSignal,
 ): Promise<VerifiedTaxPackArtifact> {
+  assertOnlineAllowed('Tax pack download');
   if (!validCatalogEntry(entry)) throw new Error('Tax pack catalog entry is invalid');
   const [packJson, signature] = await Promise.all([
-    fetchText(entry.downloadUrl, MAX_PACK_BYTES, fetchImpl, undefined, signal),
-    fetchText(entry.signatureUrl, MAX_SIGNATURE_BYTES, fetchImpl, { Accept: 'text/plain' }, signal),
+    fetchText(entry.downloadUrl, MAX_PACK_BYTES, fetchImpl, undefined, signal, 'Tax pack download'),
+    fetchText(
+      entry.signatureUrl,
+      MAX_SIGNATURE_BYTES,
+      fetchImpl,
+      { Accept: 'text/plain' },
+      signal,
+      'Tax pack download',
+    ),
   ]);
+  assertOnlineAllowed('Tax pack download');
   if (taxPackSha256(packJson) !== entry.digest) {
     throw new Error('Tax pack digest does not match the catalog');
   }
@@ -379,13 +469,15 @@ export async function downloadAndVerifyTaxPack(
 
   const artifact = parseSignedArtifact(packJson);
   const pack = artifact.pack;
-  if (pack.id !== entry.id
-    || pack.version !== entry.version
-    || pack.publisher !== entry.publisher
-    || pack.country !== entry.country
-    || pack.jurisdiction !== entry.jurisdiction
-    || pack.publishedAt !== entry.publishedAt
-    || pack.minFloVersion !== entry.minFloVersion) {
+  if (
+    pack.id !== entry.id ||
+    pack.version !== entry.version ||
+    pack.publisher !== entry.publisher ||
+    pack.country !== entry.country ||
+    pack.jurisdiction !== entry.jurisdiction ||
+    pack.publishedAt !== entry.publishedAt ||
+    pack.minFloVersion !== entry.minFloVersion
+  ) {
     throw new Error('Tax pack identity does not match the signed catalog entry');
   }
   if (pack.publisher === 'local') {

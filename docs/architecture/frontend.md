@@ -71,8 +71,10 @@ native route does not exist at all.
   from a LAN host reaches that host's API rather than a hard-coded address.
 - The request interceptor attaches `Bearer <token>` from `localStorage.token` when a token exists.
 - A `401` clears the token and hard-navigates to `/auth/login`, except on `/kds`, where the KDS
-  view renders its own inline login, and on the login page itself, where the login form reports the
-  error.
+  view renders its own inline login, on the login page itself, where the login form reports the
+  error, and when the request passes `skipAuthRedirect: true` (used by `loadFromStorage`'s startup
+  `GET /auth/me` probe so [`AuthGuard`](../../frontend/src/components/layout/AuthGuard.tsx) routes
+  cleanly after clearing the expired session).
 - A `403` carrying `{ code: 'permission_denied' }` dispatches a `flo:authorization-denied` window
   event. [`AuthGuard`](../../frontend/src/components/layout/AuthGuard.tsx) listens for it and calls
   `refreshAuthContext`, so an owner tightening a permission takes effect on the next request
@@ -346,17 +348,18 @@ for the channel list and the absence assertions; argument and return-type change
 presence-only member need a look at both files.
 
 Every privileged channel in [`main/ipc.ts`](../../main/ipc.ts) is registered through the `handle`
-wrapper, which calls `isTrustedSender` before the listener runs and returns
-`{ error: 'Unauthorized sender' }` to anything else. `isTrustedSender` requires the calling
-frame's URL to be `http:` on `localhost` or `127.0.0.1`. That establishes **which window is
-calling**. It does not establish **who is signed in**, and the single POS window serves every role
-from chef to owner. Everything else in this section follows from that gap.
+wrapper, which calls `isTrustedMainWindowSender` before the listener runs and returns
+`{ error: 'Unauthorized sender' }` to anything else. `isTrustedMainWindowSender` requires the caller
+to be the active main `BrowserWindow`, its current top-level `mainFrame`, and `http:` on `localhost`
+or `127.0.0.1` at the active Express server port. That establishes **which window is calling**. It
+does not establish **who is signed in**, and the single POS window serves every role from chef to
+owner. Everything else in this section follows from that gap.
 
 Registering a privileged channel with a bare `ipcMain.handle` skips the check. All privileged
 channels in [`main/ipc.ts`](../../main/ipc.ts) go through the `handle` wrapper, and direct update
 and status handlers in [`main/update-ipc.ts`](../../main/update-ipc.ts) go through
-`registerDirectUpdateIpcHandlers` using `isTrustedMainWindowSender`; any new channel must enforce
-sender validation.
+`registerDirectUpdateIpcHandlers`, both using `isTrustedMainWindowSender`; any new channel must
+enforce sender validation.
 
 ### What the settings channel may write
 
@@ -431,8 +434,9 @@ reopen.
 Write it on the HTTP settings route, gated on the same permission as its neighbours, and read it
 through `api`. Use the IPC settings channel for nothing. A genuinely new native capability needs
 three things together: a `contextBridge` entry in `preload.ts`, a `handle` wrapper in `ipc.ts` so
-`isTrustedSender` applies, and a matching entry in `ElectronAPI`. If it is a privileged write, it
-also needs an authorization step that can see the signed-in user, because the origin check cannot.
+`isTrustedMainWindowSender` applies, and a matching entry in `ElectronAPI`. If it is a privileged
+write, it also needs an authorization step that can see the signed-in user, because the origin check
+cannot.
 
 ## State stores
 
@@ -442,10 +446,10 @@ hook because it carries the transport:
 
 | Store | Holds | Persistence |
 | --- | --- | --- |
-| [`auth.ts`](../../frontend/src/store/auth.ts) | `user`, `token`, `tenants`, `currentTenant`, `loading`, and the locales that failed to warm at bootstrap | token and tenant in `localStorage`; throws `StorageUnavailableError` when storage is unavailable |
+| [`auth.ts`](../../frontend/src/store/auth.ts) | `user`, `token`, `tenants`, `currentTenant`, `loading`, `isLocked`, and the locales that failed to warm at bootstrap | token and tenant in `localStorage`; throws `StorageUnavailableError` when storage is unavailable |
 | [`cart.ts`](../../frontend/src/store/cart.ts) | cart items with their addons, instructions and selected product variant, order type, table, customer, guest count, delivery details, and the subtotal and item count selectors | none |
 | [`held-orders.ts`](../../frontend/src/store/held-orders.ts) | suspended orders keyed by table, and the fetch, hold, restore, remove, and lookup actions over `/held-orders` | none |
-| [`pos-settings.ts`](../../frontend/src/store/pos-settings.ts) | the tenant's POS configuration, printer defaults, bill template and provenance, receipt and kitchen-ticket language policy | `persist` under the `pos-settings` key, version 5; `partialize` excludes `whatsappEnabled`, `billLanguagePolicy`, and `kotLanguagePolicy` |
+| [`pos-settings.ts`](../../frontend/src/store/pos-settings.ts) | the tenant's POS configuration, printer defaults, bill template and provenance, receipt and kitchen-ticket language policy, and idle `autoLockMinutes` | `persist` under the `pos-settings` key, version 5; `partialize` excludes `whatsappEnabled`, `billLanguagePolicy`, `kotLanguagePolicy`, and `autoLockMinutes` |
 | [`theme.ts`](../../frontend/src/store/theme.ts) | `mode` and whether this session made an explicit choice | none; `useThemeModeToggle` writes through the API and rolls the store back when the write fails |
 | [`usePrinterStore`](../../frontend/src/hooks/usePrinter.ts) | connection status, the hardware and WebUSB printer records, the print method, the last emitted bytes, and the print actions: `printBill`, `printTaxBill`, `printKot`, `printDeliverySlip` | `persist` |
 
@@ -457,10 +461,13 @@ instead of the shared one.
 The renderer's print surface is a decision tree, not a single path. All of it lives in
 [`usePrinterStore`](../../frontend/src/hooks/usePrinter.ts), and the shared kernel, renderers, and
 transports are described in [Printing architecture](printing.md). Before dispatching a bill or tax
-bill, `usePrinterStore` awaits receipt settings hydration (`ensureReceiptSettingsLoaded()`, backed
-by [`useReceiptSettingsSync`](../../frontend/src/hooks/useReceiptSettingsSync.ts)) so storefront
+bill, `usePrinterStore` awaits tenant-scoped receipt settings hydration
+(`ensureReceiptSettingsLoaded(expectedTenantId)`, backed by
+[`useReceiptSettingsSync`](../../frontend/src/hooks/useReceiptSettingsSync.ts)) so storefront
 branding and receipt metadata are loaded into `pos-settings.ts` from `GET /api/settings/business`
-before rendering.
+before rendering. Switching `currentTenant` invalidates cached hydration and forces an immediate
+re-sync (bypassing the 60-second focus throttle), and any in-flight bill or tax-bill print whose
+active tenant changes aborts with `PrintCancelledOnTenantChangeError`.
 
 For a bill or a kitchen ticket, in the order the store tries them:
 
@@ -482,7 +489,8 @@ For a bill or a kitchen ticket, in the order the store tries them:
 
 ### The courier slip takes a shorter path
 
-`printDeliverySlip` is the fourth print action, and it has no raster path. A delivery slip carries
+`printDeliverySlip` is the fourth print action, and it skips step 2's main-process raster IPC. A
+delivery slip carries
 the address, the full contact block, payment/collection status, and order lines, and it resolves
 through three routes:
 
@@ -503,7 +511,8 @@ rule that a renderer consumes a document does not hold for the WebUSB and browse
 The projection carries the order and delivery notes, and the summary from
 `GET /api/printers/delivery-slip-payment/:orderId` carries the expected collection method, which
 all three paths word through `deliverySlipExpectedPaymentText` in `shared/print/document.ts`. The
-cart records both delivery details beside the delivery address, and only for delivery orders.
+cart records both delivery details and the delivery address in its order-details summary and drawer,
+and only for delivery orders.
 
 The action is reachable on an unpaid delivery order, because that is the workflow: the courier
 leaves before the customer settles. `OrderCard` renders it outside the payment branches, limited to
@@ -541,10 +550,10 @@ and the auth store keeps the languages that failed. Every print action calls
 a receipt warning saying English labels were used. A receipt that renders in the wrong language is
 a financial document, not a cosmetic bug.
 
-## Internationalization: 24 locales
+## Internationalization: 26 locales
 
 [`frontend/src/lib/i18n/languages.ts`](../../frontend/src/lib/i18n/languages.ts) is the renderer's
-registry. It holds 24 entries, and
+registry. It holds 26 entries, and
 [`frontend/src/lib/i18n/messages/`](../../frontend/src/lib/i18n/messages) holds one JSON file per
 entry. Each registry entry carries the BCP-47 locale tag, the native name, the text direction, the
 `selectable` flag, and a dynamic chunk loader.
@@ -571,9 +580,13 @@ against `en.json`, the derived print-label table, and a `tsc` pass over the fron
 
 ## Customer display
 
-`/customer-display` is a signed-in order-status board. It pages through `GET /orders` via
-`before_id` cursor pagination (100 orders per page, up to 50 pages) filtered by configured statuses
-and shows active orders in a Preparing column (`pending`, `preparing`) and a Ready column (`ready`).
+`/customer-display` is a signed-in order-status board. It pages through `GET /orders` with
+`view=active` and `board_status` set to the configured statuses via `before_id` cursor pagination
+(100 orders per page, up to 50 pages) so effective board eligibility applies before pagination,
+projects effective board status from `order.items` for settled `completed` orders via
+`projectBoardStatusFromItems` in [`shared/order-item-status.ts`](../../shared/order-item-status.ts)
+(see [Order lifecycle](order-lifecycle.md#order-status)), and shows eligible orders in a Preparing
+column (`pending`, `preparing`) and a Ready column (`ready`).
 It re-reads `GET /settings/customer-display` on every poll cycle, so changes made in Settings >
 Kitchen Display apply without reloading the board. The tenant-wide config sets which statuses show,
 the refresh interval, and whether the last-updated time is shown. Deduplicated orders are sorted
@@ -594,8 +607,9 @@ clearly labelled local preview can be selected before pairing. Switching address
 one-time link without creating another token. If no LAN address is available, the card says so and
 offers only the local preview; if address lookup fails, it shows an error and retry action. The board
 moves the token from the URL fragment into `localStorage` and polls
-`GET /api/customer-display/feed` with it instead of using a staff session, so it needs no login and
-can read nothing but order numbers and statuses. It follows `next_cursor` across pages (100 orders
+`GET /api/customer-display/feed` ([API reference](../reference/api.md#customer-display-feed)) with
+it instead of using a staff session, so it needs no login and can read nothing but order numbers and
+statuses. It follows `next_cursor` across pages (100 orders
 per page, up to 50 pages) to display the complete eligible queue, deduplicating orders and updating
 the board state atomically per poll cycle. When the feed answers `401` (the token was revoked),
 in-flight requests abort immediately, the board clears the stored token and orders, and shows an
@@ -621,8 +635,9 @@ unpaired screen.
 | Image handling | react-dropzone, react-easy-crop |
 | Phone numbers | libphonenumber-js |
 
-The `shadcn` CLI is a development dependency used to add primitives; the primitives themselves are
-committed under `src/components/ui` and are edited in place.
+The `shadcn` CLI can be invoked on demand via `npx shadcn` to add primitives; the primitives under
+`src/components/ui` and the Tailwind utilities in `src/app/shadcn-tailwind.css` are vendored in the
+repository and edited in place.
 
 ## Project structure
 
@@ -643,23 +658,24 @@ frontend/src/
 │   ├── kds/                    Kitchen display, login, tabs and kanban views
 │   ├── layout/                 Title bar, sidebar, status bar, auth guard, theme sync
 │   ├── orders/                 Order card, history grid, refund modal
-│   ├── pos/                    Cart, product grid, payment, number pad, checkout modals
+│   ├── pos/                    Cart, product grid, payment, number pad, checkout modals,
+│   │                           payment queue drawer, payment ticket modal
 │   ├── products/               Product image uploader
 │   ├── providers/              I18nProvider
 │   ├── settings/               The settings screen's building blocks:
-│   │   BetaChannelToggle, ChargesSettingsCard, CurrencyResetDialog, DatabaseSettingsTab,
-│   │   GeneralSettingsTab, HealthCheckDialog,
-│   │   InitializeDatabaseDialog, LocalePreferencesPanel, MasterPinPrompt,
-│   │   PaymentMethodsSettings, PermissionAuditLog, PermissionMatrix,
-│   │   PrintersSettingsTab, SettingsTabShell, TaxConfigurationPanel,
-│   │   Toggle, WhatsAppEnableCard
+│   │   BetaChannelToggle, ChargesSettingsCard, CountersSettingsTab,
+│   │   CurrencyResetDialog, DatabaseSettingsTab, GeneralSettingsTab,
+│   │   HealthCheckDialog, InitializeDatabaseDialog, LocalePreferencesPanel,
+│   │   MasterPinPrompt, PaymentMethodsSettings, PermissionAuditLog,
+│   │   PermissionMatrix, PrintersSettingsTab, SettingsTabShell,
+│   │   TaxConfigurationPanel, Toggle, WhatsAppEnableCard
 │   ├── support/                The support hub: SupportTicketForm, DiagnosticsPanel
 │   ├── tables/                 Floorplan editor, table move modal, table turnover badge
 │   ├── ui/                     shadcn/ui primitives
 │   └── updates/                Update download prompt and install guard dialog
 ├── hooks/                      Printer, KDS, theme, update, cash, approver, and formatting hooks
 ├── lib/
-│   ├── i18n/                   Language registry, loader, and the 24 message files
+│   ├── i18n/                   Language registry, loader, and the 26 message files
 │   ├── printer/                Encoders, document builders, warnings, WebUSB bridge,
 │   │                           and the delivery-slip encoder and browser renderer
 │   ├── updates/                Beta channel, auto-check, and restart-and-install helpers

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { Suspense, useState, useEffect, useRef } from 'react';
 import api, {
   captureClientOperationFailure,
   createOperationReference,
@@ -8,7 +8,17 @@ import api, {
 } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { Button } from '@/components/ui/button';
-import { Trash2, Printer, Percent, Banknote, Search, Plus, Loader2, Download } from 'lucide-react';
+import {
+  Trash2,
+  Printer,
+  Percent,
+  Banknote,
+  Search,
+  Plus,
+  Loader2,
+  Download,
+  X,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 import PaymentModal from '@/components/pos/PaymentModal';
 import CreateCustomerModal from '@/components/pos/CreateCustomerModal';
@@ -22,12 +32,16 @@ import type { Order, OrderItem, Bill } from '@/lib/types';
 import { getCurrencySymbol, getCountryByCode } from '@/lib/countries';
 import { useCurrencyUnitAdapter } from '@/hooks/useCurrencyUnitAdapter';
 import { getDiscountInputStep, normalizeFixedDiscountValue } from '@/lib/currency-input';
-import { usePrinterStore } from '@/hooks/usePrinter';
+import { isPrintCancelledOnTenantChangeError, usePrinterStore } from '@/hooks/usePrinter';
 import { showPrintWarningsToast } from '@/lib/printer/warnings-toast';
-import { formatReceiptErrorToast, extractPrinterErrorMessage } from '@/lib/printer/warnings';
+import {
+  formatKotErrorToast,
+  formatReceiptErrorToast,
+  extractPrinterErrorMessage,
+} from '@/lib/printer/warnings';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { useHeldOrdersStore } from '@/store/held-orders';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCartStore } from '@/store/cart';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import { useTranslations, useLocale, type AppConfig } from 'use-intl';
@@ -60,12 +74,21 @@ import { fetchLoadedOrderPages } from '@/lib/orders-search';
 import { tenantCan } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 import { classifyOrderRequestFailure } from '@/lib/order-attempt';
+import {
+  getCancelOrderFailureKind,
+  isOrderItemEditLocked,
+  isScheduledEditLockedError,
+  isScheduledOrder,
+  orderHasCollectedFunds,
+} from '@/lib/order-payment-state';
 
 import { OrderCard } from '@/components/orders/OrderCard';
 import { OrdersMasterList } from '@/components/orders/OrdersMasterList';
 import { OrderDetailPanel } from '@/components/orders/OrderDetailPanel';
+import CorrectPaymentMethodModal from '@/components/orders/CorrectPaymentMethodModal';
 import EditOrderItemModal from '@/components/orders/EditOrderItemModal';
 import WeighOrderItemModal from '@/components/orders/WeighOrderItemModal';
+import { PriceOverrideModal } from '@/components/orders/PriceOverrideModal';
 import { useOrdersLayoutPreference } from '@/hooks/useOrdersLayout';
 import { useManagerApprovers } from '@/hooks/useManagerApprovers';
 import { ApproverSelect } from '@/components/ApproverSelect';
@@ -106,26 +129,12 @@ interface CancelModal {
   freeTable: boolean;
   overridePin: string;
   requiresPin?: boolean;
+  refundRequired?: boolean;
   approverId?: string | null;
 }
 
 function orderHasCollectedPayment(order: Order): boolean {
-  const bills =
-    order.bills && order.bills.length > 0 ? order.bills : order.bill ? [order.bill] : [];
-  return bills.some((candidate) => {
-    const status = String(candidate.payment_status || '');
-    const paidAmount = Number(candidate.paid_amount || 0);
-    const total = Number(candidate.total || 0);
-    const detailsCount = Array.isArray(candidate.payment_details)
-      ? candidate.payment_details.length
-      : 0;
-    return (
-      (paidAmount > 0 && status !== 'refunded') ||
-      status === 'partial' ||
-      status === 'partially_refunded' ||
-      (status === 'paid' && (total > 0 || detailsCount > 0))
-    );
-  });
+  return orderHasCollectedFunds(order);
 }
 
 function orderRequiresCancelPin(order: Order): boolean {
@@ -153,14 +162,36 @@ interface DiscountModal {
   reason: string;
 }
 
+function OrdersTableQuerySync({
+  onFiltersChange,
+}: {
+  onFiltersChange: React.Dispatch<React.SetStateAction<Filters>>;
+}) {
+  const tableParam = useSearchParams()?.get('table')?.trim() || '';
+
+  useEffect(() => {
+    onFiltersChange((prev) => (prev.table === tableParam ? prev : { ...prev, table: tableParam }));
+  }, [tableParam, onFiltersChange]);
+
+  return null;
+}
+
 export default function OrdersPage() {
   const { currentTenant, user } = useAuthStore();
-  const { printBill, printDeliverySlip } = usePrinterStore();
+  const { printBill, printDeliverySlip, printKot } = usePrinterStore();
   const heldOrdersStore = useHeldOrdersStore();
   const router = useRouter();
   const cartStore = useCartStore();
-  const { setTablesRequired, autoPrintBill, printerUseUnicode, printerArabicShaping } =
-    usePosSettingsStore();
+  const {
+    setTablesRequired,
+    autoPrintBill,
+    autoPrintKot,
+    kotPrintingEnabled,
+    setAutoPrintKot,
+    setKotPrintingEnabled,
+    printerUseUnicode,
+    printerArabicShaping,
+  } = usePosSettingsStore();
   const tOrders = useTranslations('orders');
   const tPos = useTranslations('pos');
   const tCommon = useTranslations('common');
@@ -191,6 +222,10 @@ export default function OrdersPage() {
   const [paymentBill, setPaymentBill] = useState<Bill | null>(null);
   const [printMemberBill, setPrintMemberBill] = useState(false);
   const [refundModal, setRefundModal] = useState<{ order: Order; bills: Bill[] } | null>(null);
+  const [correctPaymentModal, setCorrectPaymentModal] = useState<{
+    order: Order;
+    bills: Bill[];
+  } | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
   // null until /settings/kds_enabled resolves; the WebSocket stays closed
   // until the feature is confirmed on, because a disabled KDS refuses the
@@ -236,6 +271,10 @@ export default function OrdersPage() {
   const [weighItemTarget, setWeighItemTarget] = useState<{ order: Order; item: OrderItem } | null>(
     null,
   );
+  const [priceOverrideTarget, setPriceOverrideTarget] = useState<{
+    order: Order;
+    item: OrderItem;
+  } | null>(null);
   const [editItemTarget, setEditItemTarget] = useState<{ order: Order; item: OrderItem } | null>(
     null,
   );
@@ -286,7 +325,111 @@ export default function OrdersPage() {
   const addItemsAttemptRef = useRef<AppendAttempt | null>(null);
   const appendAttemptStorageRef = useRef<AppendAttemptStorage | null>(null);
   const appendRecoveryStartedUsersRef = useRef<Set<string>>(new Set());
+  const printedAppendAttemptKeysRef = useRef<Set<string>>(new Set());
   const activeUserId = user?.id == null ? null : String(user.id);
+  const currentTenantKey = currentTenant?.id == null ? '__default__' : String(currentTenant.id);
+  const currentTenantKeyRef = useRef(currentTenantKey);
+  currentTenantKeyRef.current = currentTenantKey;
+  const kotSettingsReadyTenantRef = useRef<string | null>(null);
+  const kotSettingsPromiseRef = useRef<{
+    tenantKey: string;
+    promise: Promise<{ kotPrintingEnabled: boolean; autoPrintKot: boolean } | null>;
+  } | null>(null);
+
+  const getPrintedAppendKotStorageKey = (userId: string) =>
+    `flo.orders.append-kot-printed.${encodeURIComponent(userId)}`;
+
+  const hasPrintedAppendKot = (userId: string | null, idempotencyKey: string): boolean => {
+    if (!idempotencyKey) return false;
+    const compositeKey = `${userId || ''}:${idempotencyKey}`;
+    if (printedAppendAttemptKeysRef.current.has(compositeKey)) return true;
+    if (!userId || typeof window === 'undefined') return false;
+    try {
+      const raw = window.sessionStorage?.getItem(getPrintedAppendKotStorageKey(userId));
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) && parsed.includes(idempotencyKey);
+    } catch {
+      return false;
+    }
+  };
+
+  const markPrintedAppendKot = (userId: string | null, idempotencyKey: string): void => {
+    if (!idempotencyKey) return;
+    printedAppendAttemptKeysRef.current.add(`${userId || ''}:${idempotencyKey}`);
+    if (!userId || typeof window === 'undefined') return;
+    try {
+      const storageKey = getPrintedAppendKotStorageKey(userId);
+      const raw = window.sessionStorage?.getItem(storageKey);
+      const existing = raw ? JSON.parse(raw) : [];
+      const list = Array.isArray(existing)
+        ? existing.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+      if (!list.includes(idempotencyKey)) {
+        list.push(idempotencyKey);
+        window.sessionStorage?.setItem(storageKey, JSON.stringify(list.slice(-64)));
+      }
+    } catch {
+      // Ignore sessionStorage errors; in-memory ref still guards current session
+    }
+  };
+
+  const printAppendedItemsKotIfEnabled = async (
+    data:
+      | {
+          order?: Order;
+          added_items?: OrderItem[];
+          idempotent_replay?: boolean;
+        }
+      | null
+      | undefined,
+    idempotencyKey: string,
+    options: { requireAddedItems?: boolean } = {},
+  ): Promise<void> => {
+    if (!data?.order) return;
+    if (data.idempotent_replay === true) return;
+    if (hasPrintedAppendKot(activeUserId, idempotencyKey)) return;
+    if (
+      options.requireAddedItems &&
+      (!Array.isArray(data.added_items) || data.added_items.length === 0)
+    ) {
+      return;
+    }
+    if (data.order.release_status === 'scheduled' || data.order.release_status === 'blocked') {
+      return;
+    }
+    const originTenantKey = currentTenantKeyRef.current;
+    let settingsReady = kotSettingsReadyTenantRef.current === originTenantKey;
+    if (!settingsReady && kotSettingsPromiseRef.current?.tenantKey === originTenantKey) {
+      const resolved = await kotSettingsPromiseRef.current.promise;
+      settingsReady = resolved !== null && currentTenantKeyRef.current === originTenantKey;
+    }
+    if (!settingsReady || currentTenantKeyRef.current !== originTenantKey) return;
+    const latestPosSettings =
+      typeof usePosSettingsStore.getState === 'function'
+        ? usePosSettingsStore.getState()
+        : { kotPrintingEnabled, autoPrintKot };
+    if (!latestPosSettings.kotPrintingEnabled || !latestPosSettings.autoPrintKot) return;
+
+    const kotItems =
+      Array.isArray(data.added_items) && data.added_items.length > 0
+        ? data.added_items
+        : data.order.items;
+    markPrintedAppendKot(activeUserId, idempotencyKey);
+    try {
+      const printWarnings = await printKot(
+        { ...data.order, items: kotItems },
+        kotItems ? { items: kotItems } : undefined,
+      );
+      showPrintWarningsToast(printWarnings);
+    } catch (printErr) {
+      if (!isPrintCancelledOnTenantChangeError(printErr)) {
+        toast.error(
+          formatKotErrorToast(extractPrinterErrorMessage(printErr), tPos('kotPrintFailed')),
+        );
+      }
+    }
+  };
 
   const getAppendAttemptStorage = (): AppendAttemptStorage => {
     if (appendAttemptStorageRef.current) return appendAttemptStorageRef.current;
@@ -347,6 +490,7 @@ export default function OrdersPage() {
   const selectedOrderLookupInProgressRef = useRef<number | null>(null);
   const canCancelItems = tenantCan(currentTenant, 'orders.item.cancel');
   const canEditItems = tenantCan(currentTenant, 'orders.item.edit');
+  const canOverridePrice = tenantCan(currentTenant, 'orders.item.price_override');
   const canRestoreItems = tenantCan(currentTenant, 'orders.item.restore');
   const canRefund = tenantCan(currentTenant, 'refunds.initiate');
 
@@ -676,7 +820,7 @@ export default function OrdersPage() {
           },
         },
       )
-      .then(() => {
+      .then(async (recoveryRes) => {
         const cleared = clearAppendAttempt(getAppendAttemptStorage(), pendingAttempt!);
         if (addItemsAttemptRef.current?.idempotencyKey !== pendingAttempt!.idempotencyKey) return;
         addItemsAttemptRef.current = null;
@@ -692,6 +836,15 @@ export default function OrdersPage() {
             phase: 'retry_cleanup',
             correlationId: pendingAttempt!.operationId,
           });
+        if (
+          recoveryRes?.data?.idempotent_replay !== true &&
+          Array.isArray(recoveryRes?.data?.added_items) &&
+          recoveryRes.data.added_items.length > 0
+        ) {
+          await printAppendedItemsKotIfEnabled(recoveryRes.data, pendingAttempt!.idempotencyKey, {
+            requireAddedItems: true,
+          });
+        }
         fetchOrders(undefined, { refreshLoadedPages: true });
       })
       .catch((error) => {
@@ -813,6 +966,40 @@ export default function OrdersPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    kotSettingsReadyTenantRef.current = null;
+    const promise = Promise.all([
+      api.get('/settings/kot_printing_enabled'),
+      api.get('/settings/auto_print_kot'),
+    ])
+      .then(([kotEnabledRes, autoKotRes]) => {
+        const enabled = kotEnabledRes.data?.setting?.value !== 'false';
+        const autoSetting = autoKotRes.data?.setting;
+        const auto =
+          autoSetting?.updated_at != null &&
+          (autoSetting.value === 'true' || autoSetting.value === 'false')
+            ? autoSetting.value === 'true'
+            : false;
+        if (cancelled || currentTenantKeyRef.current !== currentTenantKey) return null;
+        setKotPrintingEnabled?.(enabled);
+        setAutoPrintKot?.(auto);
+        kotSettingsReadyTenantRef.current = currentTenantKey;
+        return { kotPrintingEnabled: enabled, autoPrintKot: auto };
+      })
+      .catch(() => {
+        if (!cancelled && currentTenantKeyRef.current === currentTenantKey) {
+          setKotPrintingEnabled?.(false);
+          setAutoPrintKot?.(false);
+        }
+        return null;
+      });
+    kotSettingsPromiseRef.current = { tenantKey: currentTenantKey, promise };
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTenantKey, setKotPrintingEnabled, setAutoPrintKot]);
+
+  useEffect(() => {
     const initPage = async () => {
       let isTablesRequired = true;
       try {
@@ -862,6 +1049,14 @@ export default function OrdersPage() {
 
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [setTablesRequired]);
+
+  useEffect(() => {
+    if (!filters.table || tables.length > 0) return;
+    api
+      .get('/tables')
+      .then((res) => setTables(res.data.tables || []))
+      .catch(() => {});
+  }, [filters.table, tables.length]);
 
   const handleCreateNewOrderForCustomer = async (order: Order) => {
     if (!order.customer) return;
@@ -970,8 +1165,14 @@ export default function OrdersPage() {
         await handleCheckout(orderId, true);
       }
       void fetchOrders(undefined, { refreshLoadedPages: true });
-    } catch {
-      toast.error(tOrders('linkCustomerFailed'));
+    } catch (error) {
+      if (isScheduledEditLockedError(error)) {
+        toast.error(tPos('scheduledEditLockedPaid'));
+        openCustomerLink(null);
+        fetchOrders(undefined, { refreshLoadedPages: true });
+      } else {
+        toast.error(tOrders('linkCustomerFailed'));
+      }
     } finally {
       setLinkingCustomer(false);
     }
@@ -1074,12 +1275,15 @@ export default function OrdersPage() {
     fetchOrders(undefined, { refreshLoadedPages: true });
 
     if (bill && autoPrintBill) {
+      const tenantIdAtStart = currentTenant?.id ?? null;
       try {
         const fallbackOrder = orders.find((o) => o.bill?.id === bill.id);
         const { data } = await api.get(`/bills/${bill.id}`);
-        // The bill printed before the payment was confirmed, so nothing prints again.
-        if ((data.bill as Bill)?.order?.bill_requested_at) return;
+        if ((useAuthStore.getState().currentTenant?.id ?? null) !== tenantIdAtStart) {
+          return;
+        }
         const latestBill = preferChildScopedBill(data.bill as Bill, fallbackOrder);
+        if (latestBill.order?.bill_requested_at) return;
         const printWarnings = await printBill(
           latestBill,
           {
@@ -1100,6 +1304,7 @@ export default function OrdersPage() {
           /* best-effort history tracking */
         }
       } catch (err) {
+        if (isPrintCancelledOnTenantChangeError(err)) return;
         const msg = extractPrinterErrorMessage(err);
         toast.error(
           `${tPos('saleCompletePrintFailed')} ${tPos('saleCompleteReprintNextStep')} ${formatReceiptErrorToast(msg, tOrders('receiptPrintFailedHint'))}`,
@@ -1111,9 +1316,17 @@ export default function OrdersPage() {
   const handlePrint = async (billId: number, knownOrder?: Order): Promise<boolean> => {
     let printed = false;
     const isReprint = (printHistory[billId]?.length ?? 0) > 0;
+    const tenantIdAtStart = currentTenant?.id ?? null;
+    const tokenAtStart = useAuthStore.getState().token;
+    const isOriginCurrent = () => {
+      const auth = useAuthStore.getState();
+      return (auth.currentTenant?.id ?? null) === tenantIdAtStart && auth.token === tokenAtStart;
+    };
+    if (!isOriginCurrent()) return false;
     setPrintingBillId(billId);
     try {
       const { data } = await api.get<{ bill: Bill }>(`/bills/${billId}`);
+      if (!isOriginCurrent()) return false;
       const fallbackOrder =
         knownOrder ??
         (selectedOrder?.id === data.bill.order_id ? selectedOrder : undefined) ??
@@ -1128,7 +1341,7 @@ export default function OrdersPage() {
         bill: latestBill,
         bills: latestBill.order.bills ?? fallbackOrder?.bills,
       };
-      if (!(await passesBillPrintGate(order))) return false;
+      if (!(await passesBillPrintGate(order)) || !isOriginCurrent()) return false;
       // Actually attempt the print first — only log/report success if the printer accepted the job,
       // otherwise a disconnected printer would silently report "success" (it was only logging before).
       const printWarnings = await printBill(
@@ -1144,13 +1357,15 @@ export default function OrdersPage() {
         },
         { isReprint },
       );
+      if (!isOriginCurrent()) return false;
       toast.success(isReprint ? tOrders('printReceiptReprint') : tOrders('printReceipt'));
       showPrintWarningsToast(printWarnings);
       printed = true;
       // Only a bill that actually printed waits for the cashier to confirm the payment.
       if (needsBillPrintBeforePayment(order)) {
-        if (await recordCashierBillPrint(order.id))
-          fetchOrders(undefined, { refreshLoadedPages: true });
+        const recorded = await recordCashierBillPrint(order.id);
+        if (!isOriginCurrent()) return false;
+        if (recorded) fetchOrders(undefined, { refreshLoadedPages: true });
         else {
           printed = false;
           toast.error(tOrders('billRequestFailed'));
@@ -1163,6 +1378,7 @@ export default function OrdersPage() {
         /* best-effort history tracking */
       }
     } catch (err) {
+      if (!isOriginCurrent() || isPrintCancelledOnTenantChangeError(err)) return false;
       const detail = extractPrinterErrorMessage(err);
       toast.error(formatReceiptErrorToast(detail, tOrders('printReceiptFailed')));
     } finally {
@@ -1311,8 +1527,13 @@ export default function OrdersPage() {
       });
       toast.success(tOrders('itemRemoved'));
       fetchOrders(undefined, { refreshLoadedPages: true });
-    } catch {
-      toast.error(tOrders('removeItemFailed'));
+    } catch (error) {
+      if (isScheduledEditLockedError(error)) {
+        toast.error(tPos('scheduledEditLockedPaid'));
+        fetchOrders(undefined, { refreshLoadedPages: true });
+      } else {
+        toast.error(tOrders('removeItemFailed'));
+      }
     }
   };
 
@@ -1339,8 +1560,14 @@ export default function OrdersPage() {
       toast.success(tOrders('itemVoided'));
       setVoidItemModal(null);
       fetchOrders(undefined, { refreshLoadedPages: true });
-    } catch {
-      toast.error(tOrders('voidItemFailed'));
+    } catch (error) {
+      if (isScheduledEditLockedError(error)) {
+        toast.error(tPos('scheduledEditLockedPaid'));
+        setVoidItemModal(null);
+        fetchOrders(undefined, { refreshLoadedPages: true });
+      } else {
+        toast.error(tOrders('voidItemFailed'));
+      }
     } finally {
       setVoidingItem(false);
     }
@@ -1352,8 +1579,13 @@ export default function OrdersPage() {
       await api.patch(`/orders/${orderId}/items/${itemId}/restore`);
       toast.success(tOrders('itemRestored'));
       fetchOrders(undefined, { refreshLoadedPages: true });
-    } catch {
-      toast.error(tOrders('restoreItemFailed'));
+    } catch (error) {
+      if (isScheduledEditLockedError(error)) {
+        toast.error(tPos('scheduledEditLockedPaid'));
+        fetchOrders(undefined, { refreshLoadedPages: true });
+      } else {
+        toast.error(tOrders('restoreItemFailed'));
+      }
     }
   };
 
@@ -1490,6 +1722,10 @@ export default function OrdersPage() {
   };
 
   const openAddItemsModal = (order: Order | null) => {
+    if (order && isOrderItemEditLocked(order)) {
+      toast.error(tPos('scheduledEditLockedPaid'));
+      return;
+    }
     setSelectedItems([]);
     setProductSearch('');
     setAddItemsOrder(order);
@@ -1592,7 +1828,7 @@ export default function OrdersPage() {
       });
       addItemsAttemptRef.current = attempt;
       requestSubmitted = true;
-      await api.post(
+      const { data } = await api.post(
         `/orders/${addItemsOrder.id}/items`,
         {
           items,
@@ -1618,6 +1854,7 @@ export default function OrdersPage() {
           phase: 'retry_cleanup',
           correlationId: attempt.operationId,
         });
+      await printAppendedItemsKotIfEnabled(data, attempt.idempotencyKey);
       openAddItemsModal(null);
       fetchOrders(undefined, { refreshLoadedPages: true });
     } catch (error) {
@@ -1700,14 +1937,14 @@ export default function OrdersPage() {
       setCancelModal(null);
       fetchOrders(undefined, { refreshLoadedPages: true });
     } catch (error) {
-      const err = error as { response?: { data?: { error?: string } }; message?: string };
-      const message =
-        typeof err?.response?.data?.error === 'string'
-          ? err.response.data.error
-          : typeof err?.message === 'string'
-            ? err.message
-            : '';
-      if (/PIN/i.test(message)) {
+      const failureKind = getCancelOrderFailureKind(error);
+      if (failureKind === 'refund_required_before_cancel') {
+        setCancelModal((prev) => (prev ? { ...prev, refundRequired: true } : prev));
+        toast.error(tPos('scheduledRefundBeforeCancel'));
+        void fetchOrders(undefined, { refreshLoadedPages: true });
+        return;
+      }
+      if (failureKind === 'pin_required') {
         setCancelModal((prev) => (prev ? { ...prev, requiresPin: true } : prev));
       }
       toast.error(tOrders('cancelOrderFailed'));
@@ -1747,6 +1984,9 @@ export default function OrdersPage() {
   // tabs and filters stay on screen while the order content scrolls below them.
   return (
     <div className="h-full min-h-0 flex flex-col gap-4">
+      <Suspense fallback={null}>
+        <OrdersTableQuerySync onFiltersChange={setFilters} />
+      </Suspense>
       {/* Header */}
       <div className="flex items-center justify-between mb-4 shrink-0">
         <h1 className="text-2xl font-bold text-foreground">{tNav('orders')}</h1>
@@ -1774,15 +2014,30 @@ export default function OrdersPage() {
       {/* Filter Bar */}
       <div className="flex flex-wrap items-center gap-3 mb-4 shrink-0">
         {/* Search by order number, customer name, or phone */}
-        <div className="relative flex-1 min-w-[200px]">
-          <Search size={16} className="absolute start-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <div className="relative w-full sm:max-w-xs">
+          <Search
+            size={16}
+            className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+          />
           <input
             type="text"
             placeholder={tOrders('search')}
             value={filters.search}
             onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
-            className="w-full ps-9 pe-3 py-2 border border-border bg-card rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+            className={`w-full rounded-lg border border-border bg-card py-2 ps-9 ${
+              filters.search !== '' ? 'pe-9' : 'pe-3'
+            } text-sm outline-none focus:ring-2 focus:ring-brand`}
           />
+          {filters.search !== '' && (
+            <button
+              type="button"
+              onClick={() => setFilters((prev) => ({ ...prev, search: '' }))}
+              aria-label={tCommon('clear')}
+              className="absolute end-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground hover:text-foreground"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* Table filter */}
@@ -1987,6 +2242,8 @@ export default function OrdersPage() {
               canEditItems={canEditItems}
               onEditItem={(order, item) => setEditItemTarget({ order, item })}
               onWeighItem={(order, item) => setWeighItemTarget({ order, item })}
+              canOverridePrice={canOverridePrice}
+              onOverridePrice={(order, item) => setPriceOverrideTarget({ order, item })}
               canRestoreItems={canRestoreItems}
               canRefund={canRefund}
               isWhatsAppReady={isWhatsAppReady}
@@ -2007,6 +2264,12 @@ export default function OrdersPage() {
               onPayBill={handlePayBill}
               onAddItems={openAddItemsModal}
               onRefund={(ord, bills) => setRefundModal({ order: ord, bills })}
+              onCorrectPaymentMethod={
+                (currentTenant?.role === 'owner' || currentTenant?.role === 'manager') &&
+                tenantCan(currentTenant, 'payments.take')
+                  ? (ord, bills) => setCorrectPaymentModal({ order: ord, bills })
+                  : undefined
+              }
               onConvertToTakeaway={handleConvertToTakeaway}
               onCancelOrder={(ord) =>
                 setCancelModal({
@@ -2056,6 +2319,8 @@ export default function OrdersPage() {
               canEditItems={canEditItems}
               onEditItem={(order, item) => setEditItemTarget({ order, item })}
               onWeighItem={(order, item) => setWeighItemTarget({ order, item })}
+              canOverridePrice={canOverridePrice}
+              onOverridePrice={(order, item) => setPriceOverrideTarget({ order, item })}
               canRestoreItems={canRestoreItems}
               canRefund={canRefund}
               isWhatsAppReady={isWhatsAppReady}
@@ -2129,6 +2394,8 @@ export default function OrdersPage() {
           onBillUpdate={(updated) => setPaymentBill(updated)}
           onPrintBill={
             paymentOrder &&
+            paymentOrder.dispatch_policy !== 'on_payment' &&
+            (!paymentOrder.release_status || paymentOrder.release_status === 'released') &&
             (printMemberBill ||
               needsBillPrintBeforePayment({
                 ...paymentOrder,
@@ -2155,6 +2422,19 @@ export default function OrdersPage() {
           onClose={() => setRefundModal(null)}
           onRefunded={() => {
             setRefundModal(null);
+            fetchOrders(undefined, { refreshLoadedPages: true });
+          }}
+        />
+      )}
+
+      {/* Correct Payment Method Modal */}
+      {correctPaymentModal && (
+        <CorrectPaymentMethodModal
+          order={correctPaymentModal.order}
+          bills={correctPaymentModal.bills}
+          onClose={() => setCorrectPaymentModal(null)}
+          onCorrected={() => {
+            setCorrectPaymentModal(null);
             fetchOrders(undefined, { refreshLoadedPages: true });
           }}
         />
@@ -2220,6 +2500,16 @@ export default function OrdersPage() {
             <p className="text-sm text-muted-foreground -mt-2 mb-4">
               {tOrders('cancelOrderStatusHint')}
             </p>
+            {(cancelModal.refundRequired ||
+              (isScheduledOrder(cancelModal.order) &&
+                orderHasCollectedPayment(cancelModal.order))) && (
+              <p
+                role="alert"
+                className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800/40 dark:bg-amber-950/40 dark:text-amber-100"
+              >
+                {tPos('scheduledRefundBeforeCancel')}
+              </p>
+            )}
 
             <div className="space-y-4">
               <div>
@@ -2321,6 +2611,14 @@ export default function OrdersPage() {
           orderId={weighItemTarget.order.id}
           item={weighItemTarget.item}
           onClose={() => setWeighItemTarget(null)}
+          onSaved={() => fetchOrders(undefined, { refreshLoadedPages: true })}
+        />
+      )}
+      {priceOverrideTarget && (
+        <PriceOverrideModal
+          orderId={priceOverrideTarget.order.id}
+          item={priceOverrideTarget.item}
+          onClose={() => setPriceOverrideTarget(null)}
           onSaved={() => fetchOrders(undefined, { refreshLoadedPages: true })}
         />
       )}

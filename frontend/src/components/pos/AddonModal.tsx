@@ -394,7 +394,8 @@ export default function AddonModal({
                     // The cashier may only dial up to what is left, but never past
                     // the group cap, and an untracked add-on is never limited.
                     const atStockCeiling = stockCeiling != null && addonQty >= stockCeiling;
-                    const plusDisabled = soldOut || atStockCeiling;
+                    const atGroupCap = Boolean(group.max_selection && count >= group.max_selection);
+                    const plusDisabled = soldOut || atStockCeiling || atGroupCap;
                     const priceTone = isSel
                       ? 'text-brand dark:text-orange-300 font-semibold'
                       : 'text-muted-foreground';

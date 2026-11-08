@@ -1,5 +1,11 @@
 import axios from 'axios';
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipAuthRedirect?: boolean;
+  }
+}
+
 let authRedirectInProgress = false;
 
 export type ClientFailureOperation =
@@ -107,7 +113,15 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('token');
-    if (token) {
+    const headers = config.headers;
+    const existingAuth =
+      headers &&
+      (('Authorization' in headers && headers.Authorization) ||
+        ('authorization' in headers && headers.authorization) ||
+        (typeof (headers as { get?: (name: string) => unknown }).get === 'function'
+          ? (headers as { get: (name: string) => unknown }).get('Authorization')
+          : null));
+    if (token && !existingAuth) {
       config.headers.Authorization = `Bearer ${token}`;
     }
   }
@@ -119,10 +133,17 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401 && typeof window !== 'undefined') {
+      const authHeader = String(error.config?.headers?.Authorization || '');
+      const requestToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      const currentToken = localStorage.getItem('token') || '';
+      // Ignore stale 401 responses from a prior user session after a quick switch.
+      if (requestToken && currentToken && requestToken !== currentToken) {
+        return Promise.reject(error);
+      }
       // KDS routes render inline login; avoid redirecting away to /auth/login.
       const isKdsPath = window.location.pathname.startsWith('/kds');
       localStorage.removeItem('token');
-      if (isKdsPath) return Promise.reject(error);
+      if (isKdsPath || error.config?.skipAuthRedirect) return Promise.reject(error);
       // Don't redirect when already on the login page — let the login handler show the error
       if (!window.location.pathname.includes('/auth/login') && !authRedirectInProgress) {
         authRedirectInProgress = true;

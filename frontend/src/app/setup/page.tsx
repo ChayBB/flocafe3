@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import axios from 'axios';
 import api from '@/lib/api';
+import { validatePassword } from '@shared/password-policy';
 import { useAuthStore } from '@/store/auth';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import { Button } from '@/components/ui/button';
@@ -35,6 +37,8 @@ import type { ProductAnalyticsLevel } from '@/components/analytics/ProductAnalyt
 import { CurrencySelect } from '@/components/CurrencySelect';
 import { useLocale, useTranslations, type AppConfig } from 'use-intl';
 import { LANGUAGES, getBrowserLanguage, type Language } from '@/lib/i18n';
+import { useConfirm } from '@/hooks/use-confirm';
+import { RESTORE_FROM_FILE_EVENT } from '@/components/layout/MenuActionHandler';
 
 type SetupProfile = 'empty' | 'express' | 'demo';
 type ServiceModel = 'qsr' | 'finedine';
@@ -69,6 +73,8 @@ const SELECTABLE_LANGUAGES: Language[] = (Object.keys(LANGUAGES) as Language[]).
 // Mirrors main/services/cloud-sync.ts DEFAULT_CLOUD_SERVER_URL — kept in sync
 // manually since the frontend can't import backend TS modules directly.
 const DEFAULT_CLOUD_SERVER_URL = 'https://blue.flopos.com/';
+const SETUP_STATUS_MAX_RETRIES = 2;
+const SETUP_STATUS_RETRY_DELAY_MS = 400;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SUSPECT_EMAIL_TLDS = new Set(['example', 'invalid', 'lcaol', 'local', 'localhost', 'test']);
 
@@ -141,17 +147,14 @@ export default function SetupPage() {
   const cloudEnabled = true;
   const [cloudServerUrl, setCloudServerUrl] = useState(DEFAULT_CLOUD_SERVER_URL);
 
-  const isPasswordValid = (password: string) => {
-    if (!password || password.length < 8) return false;
-    if (!/[A-Z]/.test(password)) return false;
-    if (!/[a-z]/.test(password)) return false;
-    if (!/[0-9]/.test(password)) return false;
-    return true;
-  };
+  const isPasswordValid = validatePassword;
   const passwordMeetsRequirements = form.password.length === 0 || isPasswordValid(form.password);
   const t = useTranslations('setup');
   const tAnalytics = useTranslations('productAnalytics');
   const tSettings = useTranslations('settings');
+  const tRestore = useTranslations('restore');
+  const tCommon = useTranslations('common');
+  const { confirm, ConfirmDialog } = useConfirm();
   const locale = useLocale();
   const [mounted, setMounted] = useState(false);
 
@@ -166,35 +169,100 @@ export default function SetupPage() {
       setBrowserLanguage(getBrowserLanguage());
     });
     let mountedFlag = true;
-    api
-      .get('/auth/setup/status')
-      .then(({ data }) => {
-        if (!mountedFlag) return;
-        setMasterPinAvailable(!!data.masterPinAvailable);
-        if (data.currencyReset) {
-          setCountry(String(data.currencyReset.country || ''));
-          setCurrency(String(data.currencyReset.currency || ''));
-          setTimezone(String(data.currencyReset.timezone || ''));
-          setProfile('empty');
-        }
-        // Redirect to login if setup was already completed.
-        if (!data.needsSetup) {
-          toast.error(t('alreadyCompleted'));
-          window.location.replace('/auth/login');
-        }
-      })
-      .catch((err: unknown) => {
-        if (!mountedFlag) return;
-        console.warn('[Setup] Failed to check setup status:', err);
-        setMasterPinAvailable(false);
-      });
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const checkSetupStatus = (attempt: number) => {
+      api
+        .get('/auth/setup/status')
+        .then(({ data }) => {
+          if (!mountedFlag) return;
+          setMasterPinAvailable(!!data.masterPinAvailable);
+          if (data.currencyReset) {
+            setCountry(String(data.currencyReset.country || ''));
+            setCurrency(String(data.currencyReset.currency || ''));
+            setTimezone(String(data.currencyReset.timezone || ''));
+            setProfile('empty');
+          }
+          // Redirect to login if setup was already completed.
+          if (!data.needsSetup) {
+            toast.error(t('alreadyCompleted'));
+            window.location.replace('/auth/login');
+          }
+        })
+        .catch((err: unknown) => {
+          if (!mountedFlag) return;
+          if (attempt < SETUP_STATUS_MAX_RETRIES) {
+            retryTimer = setTimeout(() => {
+              if (mountedFlag) checkSetupStatus(attempt + 1);
+            }, SETUP_STATUS_RETRY_DELAY_MS);
+            return;
+          }
+          console.warn('[Setup] Failed to check setup status:', err);
+          setMasterPinAvailable(false);
+        });
+    };
+
+    checkSetupStatus(0);
     return () => {
       mountedFlag = false;
+      if (retryTimer !== null) clearTimeout(retryTimer);
       window.cancelAnimationFrame(frame);
     };
     // One-time mount check — the toast uses the initial language selection.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const restoreInFlightRef = useRef(false);
+  const initInFlightRef = useRef(false);
+
+  const handleRestoreBackup = useCallback(async () => {
+    if (restoreInFlightRef.current || initInFlightRef.current || loading) return;
+    if (!window.electronAPI?.pickRestoreFile) {
+      toast.error(tCommon('notAvailable'));
+      return;
+    }
+    restoreInFlightRef.current = true;
+    let succeeded = false;
+    try {
+      const picked = await window.electronAPI.pickRestoreFile();
+      if (picked.canceled || !picked.path || !picked.token) return;
+
+      const fileName = picked.path.split(/[\\/]/).pop() || picked.path;
+      const ok = await confirm(tSettings('restoreConfirm', { fileName }), {
+        title: tSettings('confirmRestoreTitle'),
+        confirmLabel: tSettings('restoreFromFile'),
+        destructive: true,
+      });
+      if (!ok) return;
+
+      await api.post('/auth/setup/restore', {
+        confirmation: 'RESTORE BACKUP',
+        selection_token: picked.token,
+      });
+      succeeded = true;
+      toast.success(tRestore('success'));
+      setTimeout(() => window.location.replace('/auth/login'), 1500);
+    } catch (error) {
+      const detail = axios.isAxiosError(error)
+        ? (error.response?.data as { error?: string } | undefined)?.error
+        : undefined;
+      toast.error(detail || tSettings('restoreFailedGeneric'));
+    } finally {
+      if (!succeeded) {
+        restoreInFlightRef.current = false;
+      }
+    }
+  }, [confirm, loading, tCommon, tRestore, tSettings]);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('action') === 'restore-from-file') {
+      window.history.replaceState(null, '', '/setup');
+      void handleRestoreBackup();
+    }
+    const onRestoreRequested = () => void handleRestoreBackup();
+    window.addEventListener(RESTORE_FROM_FILE_EVENT, onRestoreRequested);
+    return () => window.removeEventListener(RESTORE_FROM_FILE_EVENT, onRestoreRequested);
+  }, [handleRestoreBackup]);
 
   const selectedCountry: Country | undefined = getCountryByCode(country);
   const languageOptions: Language[] = SELECTABLE_LANGUAGES.includes(browserLanguage)
@@ -249,7 +317,7 @@ export default function SetupPage() {
   };
 
   const handleCompleteSetup = async () => {
-    if (loading) return;
+    if (loading || initInFlightRef.current || restoreInFlightRef.current) return;
     if (!country) {
       toast.error(t('chooseCountryRequired'));
       setStep(1);
@@ -288,6 +356,7 @@ export default function SetupPage() {
       }
     }
 
+    initInFlightRef.current = true;
     setLoading(true);
     try {
       const countryProfile = selectedCountry;
@@ -323,9 +392,18 @@ export default function SetupPage() {
     } catch {
       toast.error(t('errorGeneric'));
     } finally {
+      initInFlightRef.current = false;
       setLoading(false);
     }
   };
+
+  const isMacPlatform =
+    mounted &&
+    typeof window !== 'undefined' &&
+    (window.electronAPI?.platform
+      ? window.electronAPI.platform === 'darwin'
+      : /Mac|iPhone|iPad/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : ''));
+  const restoreShortcutLabel = isMacPlatform ? '⌘⇧R' : 'Ctrl+Shift+R';
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background to-muted px-4 py-12">
@@ -336,7 +414,7 @@ export default function SetupPage() {
           <p className="text-muted-foreground mt-2">{t('tagline')}</p>
         </div>
 
-        <div className="flex justify-center gap-2 mb-8">
+        <div className="flex justify-center gap-2 mb-6">
           {[1, 2, 3, 4, 5, 6].map((s) => (
             <div
               key={s}
@@ -345,6 +423,42 @@ export default function SetupPage() {
               }`}
             />
           ))}
+        </div>
+
+        <div
+          data-testid="setup-restore-backup-callout"
+          className="mb-6 flex flex-col gap-3 rounded-xl border border-primary/20 bg-card p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <Database className="w-4 h-4 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">
+                {tSettings('restoreFromFile')}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {tSettings('restoreFromFileHint')}
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loading}
+            data-testid="setup-restore-backup-button"
+            onClick={() => void handleRestoreBackup()}
+            className="shrink-0 gap-2"
+          >
+            <span>{tSettings('restoreFromFile')}</span>
+            <kbd
+              dir="ltr"
+              className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+            >
+              {restoreShortcutLabel}
+            </kbd>
+          </Button>
         </div>
 
         <Card>
@@ -1119,6 +1233,7 @@ export default function SetupPage() {
           </CardContent>
         </Card>
       </div>
+      {ConfirmDialog}
     </div>
   );
 }

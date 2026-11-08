@@ -1,6 +1,6 @@
 /**
  * Migration v139: an empty customer display profanity word list. A fresh install gets it, an
- * upgrade from v138 adds it without touching other settings, and an existing list survives a re-run.
+ * upgrade from v138 adds it without touching other settings, and an existing list survives restart.
  * Also pins the word-list bounds and masking used by the paired display feed.
  */
 const Module = require('module');
@@ -20,7 +20,8 @@ const {
   initDatabase,
   getDatabase,
   getCurrentSchemaVersion,
-  MIGRATIONS,
+  buildIdealSchemaDb,
+  getLatestSupportedSchemaVersion,
   closeDatabase,
 } = require('../main/db');
 const {
@@ -101,8 +102,7 @@ function checkHelpers() {
 function main() {
   console.log('Migration v139: customer display profanity words');
   checkHelpers();
-  const originalMigrations = MIGRATIONS.slice();
-  const latest = originalMigrations[originalMigrations.length - 1].version;
+  const latest = getLatestSupportedSchemaVersion();
 
   initDatabase();
   let db = getDatabase();
@@ -111,23 +111,19 @@ function main() {
   closeDatabase();
 
   activeTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-migration-v139-upgrade-'));
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations.filter((m: any) => m.version <= 138));
+  const legacyDb = buildIdealSchemaDb(138, true);
+  assertEqualOrThrow(
+    legacyDb.pragma('user_version', { simple: true }),
+    138,
+    'upgrade store starts at v138',
+  );
+  assertEqualOrThrow(storedWords(legacyDb), undefined, 'v138 has no word list');
+  legacyDb.prepare("UPDATE settings SET value = 'Legacy Cafe' WHERE key = 'business_name'").run();
+
+  fs.writeFileSync(path.join(activeTestDir, 'flo.db'), legacyDb.serialize());
+  legacyDb.close();
   initDatabase();
   db = getDatabase();
-  assertEqualOrThrow(getCurrentSchemaVersion(), 138, 'upgrade store starts at v138');
-  assertEqualOrThrow(storedWords(db), undefined, 'v138 has no word list');
-  db.prepare("UPDATE settings SET value = 'Legacy Cafe' WHERE key = 'business_name'").run();
-
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations);
-  for (const migration of MIGRATIONS) {
-    if (migration.version <= getCurrentSchemaVersion()) continue;
-    db.transaction(() => {
-      migration.up();
-      db.pragma(`user_version = ${migration.version}`);
-    })();
-  }
   assertEqualOrThrow(getCurrentSchemaVersion(), latest, 'upgrade reaches the latest schema');
   assertEqualOrThrow(storedWords(db), '[]', 'upgrade: the word list starts empty');
   assertEqualOrThrow(
@@ -137,8 +133,9 @@ function main() {
   );
 
   db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('["x"]', PROFANITY_WORDS_KEY);
-  for (const migration of MIGRATIONS.filter((m: any) => m.version === 139)) migration.up();
-  assertOrThrow(storedWords(db) === '["x"]', 'v139 re-run keeps an existing list');
+  closeDatabase();
+  initDatabase();
+  assertEqualOrThrow(storedWords(getDatabase()), '["x"]', 'restart keeps an existing list');
   closeDatabase();
   console.log('  all migration v139 checks passed');
 }

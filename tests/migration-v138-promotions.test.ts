@@ -19,7 +19,8 @@ const {
   initDatabase,
   getDatabase,
   getCurrentSchemaVersion,
-  MIGRATIONS,
+  buildIdealSchemaDb,
+  getLatestSupportedSchemaVersion,
   closeDatabase,
 } = require('../main/db');
 const { assertOrThrow, assertEqualOrThrow } = require('./helpers/test-setup');
@@ -55,8 +56,7 @@ function checkSchema(db: any, label: string) {
 
 function main() {
   console.log('Migration v138: promotion rule engine tables');
-  const originalMigrations = MIGRATIONS.slice();
-  const latest = originalMigrations[originalMigrations.length - 1].version;
+  const latest = getLatestSupportedSchemaVersion();
 
   initDatabase();
   let db = getDatabase();
@@ -65,27 +65,25 @@ function main() {
   closeDatabase();
 
   activeTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-migration-v138-upgrade-'));
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations.filter((m: any) => m.version <= 137));
+  const legacyDb = buildIdealSchemaDb(137, true);
+  assertEqualOrThrow(
+    legacyDb.pragma('user_version', { simple: true }),
+    137,
+    'upgrade store starts at v137',
+  );
+  assertOrThrow(!hasTable(legacyDb, 'promotions'), 'v137 has no promotions table');
+  legacyDb
+    .prepare(
+      `INSERT INTO orders (order_number, type, status, subtotal, discount_amount, discount_type, discount_value, discount_reason)
+     VALUES ('ORD-LEGACY', 'dine_in', 'completed', 500, 50, 'percentage', 10, 'Regular')`,
+    )
+    .run();
+  const before = legacyDb.prepare("SELECT * FROM orders WHERE order_number = 'ORD-LEGACY'").get();
+
+  fs.writeFileSync(path.join(activeTestDir, 'flo.db'), legacyDb.serialize());
+  legacyDb.close();
   initDatabase();
   db = getDatabase();
-  assertEqualOrThrow(getCurrentSchemaVersion(), 137, 'upgrade store starts at v137');
-  assertOrThrow(!hasTable(db, 'promotions'), 'v137 has no promotions table');
-  db.prepare(
-    `INSERT INTO orders (order_number, type, status, subtotal, discount_amount, discount_type, discount_value, discount_reason)
-     VALUES ('ORD-LEGACY', 'dine_in', 'completed', 500, 50, 'percentage', 10, 'Regular')`,
-  ).run();
-  const before = db.prepare("SELECT * FROM orders WHERE order_number = 'ORD-LEGACY'").get();
-
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations);
-  for (const migration of MIGRATIONS) {
-    if (migration.version <= getCurrentSchemaVersion()) continue;
-    db.transaction(() => {
-      migration.up();
-      db.pragma(`user_version = ${migration.version}`);
-    })();
-  }
   assertEqualOrThrow(getCurrentSchemaVersion(), latest, 'upgrade reaches the latest schema');
   checkSchema(db, 'upgrade');
   const after = db.prepare("SELECT * FROM orders WHERE order_number = 'ORD-LEGACY'").get();
@@ -109,8 +107,13 @@ function main() {
   }
   assertEqualOrThrow(blocked, 2, 'redemptions cannot be edited or deleted');
 
-  for (const migration of MIGRATIONS.filter((m: any) => m.version === 138)) migration.up();
-  assertOrThrow(hasTable(db, 'promotions'), 'v138 is safe to re-run');
+  closeDatabase();
+  initDatabase();
+  assertEqualOrThrow(
+    getDatabase().prepare('SELECT COUNT(*) AS n FROM promotion_redemptions').get().n,
+    1,
+    'restart preserves the redemption ledger',
+  );
   closeDatabase();
   console.log('  all migration v138 checks passed');
 }

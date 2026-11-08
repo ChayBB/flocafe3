@@ -3,6 +3,11 @@ import { E2E_BASE_URL as BASE } from './helpers/urls';
 import { E2E_PASSWORD } from './helpers/test-auth';
 
 test('owner gives a server a 4-digit staff code from the staff page', async ({ page }) => {
+  // Failed printer jobs left by other tests can overlay the staff controls.
+  await page.route('**/api/printers/unprinted-kots', (route) =>
+    route.fulfill({ json: { unprinted: [] } }),
+  );
+
   await page.goto(`${BASE}/auth/login`);
   await page.locator('#email').fill('owner@flo.local');
   await page.locator('#password').fill(E2E_PASSWORD);

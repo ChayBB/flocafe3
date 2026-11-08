@@ -103,8 +103,11 @@ function tenantTimezone(): string {
 
 - [`main/routes/reports.ts`](../../main/routes/reports.ts), `tenantTimezone`, guards
   `bucketByLocalHourAndWeekday` and `dayBoundsInTimezone` in reporting.
-- [`main/routes/cash-closures.ts`](../../main/routes/cash-closures.ts) exports `tenantTimezone` so
-  that `cash-sessions.ts` resolves the same window rather than a second, divergent one.
+- [`main/services/cash-drawer-movements.ts`](../../main/services/cash-drawer-movements.ts) defines
+  `tenantTimezone` (re-exported by [`main/routes/cash-closures.ts`](../../main/routes/cash-closures.ts)
+  for `cash-sessions.ts` and imported by [`main/routes/bills.ts`](../../main/routes/bills.ts)) so that
+  cash closures, shift sessions, and bill business-day checks resolve the same window rather than a
+  second, divergent one.
 - [`main/services/refund.ts`](../../main/services/refund.ts) resolves inline, because a wrong
   business-day end there can wrongly accept or reject a late refund.
 
@@ -124,19 +127,59 @@ attributed to the business date on which it happened in the store, not the one i
 
 `main/routes/cash-closures.ts` computes `todayLocal` the same way, and derives the start of the first
 day and the end of the last day from `dayBoundsInTimezone` at both ends. Cash movements, X-reports,
-and the Z-report all key off the resulting `businessDate`, which is why a closure total and a sales
-report for the same day agree.
+and the day-close Z-report all key off the resulting `businessDate`, which is why a day-close total
+and a sales report for the same day agree.
+
+Shift session closures (`scope = 'session'` in `main/routes/cash-sessions.ts`) record their actual
+UTC `[period_start, period_end]` window (`opened_at` to `closed_at`), but file `business_date` under
+the shift's opening business date via `sessionBusinessDate(db, session)` (`opened_at` evaluated in
+the store timezone and `business_day_start_time` cutoff). A shift that crosses midnight or the
+business-day cutoff therefore stays filed under the business date on which it opened, while daily
+reporting and day-close aggregates continue to bound sales by each business day's `[start, end)`
+window.
+
+When the opt-in setting `one_shift_per_staff` is `'false'` (the default), at most one shift may be
+open across the store at a time. When `one_shift_per_staff` is `'true'`, each staff member can open
+and close at most one shift of their own (`cash_sessions_one_open_per_user` on `(opened_by) WHERE status = 'open'`).
+Cash payments, cash refunds, drawer movements, and cash expense entries attach to the authenticated
+actor's open shift (`getOpenSession(db, userId)`). Day close (`POST /api/cash-closures`) is blocked
+(`409 open_shift_blocks_day_close`) until all shifts opened on or before that business date are
+closed, and reconciles the combined day totals across all shifts (summing per-staff shift opening
+floats into the day's `opening_float` drawer movement). Two concurrent shifts sharing a single
+physical cash drawer are permitted, though individual shift drawer counts cannot be physically
+isolated in a shared drawer. For cross-shift bill tax attribution on shift X/Z reports, see
+[Taxation](taxation.md#where-the-amount-came-from).
 
 ### Refunds
 
-`main/services/refund.ts` allows a refund freely within `REFUND_WINDOW_MS` of order creation, which
-is one hour. After that window the order's business day is computed with `localDateInTimezone`, and
-if the current instant has passed that day's end the refund is refused with a `409`. Before the
-`409`, a late refund narrows the approver to owners and requires that owner's Staff Approval PIN.
-The device Master PIN never authorizes a refund.
+`main/services/refund.ts` allows a refund freely within `REFUND_WINDOW_MS` of order creation (or of
+`released_at` for released scheduled orders; unreleased scheduled orders never age into the late
+refund tier), which is one hour. After that window the anchor timestamp's business day is computed
+with `localDateInTimezone`, and if the current instant has passed that day's end the refund is
+refused with a `409`. Before the `409`, a late refund narrows the approver to owners and requires
+that owner's Staff Approval PIN. The device Master PIN never authorizes a refund.
 
 `parseDbTimestamp` is used on both ends of that comparison, so the boundary is an instant
 comparison in UTC rather than a string comparison.
+
+### Scheduled kitchen release
+
+Scheduled takeaway and delivery orders ([Order lifecycle](order-lifecycle.md#scheduled-orders-and-kitchen-release))
+accept `"Send to kitchen at"` (`scheduled_for`) through [`shared/scheduled-time.ts`](../../shared/scheduled-time.ts)
+and [`main/services/scheduled-orders.ts`](../../main/services/scheduled-orders.ts), resolving the
+store timezone via `resolveRegionalSnapshot`.
+
+- Wall-clock inputs (`YYYY-MM-DDTHH:MM` without an offset) are interpreted in the store timezone.
+  `parseScheduledForInput` probes surrounding candidate instants across `+-16` hours in 15-minute
+  steps and formats each back through `Intl.DateTimeFormat` in that IANA zone:
+  - Zero matching instants rejects nonexistent spring-forward daylight-saving times (`400` with
+    `DST_NONEXISTENT_TIME`).
+  - Multiple matching instants rejects ambiguous repeated fall-back daylight-saving times (`400`
+    with `DST_AMBIGUOUS_TIME`).
+  - Instants at or before the current UTC time are rejected (`400` with `PAST_SCHEDULED_TIME`).
+- Accepted inputs are persisted in `orders.scheduled_for` as canonical UTC ISO instants
+  (`YYYY-MM-DDTHH:MM:SS.sssZ`). Changing the store `timezone` setting later changes how the instant
+  is formatted for display, while preserving the exact saved UTC release instant.
 
 ### Printing
 
@@ -163,6 +206,7 @@ values such as elapsed KDS time and image cache keys.
 | Stored timezone override | `npm run test:issue-389-timezone-override` |
 | Regional resolution contract | `npm run test:currency`, `npm run test:country-provenance` |
 | Server-side rendering of dates | `npm run test:i18n-ssr-timezone` |
+| Scheduled order timezone and DST rules | `npm run test:scheduled-orders` |
 
 When you add a code path that buckets or bounds time by day, test it at a tenant offset from UTC
 and across a daylight-saving transition. Both are covered by

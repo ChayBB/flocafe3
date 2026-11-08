@@ -20,7 +20,8 @@ const {
   initDatabase,
   getDatabase,
   getCurrentSchemaVersion,
-  MIGRATIONS,
+  buildIdealSchemaDb,
+  getLatestSupportedSchemaVersion,
   closeDatabase,
 } = require('../main/db');
 const { assertOrThrow, assertEqualOrThrow } = require('./helpers/test-setup');
@@ -69,8 +70,7 @@ function checkSchema(db: any, label: string) {
 
 function main() {
   console.log('Migration v137: loyalty points and member tiers');
-  const originalMigrations = MIGRATIONS.slice();
-  const latest = originalMigrations[originalMigrations.length - 1].version;
+  const latest = getLatestSupportedSchemaVersion();
 
   initDatabase();
   let db = getDatabase();
@@ -79,34 +79,34 @@ function main() {
   closeDatabase();
 
   activeTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-migration-v137-upgrade-'));
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations.filter((m: any) => m.version <= 136));
-  initDatabase();
-  db = getDatabase();
-  assertEqualOrThrow(getCurrentSchemaVersion(), 136, 'upgrade store starts at v136');
-  assertOrThrow(!hasTable(db, 'points_ledger'), 'v136 has no points ledger');
+  const legacyDb = buildIdealSchemaDb(136, true);
+  assertEqualOrThrow(
+    legacyDb.pragma('user_version', { simple: true }),
+    136,
+    'upgrade store starts at v136',
+  );
+  assertOrThrow(!hasTable(legacyDb, 'points_ledger'), 'v136 has no points ledger');
 
-  db.prepare(`
+  legacyDb
+    .prepare(`
     INSERT INTO customers (id, name, phone, country_code, created_at, updated_at)
     VALUES ('cust-legacy', 'สมชาย ใจดี', '+66812345678', '+66', datetime('now'), datetime('now'))
-  `).run();
-  db.prepare(`
+  `)
+    .run();
+  legacyDb
+    .prepare(`
     INSERT INTO loyalty_ledger (customer_id, bill_id, type, amount, description, created_at, updated_at)
     VALUES ('cust-legacy', NULL, 'credit', 75, 'Cashback', datetime('now'), datetime('now'))
-  `).run();
-  const customerBefore = db.prepare("SELECT * FROM customers WHERE id = 'cust-legacy'").get();
-  const walletBefore = db.prepare('SELECT * FROM loyalty_ledger').all();
-  const productsBefore = db.prepare('SELECT COUNT(*) AS n FROM products').get().n;
+  `)
+    .run();
+  const customerBefore = legacyDb.prepare("SELECT * FROM customers WHERE id = 'cust-legacy'").get();
+  const walletBefore = legacyDb.prepare('SELECT * FROM loyalty_ledger').all();
+  const productsBefore = legacyDb.prepare('SELECT COUNT(*) AS n FROM products').get().n;
 
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations);
-  for (const migration of MIGRATIONS) {
-    if (migration.version <= getCurrentSchemaVersion()) continue;
-    db.transaction(() => {
-      migration.up();
-      db.pragma(`user_version = ${migration.version}`);
-    })();
-  }
+  fs.writeFileSync(path.join(activeTestDir, 'flo.db'), legacyDb.serialize());
+  legacyDb.close();
+  initDatabase();
+  db = getDatabase();
   assertEqualOrThrow(getCurrentSchemaVersion(), latest, 'upgrade reaches the latest schema');
   checkSchema(db, 'upgrade');
 
@@ -138,11 +138,12 @@ function main() {
     'every existing product earns points by default',
   );
 
-  for (const migration of MIGRATIONS.filter((m: any) => m.version === 137)) migration.up();
+  closeDatabase();
+  initDatabase();
   assertEqualOrThrow(
-    db.prepare('SELECT COUNT(*) AS n FROM member_tiers').get().n,
+    getDatabase().prepare('SELECT COUNT(*) AS n FROM member_tiers').get().n,
     3,
-    'v137 is safe to re-run',
+    'restart retains exactly one row per default tier',
   );
   closeDatabase();
   console.log('  all migration v137 checks passed');

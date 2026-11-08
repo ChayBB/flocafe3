@@ -22,6 +22,7 @@ import {
   AlertCircle,
   AlertTriangle,
   Printer,
+  QrCode,
   ChevronUp,
   ChevronDown,
   Search,
@@ -49,6 +50,7 @@ import { useConfirm } from '@/hooks/use-confirm';
 import { nameToColor } from '@/lib/image-utils';
 import { useTranslations, type AppConfig } from 'use-intl';
 import { tenantCan } from '@/lib/permissions';
+import { isMenuCategoryVisible } from '@/lib/printer/menu-web-print';
 
 type PosKey = keyof AppConfig['Messages']['pos'];
 type ProductsKey = keyof AppConfig['Messages']['products'];
@@ -145,6 +147,7 @@ function taxCategoryOptionLabel(tc: { label: string; rate_percent?: number | nul
 export default function ProductsPage() {
   const t = useTranslations('products');
   const tCommon = useTranslations('common');
+  const tQr = useTranslations('qrMenu');
   const tPos = useTranslations('pos');
 
   // Translate a raw tag string: known tags go through the `pos` namespace;
@@ -170,8 +173,10 @@ export default function ProductsPage() {
   const [editingAddonGroup, setEditingAddonGroup] = useState<AddonGroup | null>(null);
   const [categoryForm, setCategoryForm] = useState({
     name: '',
+    parent_id: '',
     description: '',
     color: '',
+    sort_order: 0,
     is_active: true,
     addon_group_ids: [] as string[],
   });
@@ -250,6 +255,8 @@ export default function ProductsPage() {
   const [bulkTaxApplying, setBulkTaxApplying] = useState(false);
   const [savingAddonGroup, setSavingAddonGroup] = useState(false);
   const addonGroupSaveInFlight = useRef(false);
+  const [reorderingCategories, setReorderingCategories] = useState(false);
+  const categoryReorderInFlight = useRef(false);
 
   const router = useRouter();
   const currency = getCurrencySymbol(
@@ -666,7 +673,15 @@ export default function ProductsPage() {
   const resetCategoryForm = () => {
     editRequestId.current += 1;
     setProductInactiveAddonGroups([]);
-    setCategoryForm({ name: '', description: '', color: '', is_active: true, addon_group_ids: [] });
+    setCategoryForm({
+      name: '',
+      parent_id: '',
+      description: '',
+      color: '',
+      sort_order: 0,
+      is_active: true,
+      addon_group_ids: [],
+    });
     setCategoryAddonGroups([]);
     setEditingCategory(null);
     setShowForm(false);
@@ -695,8 +710,10 @@ export default function ProductsPage() {
     setEditingCategory(cat);
     setCategoryForm({
       name: cat.name,
+      parent_id: cat.parent_id ? String(cat.parent_id) : '',
       description: cat.description || '',
       color: cat.color || '',
+      sort_order: Number(cat.sort_order ?? 0),
       is_active: cat.is_active,
       addon_group_ids: addonGroupIds,
     });
@@ -708,8 +725,10 @@ export default function ProductsPage() {
     try {
       const payload = {
         name: categoryForm.name,
+        parent_id: categoryForm.parent_id ? categoryForm.parent_id : null,
         description: categoryForm.description || null,
         color: categoryForm.color || null,
+        sort_order: Number(categoryForm.sort_order) || 0,
         is_active: categoryForm.is_active,
         addon_group_ids: categoryForm.addon_group_ids,
       };
@@ -722,15 +741,17 @@ export default function ProductsPage() {
       }
       resetCategoryForm();
       fetchData();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('[Category] Save error:', err);
-      toast.error(t('failedToSaveCategory'));
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(message || t('failedToSaveCategory'));
     }
   };
 
   const handleCategoryDelete = async (id: string, name: string) => {
-    const productCount = products.filter((p) => p.category_id === id).length;
-    if (productCount > 0) {
+    const hasChildren = categories.some((c) => String(c.parent_id ?? '') === String(id));
+    const productCount = products.filter((p) => String(p.category_id) === String(id)).length;
+    if (!hasChildren && productCount > 0) {
       setCatReassignTo('');
       setCatDeleteModal({ open: true, id, name, productCount });
       return;
@@ -742,13 +763,20 @@ export default function ProductsPage() {
       fetchData();
     } catch (err: unknown) {
       const e = err as {
-        response?: { status?: number; data?: { error?: string; productCount?: number } };
+        response?: {
+          status?: number;
+          data?: { error?: string; productCount?: number; childCount?: number };
+        };
       };
-      if (e?.response?.status === 400 && e?.response?.data?.productCount) {
+      if (
+        e?.response?.status === 400 &&
+        !e?.response?.data?.childCount &&
+        e?.response?.data?.productCount
+      ) {
         setCatReassignTo('');
         setCatDeleteModal({ open: true, id, name, productCount: e.response.data.productCount });
       } else {
-        toast.error(tCommon('failedToDelete'));
+        toast.error(e?.response?.data?.error || tCommon('failedToDelete'));
       }
     }
   };
@@ -916,6 +944,161 @@ export default function ProductsPage() {
     );
   const removeAddonItem = (idx: number) => setAddonList((prev) => prev.filter((_, i) => i !== idx));
 
+  const categoryById = new Map(categories.map((cat) => [String(cat.id), cat]));
+  const formatCategoryLabel = (cat: Category): string => {
+    const chain: string[] = [cat.name];
+    let currentParentId = cat.parent_id ? String(cat.parent_id) : null;
+    const seen = new Set<string>([String(cat.id)]);
+    while (currentParentId && categoryById.has(currentParentId) && !seen.has(currentParentId)) {
+      seen.add(currentParentId);
+      const parent = categoryById.get(currentParentId)!;
+      chain.unshift(parent.name);
+      currentParentId = parent.parent_id ? String(parent.parent_id) : null;
+    }
+    return chain.join(' › ');
+  };
+  const sortCategorySiblings = (list: Category[]) =>
+    list
+      .slice()
+      .sort(
+        (a, b) =>
+          (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || a.name.localeCompare(b.name),
+      );
+  const rootCategories = sortCategorySiblings(
+    categories.filter(
+      (cat) =>
+        !cat.parent_id ||
+        !categoryById.has(String(cat.parent_id)) ||
+        String(cat.parent_id) === String(cat.id),
+    ),
+  );
+  const childrenByParentId = new Map<string, Category[]>();
+  for (const cat of categories) {
+    if (
+      cat.parent_id &&
+      categoryById.has(String(cat.parent_id)) &&
+      String(cat.parent_id) !== String(cat.id)
+    ) {
+      const pid = String(cat.parent_id);
+      const list = childrenByParentId.get(pid) || [];
+      list.push(cat);
+      childrenByParentId.set(pid, list);
+    }
+  }
+  for (const [pid, list] of childrenByParentId.entries()) {
+    childrenByParentId.set(pid, sortCategorySiblings(list));
+  }
+  const getCategoryParentKey = (c: Category) => (c.parent_id ? String(c.parent_id).trim() : '');
+  const siblingsByParentKey = new Map<string, Category[]>();
+  for (const cat of categories) {
+    const key = getCategoryParentKey(cat);
+    const list = siblingsByParentKey.get(key) || [];
+    list.push(cat);
+    siblingsByParentKey.set(key, list);
+  }
+  for (const [key, list] of siblingsByParentKey.entries()) {
+    siblingsByParentKey.set(key, sortCategorySiblings(list));
+  }
+  const getSiblingPosition = (c: Category) => {
+    const list = siblingsByParentKey.get(getCategoryParentKey(c)) || [c];
+    const idx = list.findIndex((item) => String(item.id) === String(c.id));
+    return { siblingIndex: idx >= 0 ? idx : 0, siblingCount: list.length };
+  };
+
+  const orderedCategoryTreeRows: Array<{
+    category: Category;
+    depth: 0 | 1;
+    parentName: string | null;
+    siblingIndex: number;
+    siblingCount: number;
+  }> = [];
+  const visitedCategoryIds = new Set<string>();
+  const visitCategoryDescendants = (parent: Category) => {
+    const children = childrenByParentId.get(String(parent.id)) || [];
+    children.forEach((child) => {
+      const childId = String(child.id);
+      if (visitedCategoryIds.has(childId)) return;
+      visitedCategoryIds.add(childId);
+      const { siblingIndex, siblingCount } = getSiblingPosition(child);
+      orderedCategoryTreeRows.push({
+        category: child,
+        depth: 1,
+        parentName: parent.name,
+        siblingIndex,
+        siblingCount,
+      });
+      visitCategoryDescendants(child);
+    });
+  };
+  rootCategories.forEach((root) => {
+    visitedCategoryIds.add(String(root.id));
+    const { siblingIndex, siblingCount } = getSiblingPosition(root);
+    orderedCategoryTreeRows.push({
+      category: root,
+      depth: 0,
+      parentName: null,
+      siblingIndex,
+      siblingCount,
+    });
+    visitCategoryDescendants(root);
+  });
+  for (const cat of categories) {
+    if (!visitedCategoryIds.has(String(cat.id))) {
+      const { siblingIndex, siblingCount } = getSiblingPosition(cat);
+      orderedCategoryTreeRows.push({
+        category: cat,
+        depth: cat.parent_id ? 1 : 0,
+        parentName: cat.parent_id ? (categoryById.get(String(cat.parent_id))?.name ?? null) : null,
+        siblingIndex,
+        siblingCount,
+      });
+    }
+  }
+  const orderedCategories = orderedCategoryTreeRows.map((row) => row.category);
+  const editingCategoryHasChildren = editingCategory
+    ? (childrenByParentId.get(String(editingCategory.id))?.length ?? 0) > 0
+    : false;
+  const retainedCategoryParentId = String(editingCategory?.parent_id ?? '');
+  const availableParentCategories = orderedCategories.filter(
+    (c) =>
+      String(c.id) !== String(editingCategory?.id ?? '') &&
+      ((!c.parent_id && c.is_active) || String(c.id) === retainedCategoryParentId),
+  );
+  const retainedProductCategoryId = String(
+    editingProduct?.category_id || editingProduct?.category?.id || '',
+  );
+  const availableProductCategories = orderedCategories.filter(
+    (c) => isMenuCategoryVisible(categoryById, c.id) || String(c.id) === retainedProductCategoryId,
+  );
+
+  const handleMoveCategory = async (cat: Category, direction: -1 | 1) => {
+    if (categoryReorderInFlight.current) return;
+    const parentKey = getCategoryParentKey(cat);
+    const siblings = siblingsByParentKey.get(parentKey) || [];
+    const index = siblings.findIndex((c) => String(c.id) === String(cat.id));
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= siblings.length) return;
+    const reordered = siblings.slice();
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+    categoryReorderInFlight.current = true;
+    setReorderingCategories(true);
+    try {
+      await api.post('/categories/reorder', {
+        parent_id: parentKey || null,
+        category_ids: reordered.map((sibling) => String(sibling.id)),
+      });
+      await fetchData();
+    } catch (err: unknown) {
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(message || t('failedToSaveCategory'));
+      await fetchData();
+    } finally {
+      categoryReorderInFlight.current = false;
+      setReorderingCategories(false);
+    }
+  };
+
   // One search box filters whichever list the active tab shows; every list is
   // already fully loaded, so the filter never stops at a first page.
   const normalizedSearch = search.trim().toLowerCase();
@@ -941,10 +1124,12 @@ export default function ProductsPage() {
             fmt(Number(product.price)).replace(/,/g, ''),
           ]),
         );
-  const visibleCategories =
+  const visibleCategoryRows =
     normalizedSearch === ''
-      ? categories
-      : categories.filter((category) => matchesSearch([category.name, category.description]));
+      ? orderedCategoryTreeRows
+      : orderedCategoryTreeRows.filter(({ category, parentName }) =>
+          matchesSearch([category.name, category.description, parentName]),
+        );
   const visibleAddonGroups =
     normalizedSearch === ''
       ? addonGroups
@@ -1035,7 +1220,9 @@ export default function ProductsPage() {
               onChange={(e) => setSearch(e.target.value)}
               placeholder={activeTab === 'products' ? t('searchProductsTab') : tCommon('search')}
               aria-label={activeTab === 'products' ? t('searchProductsTab') : tCommon('search')}
-              className="w-full rounded-lg border border-border bg-card py-2 ps-9 pe-9 text-sm outline-none focus:ring-2 focus:ring-brand"
+              className={`w-full rounded-lg border border-border bg-card py-2 ps-9 ${
+                search !== '' ? 'pe-9' : 'pe-3'
+              } text-sm outline-none focus:ring-2 focus:ring-brand`}
             />
             {search !== '' && (
               <button
@@ -1064,9 +1251,16 @@ export default function ProductsPage() {
               <FileSpreadsheet size={16} className="me-1" /> CSV
             </Button>
             {activeTab === 'products' && (
-              <Button variant="outline" onClick={() => setShowPrintMenuModal(true)}>
-                <Printer size={16} className="me-1" /> {t('printMenu')}
-              </Button>
+              <>
+                {isOwnerOrManager && (
+                  <Button variant="outline" onClick={() => router.push('/settings?tab=qr-menu')}>
+                    <QrCode size={16} className="me-1" /> {tQr('title')}
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => setShowPrintMenuModal(true)}>
+                  <Printer size={16} className="me-1" /> {t('printMenu')}
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -1116,10 +1310,10 @@ export default function ProductsPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {visibleProducts.map((product) => {
-                  const parentCat = categories.find(
-                    (c) => String(c.id) === String(product.category_id || product.category?.id),
+                  const isCategoryInactive = !isMenuCategoryVisible(
+                    categoryById,
+                    product.category_id ?? product.category?.id ?? null,
                   );
-                  const isCategoryInactive = Boolean(parentCat && !parentCat.is_active);
                   const matchedTaxCategory = taxCategories.find(
                     (tc) => tc.id === product.tax_category_id,
                   );
@@ -1377,9 +1571,9 @@ export default function ProductsPage() {
                           required
                         >
                           <option value="">{t('selectPlaceholder')}</option>
-                          {categories.map((c) => (
+                          {availableProductCategories.map((c) => (
                             <option key={c.id} value={c.id}>
-                              {c.name}
+                              {formatCategoryLabel(c)}
                             </option>
                           ))}
                         </select>
@@ -2068,11 +2262,28 @@ export default function ProductsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {visibleCategories.map((cat) => {
+                {visibleCategoryRows.map(({ category: cat, depth, siblingIndex, siblingCount }) => {
                   const colorObj = CATEGORY_COLORS.find((c) => c.key === cat.color);
                   return (
-                    <tr key={cat.id} className="hover:bg-muted">
-                      <td className="p-4 font-medium text-foreground">{cat.name}</td>
+                    <tr
+                      key={cat.id}
+                      data-category-id={cat.id}
+                      data-category-depth={depth}
+                      data-parent-id={cat.parent_id || ''}
+                      className="hover:bg-muted"
+                    >
+                      <td
+                        className={`p-4 font-medium text-foreground ${depth === 1 ? 'ps-10' : ''}`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {depth === 1 && (
+                            <span className="text-muted-foreground select-none" aria-hidden="true">
+                              ↳
+                            </span>
+                          )}
+                          <span>{cat.name}</span>
+                        </div>
+                      </td>
                       <td className="p-4 text-center">
                         {cat.addon_group_ids?.length ? (
                           <span className="inline-flex px-2 py-1 rounded-full bg-muted text-xs font-medium text-muted-foreground">
@@ -2099,6 +2310,11 @@ export default function ProductsPage() {
                         >
                           {cat.is_active ? 'Active' : 'Inactive'}
                         </span>
+                        {cat.is_active && !isMenuCategoryVisible(categoryById, cat.id) && (
+                          <span className="text-[10px] text-amber-600 font-medium block mt-1">
+                            {t('hiddenOnPos')}
+                          </span>
+                        )}
                       </td>
                       <td className="p-4 text-end">
                         <div className="flex gap-2 justify-end">
@@ -2120,6 +2336,32 @@ export default function ProductsPage() {
                               >
                                 <Trash2 size={16} />
                               </button>
+                              {normalizedSearch === '' && siblingCount > 1 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={reorderingCategories || siblingIndex === 0}
+                                    onClick={() => handleMoveCategory(cat, -1)}
+                                    aria-label={t('variantMoveUp')}
+                                    title={t('variantMoveUp')}
+                                    className="p-1.5 text-gray-400 hover:text-foreground disabled:opacity-30"
+                                  >
+                                    <ChevronUp size={16} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      reorderingCategories || siblingIndex === siblingCount - 1
+                                    }
+                                    onClick={() => handleMoveCategory(cat, 1)}
+                                    aria-label={t('variantMoveDown')}
+                                    title={t('variantMoveDown')}
+                                    className="p-1.5 text-gray-400 hover:text-foreground disabled:opacity-30"
+                                  >
+                                    <ChevronDown size={16} />
+                                  </button>
+                                </>
+                              )}
                             </>
                           )}
                         </div>
@@ -2129,7 +2371,7 @@ export default function ProductsPage() {
                 })}
               </tbody>
             </table>
-            {visibleCategories.length === 0 && (
+            {visibleCategoryRows.length === 0 && (
               <p className="text-center text-muted-foreground py-12">
                 {normalizedSearch === '' ? t('categoryEmpty') : tCommon('noResults')}
               </p>
@@ -2164,6 +2406,31 @@ export default function ProductsPage() {
                       className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
                       required
                     />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="category-parent-select"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      {t('parentCategory')}
+                    </label>
+                    <select
+                      id="category-parent-select"
+                      aria-label={t('parentCategory')}
+                      value={categoryForm.parent_id}
+                      disabled={editingCategoryHasChildren}
+                      onChange={(e) =>
+                        setCategoryForm({ ...categoryForm, parent_id: e.target.value })
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none disabled:opacity-50"
+                    >
+                      <option value="">{t('parentCategoryNone')}</option>
+                      {availableParentCategories.map((rootCat) => (
+                        <option key={rootCat.id} value={String(rootCat.id)}>
+                          {rootCat.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1">
@@ -2828,13 +3095,13 @@ export default function ProductsPage() {
                         {t('defaultCategoryTag', { name: c.name })}
                       </option>
                     ))}
-                  {categories
+                  {orderedCategories
                     .filter(
                       (c) => c.name.toLowerCase() !== 'uncategorized' && c.id !== catDeleteModal.id,
                     )
                     .map((c) => (
                       <option key={c.id} value={String(c.id)}>
-                        {c.name}
+                        {formatCategoryLabel(c)}
                       </option>
                     ))}
                 </select>

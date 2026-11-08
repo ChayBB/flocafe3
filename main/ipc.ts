@@ -15,6 +15,7 @@ import {
 } from './db';
 import { clearInMemoryRevokedTokens, clearUserAuthCache } from './middleware/security';
 import { getLocalIP } from './server';
+import { getServerPort } from './server-state';
 import { clearJWTSecretCache } from './security/jwt-secret';
 import { getKdsPort } from './kds-server';
 import { authorizeMasterPin, isMasterPinAvailable, isMasterPinSet } from './services/master-pin';
@@ -40,16 +41,21 @@ import { isOrdersLayout } from './routes/settings';
 import { googleDrive } from './services/google-drive';
 import { rasterizeKotDocumentForWebUsb, rasterizePrintDocumentForWebUsb } from './printers/thermal';
 import { isKotDocument, isPrintDocument } from '../shared/print/document';
+import { isPrinterTextSize } from '../shared/print/text-size';
 import { isSafeWhatsAppShareUrl } from './security/url-allowlist';
 import log from 'electron-log/main';
 import { randomUUID } from 'crypto';
 import { cloudSync } from './services/cloud-sync';
+import {
+  isLocalBackupEnabled,
+  retainBackupLocally,
+  setLocalBackupEnabled,
+} from './services/local-backup';
 import { readPostHogBootstrap } from './services/posthog';
+import { MAX_PDF_HTML_BYTES, renderHtmlToPdfBuffer } from './services/html-to-pdf';
 
 // Cap on the log content attached to a support ticket (most recent bytes only).
 const LOG_TAIL_MAX_BYTES = 200_000;
-// Cap on renderer-built print HTML accepted for PDF export.
-const MAX_PDF_HTML_BYTES = 2_000_000;
 // Prefer excluding log lines older than this from a support-ticket attachment.
 const LOG_TAIL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // Matches electron-log's default line prefix, e.g. "[2026-09-13 10:15:30.123] [info] ...".
@@ -125,11 +131,23 @@ export function isTrustedSender(event: Pick<Electron.IpcMainInvokeEvent, 'sender
   }
 }
 
+type MainWindowGetter = () => BrowserWindow | null;
+type IpcHandler<Args extends unknown[] = unknown[]> = (
+  event: Electron.IpcMainInvokeEvent,
+  ...args: Args
+) => unknown | Promise<unknown>;
+
+let activeMainWindowGetter: MainWindowGetter | undefined;
+
 /** Verifies that IPC sender is the active main BrowserWindow, current top-level frame, and exact local app origin. */
 export function isTrustedMainWindowSender(
   event: Pick<Electron.IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
-  mainWindowOrGetter: BrowserWindow | null | (() => BrowserWindow | null),
-  port: number,
+  mainWindowOrGetter:
+    | BrowserWindow
+    | null
+    | (() => BrowserWindow | null)
+    | undefined = activeMainWindowGetter,
+  port: number = getServerPort(),
   browserWindowClass: {
     fromWebContents: (sender: Electron.WebContents) => BrowserWindow | null;
   } = BrowserWindow,
@@ -181,12 +199,6 @@ export function isTrustedMainWindowSender(
   return true;
 }
 
-type MainWindowGetter = () => BrowserWindow | null;
-type IpcHandler<Args extends unknown[] = unknown[]> = (
-  event: Electron.IpcMainInvokeEvent,
-  ...args: Args
-) => unknown | Promise<unknown>;
-
 /** Preload origin check before Chromium has committed localhost URL. */
 function isEarlyMainWindowSender(
   event: Pick<Electron.IpcMainEvent, 'sender'>,
@@ -209,7 +221,7 @@ function isEarlyMainWindowSender(
 
 function handle<Args extends unknown[]>(channel: string, listener: IpcHandler<Args>): void {
   ipcMain.handle(channel, (event: Electron.IpcMainInvokeEvent, ...args: Args) => {
-    if (!isTrustedSender(event)) return { error: 'Unauthorized sender' };
+    if (!isTrustedMainWindowSender(event)) return { error: 'Unauthorized sender' };
     return listener(event, ...args);
   });
 }
@@ -220,6 +232,7 @@ export function registerIpcHandlers(
   showMainWindow: (window: BrowserWindow) => boolean = () => false,
   getCurrentEffectiveIsDark?: () => boolean,
 ): void {
+  activeMainWindowGetter = getMainWindow;
   ipcMain.on('window-document', (event, documentNonce: unknown) => {
     let currentFrame: Electron.WebFrameMain | null = null;
     try {
@@ -326,16 +339,17 @@ export function registerIpcHandlers(
         };
       }
 
-      const versionMismatch = backupVersion !== getCurrentSchemaVersion();
+      const currentVersion = getCurrentSchemaVersion();
+      const versionMismatch = backupVersion !== currentVersion;
 
-      if (versionMismatch) {
+      if (backupVersion < currentVersion) {
         const confirmResult = await dialog.showMessageBox({
           type: 'warning',
           buttons: ['Restore Anyway', 'Cancel'],
           defaultId: 1,
           title: 'Schema Version Mismatch',
           message: `Backup was created with Schema v${backupVersion}`,
-          detail: `Current database uses Schema v${getCurrentSchemaVersion()}.\n\nRestoring will import data only (common fields) to preserve new database structure.\n\nDo you want to continue?`,
+          detail: `Current database uses Schema v${currentVersion}.\n\nRestoring will replace the current database with this backup and migrate its schema to v${currentVersion}.\n\nDo you want to continue?`,
         });
 
         if (confirmResult.response !== 0) {
@@ -345,33 +359,8 @@ export function registerIpcHandlers(
 
       await googleDrive.prepareForDatabaseRestore();
       try {
-        if (versionMismatch) {
-          const restoreResult = await withDatabaseMaintenanceLock(
-            (signal) => restoreBackup(backupPath, false, signal),
-            shutdownSignal,
-          );
-          const cleanup = restoreResult.success ? googleDrive.completeDatabaseRestore() : null;
-          clearUserAuthCache();
-          clearInMemoryRevokedTokens();
-          clearJWTSecretCache();
-          const cleanupPending =
-            restoreResult.cleanupPending === true || cleanup?.cleanupPending === true;
-          return {
-            success: restoreResult.success,
-            mode: restoreResult.mode,
-            backupVersion,
-            currentVersion: getCurrentSchemaVersion(),
-            tablesRestored: restoreResult.tablesRestored,
-            message: restoreResult.success
-              ? `Restored ${restoreResult.tablesRestored} tables (data-only mode due to version mismatch)`
-              : `Restore failed: ${restoreResult.error}`,
-            error: restoreResult.error,
-            cleanupPending,
-          };
-        }
-
         const restoreResult = await withDatabaseMaintenanceLock(
-          (signal) => restoreBackup(backupPath, true, signal),
+          (signal) => restoreBackup(backupPath, !versionMismatch, signal),
           shutdownSignal,
         );
         const cleanup = restoreResult.success ? googleDrive.completeDatabaseRestore() : null;
@@ -443,12 +432,24 @@ export function registerIpcHandlers(
         // never resolve on its own; the reset invalidates Drive state either way.
         await googleDrive.prepareForDatabaseRestore({ discardUnresolvedBoundary: true });
         restorePrepared = true;
+        const keepLocalBackup = isLocalBackupEnabled();
         const { backupPath } = await resetDatabaseWithBackup(shutdownSignal);
+        let localBackupFailed = false;
+        if (keepLocalBackup) {
+          localBackupFailed = retainBackupLocally(backupPath) === null;
+        } else {
+          setLocalBackupEnabled(false);
+        }
         const cleanup = googleDrive.completeDatabaseRestore();
         clearUserAuthCache();
         clearInMemoryRevokedTokens();
         clearJWTSecretCache();
-        return { success: true, backupPath, cleanupPending: cleanup.cleanupPending };
+        return {
+          success: true,
+          backupPath,
+          cleanupPending: cleanup.cleanupPending,
+          localBackupFailed,
+        };
       } catch (error: unknown) {
         console.error('[IPC] db-initialize: Error:', error);
         return { success: false, error: getErrorMessage(error) };
@@ -478,9 +479,7 @@ export function registerIpcHandlers(
 
   handle('open-application-menu', (event, key: unknown, x: unknown, y: unknown) => {
     if (process.platform === 'darwin') return { error: 'Application menu is native on macOS' };
-    // The popup is a privileged native surface on the main window, so bind it
-    // to that window's own current renderer frame. The trusted-sender check
-    // alone also admits the KDS window, which is served from localhost too.
+    // Bind the popup to the main window's own current renderer frame.
     let currentFrame: Electron.WebFrameMain | null = null;
     try {
       currentFrame = event.sender.mainFrame;
@@ -759,27 +758,12 @@ export function registerIpcHandlers(
     });
     if (saveResult.canceled || !saveResult.filePath) return { success: false, canceled: true };
 
-    const pdfWindow = new BrowserWindow({
-      show: false,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        javascript: false,
-      },
-    });
     try {
-      await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-      const pdfData = await pdfWindow.webContents.printToPDF({
-        printBackground: true,
-        pageSize: resolvedPageSize,
-      });
+      const pdfData = await renderHtmlToPdfBuffer({ html, pageSize: resolvedPageSize });
       await fs.promises.writeFile(saveResult.filePath, pdfData);
       return { success: true, path: saveResult.filePath };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
-    } finally {
-      if (!pdfWindow.isDestroyed()) pdfWindow.destroy();
     }
   });
 
@@ -812,7 +796,8 @@ export function registerIpcHandlers(
       typeof options.trimDecimals !== 'boolean' ||
       typeof options.useUnicode !== 'boolean' ||
       typeof options.arabicShaping !== 'boolean' ||
-      (options.timezone !== undefined && typeof options.timezone !== 'string')
+      (options.timezone !== undefined && typeof options.timezone !== 'string') ||
+      (options.textSize !== undefined && !isPrinterTextSize(options.textSize))
     ) {
       return { ok: false, error: 'Invalid raster document options' };
     }
@@ -851,6 +836,7 @@ export function registerIpcHandlers(
       typeof options.language !== 'string' ||
       typeof options.locale !== 'string' ||
       (options.timezone !== undefined && typeof options.timezone !== 'string') ||
+      (options.textSize !== undefined && !isPrinterTextSize(options.textSize)) ||
       typeof options.useUnicode !== 'boolean' ||
       typeof options.arabicShaping !== 'boolean'
     ) {

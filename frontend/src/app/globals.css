@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import "./shadcn-tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 /* Short screens, e.g. a 15-inch 1366x768 panel once the taskbar and title bar are taken. */
@@ -84,7 +84,7 @@ input[type="number"] {
 
 /* Short viewports: the cart column becomes the single scroll owner, so order
  * type, totals and checkout stay reachable however long the item list is. */
-@media (max-height: 680px) {
+@media (max-height: 500px) {
   .pos-cart-shell {
     overflow-y: auto;
   }
@@ -276,6 +276,17 @@ body:has(.flo-title-bar__fallback-controls) .flo-title-bar__safe-area {
  * logical properties are direction-independent, keeping RTL correct. */
 html[data-flo-desktop-titlebar='true'] {
   --flo-sidebar-block-start: var(--flo-titlebar-height);
+}
+
+[data-testid='scheduled-orders-drawer'],
+[data-testid='payment-queue-drawer'],
+[data-slot='sheet-overlay'],
+[data-slot='sheet-content'],
+[data-slot='drawer-overlay'],
+[data-slot='drawer-content'],
+[role='dialog'] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 /* Modern minimalist toast styling (Linear / Sonner aesthetic) */

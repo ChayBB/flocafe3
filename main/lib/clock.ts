@@ -3,6 +3,8 @@ import dgram from 'node:dgram';
 /** Thai reference time servers, tried in order. */
 export const NTP_SERVERS = ['time.navy.mi.th', 'th.pool.ntp.org'];
 
+type NtpOptions = { port?: number; timeoutMs?: number; signal?: AbortSignal };
+
 const NTP_PORT = 123;
 const NTP_TIMEOUT_MS = 3000;
 const NTP_RESYNC_MS = 60 * 60 * 1000;
@@ -40,9 +42,10 @@ function readTimestamp(buffer: Buffer, offset: number): number {
 /** Asks one NTP server for the clock offset (server minus machine), in milliseconds. */
 export function queryNtpOffset(
   server: string,
-  { port = NTP_PORT, timeoutMs = NTP_TIMEOUT_MS }: { port?: number; timeoutMs?: number } = {},
+  { port = NTP_PORT, timeoutMs = NTP_TIMEOUT_MS, signal }: NtpOptions = {},
 ): Promise<number> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
     const socket = dgram.createSocket('udp4');
     const request = Buffer.alloc(48);
     request[0] = 0x23; // LI 0, version 4, mode 3 (client)
@@ -50,7 +53,12 @@ export function queryNtpOffset(
     writeTimestamp(request, 40, sentAt);
     const sentStamp = request.subarray(40, 48);
 
+    let settled = false;
+    const abort = () => finish(new Error('NTP request aborted'));
     const finish = (error: Error | null, value?: number) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
       clearTimeout(timer);
       socket.close();
       if (error) reject(error);
@@ -58,6 +66,7 @@ export function queryNtpOffset(
     };
     const timer = setTimeout(() => finish(new Error(`NTP ${server} timed out`)), timeoutMs);
 
+    signal?.addEventListener('abort', abort, { once: true });
     socket.on('error', (error) => finish(error));
     socket.on('message', (reply) => {
       const receivedAt = Date.now();
@@ -81,11 +90,14 @@ export function queryNtpOffset(
 /** Syncs against the first server that answers; keeps the previous correction if none does. */
 export async function syncClock(
   servers: string[] = NTP_SERVERS,
-  options?: { port?: number; timeoutMs?: number },
+  options?: NtpOptions,
 ): Promise<boolean> {
   for (const server of servers) {
+    if (options?.signal?.aborted) break;
     try {
-      offsetMs = Math.round(await queryNtpOffset(server, options));
+      const nextOffset = await queryNtpOffset(server, options);
+      if (options?.signal?.aborted) break;
+      offsetMs = Math.round(nextOffset);
       lastSync = { server, at: new Date(Date.now() + offsetMs).toISOString(), offsetMs };
       return true;
     } catch {}
@@ -94,9 +106,9 @@ export async function syncClock(
 }
 
 /** Syncs now and then hourly; failures are silent so the POS keeps working offline. */
-export function startClockSync(): () => void {
+export function startClockSync(getSignal: () => AbortSignal): () => void {
   const run = () => {
-    void syncClock().then((ok) => {
+    void syncClock(NTP_SERVERS, { signal: getSignal() }).then((ok) => {
       if (ok) console.log(`[Clock] Synced with ${lastSync?.server} (offset ${offsetMs} ms)`);
     });
   };

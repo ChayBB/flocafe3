@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { getDatabase, now } from '../db';
 import { validatePassword, authRateLimit, invalidateUserAuthCache } from '../middleware/security';
+import { PASSWORD_POLICY_MESSAGE } from '../../shared/password-policy';
 import { hasPermission, requireAnyPermission, requirePermission } from '../services/authorization';
 import {
   AdministrationUnreachableError,
@@ -92,12 +93,10 @@ function isValidPin(pin: unknown): boolean {
   return /^\d{4,6}$/.test(String(pin));
 }
 
-const STRONG_PASSWORD_MESSAGE =
-  'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.';
 const OPERATIONAL_PASSWORD_MESSAGE =
   'Passwords for cashier, server and chef accounts must be exactly 4 digits.';
 
-/** Operational staff use a 4-digit password; owners and managers keep the strong-password policy. */
+/** Operational staff use a 4-digit password; owners and managers use the shared password policy. */
 function validateStaffPassword(role: string, password: unknown): boolean {
   return isOperationalRole(role)
     ? /^\d{4}$/.test(String(password))
@@ -105,7 +104,7 @@ function validateStaffPassword(role: string, password: unknown): boolean {
 }
 
 function staffPasswordMessage(role: string): string {
-  return isOperationalRole(role) ? OPERATIONAL_PASSWORD_MESSAGE : STRONG_PASSWORD_MESSAGE;
+  return isOperationalRole(role) ? OPERATIONAL_PASSWORD_MESSAGE : PASSWORD_POLICY_MESSAGE;
 }
 
 function isValidStaffCode(code: unknown): boolean {
@@ -131,6 +130,52 @@ function normalizeStaffEmail(email: unknown): string {
   return String(email || '')
     .trim()
     .toLowerCase();
+}
+
+function syncRegisteredOwnerEmail(
+  db: ReturnType<typeof getDatabase>,
+  previousOwnerEmail?: string,
+  nextOwnerEmail?: string,
+): boolean {
+  const currentSettingRow = db.prepare("SELECT value FROM settings WHERE key = 'email'").get() as
+    | { value: string | null }
+    | undefined;
+  const currentSettingEmail = normalizeStaffEmail(currentSettingRow?.value);
+  const normalizedPrev = normalizeStaffEmail(previousOwnerEmail);
+  const normalizedNext = normalizeStaffEmail(nextOwnerEmail);
+
+  let targetEmail = '';
+  if (normalizedNext && (!currentSettingEmail || currentSettingEmail === normalizedPrev)) {
+    targetEmail = normalizedNext;
+  } else {
+    const matchesActiveOwner = currentSettingEmail
+      ? Boolean(
+          db
+            .prepare(
+              "SELECT 1 FROM users WHERE lower(email) = ? AND role = 'owner' AND is_active = 1 LIMIT 1",
+            )
+            .get(currentSettingEmail),
+        )
+      : false;
+    if (matchesActiveOwner) return false;
+    if (normalizedNext) {
+      targetEmail = normalizedNext;
+    } else {
+      const fallbackOwner = db
+        .prepare(
+          "SELECT email FROM users WHERE role = 'owner' AND is_active = 1 AND email IS NOT NULL AND trim(email) != '' ORDER BY created_at ASC, id ASC LIMIT 1",
+        )
+        .get() as { email: string } | undefined;
+      targetEmail = normalizeStaffEmail(fallbackOwner?.email);
+    }
+  }
+
+  if (!targetEmail || targetEmail === currentSettingEmail) return false;
+  db.prepare(`
+    INSERT INTO settings (key, value, updated_at) VALUES ('email', ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(targetEmail, now());
+  return true;
 }
 
 function normalizeStationIds(value: unknown): string[] | null {
@@ -172,6 +217,7 @@ router.get('/', requirePermission('staff.view'), (req: Request, res: Response) =
     const staff = db.prepare(query).all(...params);
     res.json({ staff });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -208,6 +254,7 @@ router.get(
         .all();
       res.json({ approvers, staff: approvers });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -237,6 +284,7 @@ router.get('/:id', requirePermission('staff.view'), (req: Request, res: Response
 
     res.json({ staff: { ...member, performance } });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -298,10 +346,6 @@ router.post('/', requireStaffWrite, authRateLimit(), (req: Request, res: Respons
       });
     }
 
-    if (isOperationalRole(role) && hasNonEmptyPin(pin)) {
-      captureStaffValidation('fc.backend.staff.create.validation', 'pin_role_mismatch');
-      return res.status(400).json({ error: 'PINs are only permitted for owner and manager roles' });
-    }
     if (hasNonEmptyPin(pin) && !isValidPin(pin)) {
       captureStaffValidation('fc.backend.staff.create.validation', 'pin_invalid');
       return res.status(400).json({ error: 'PIN must be between 4 and 6 numeric digits' });
@@ -393,6 +437,7 @@ router.post('/', requireStaffWrite, authRateLimit(), (req: Request, res: Respons
       },
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -439,10 +484,6 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
     }
 
     const targetRole = role ?? member.role;
-    if (isOperationalRole(targetRole) && hasNonEmptyPin(pin)) {
-      captureStaffValidation('fc.backend.staff.update.validation', 'pin_role_mismatch');
-      return res.status(400).json({ error: 'PINs are only permitted for owner and manager roles' });
-    }
     if (hasNonEmptyPin(pin) && !isValidPin(pin)) {
       captureStaffValidation('fc.backend.staff.update.validation', 'pin_invalid');
       return res.status(400).json({ error: 'PIN must be between 4 and 6 numeric digits' });
@@ -477,7 +518,7 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
     if (!password && !isOperationalRole(targetRole) && isOperationalRole(member.role)) {
       captureStaffValidation('fc.backend.staff.update.validation', 'password_policy');
       return res.status(400).json({
-        error: `Set a new password when promoting this account. ${STRONG_PASSWORD_MESSAGE}`,
+        error: `Set a new password when promoting this account. ${PASSWORD_POLICY_MESSAGE}`,
       });
     }
 
@@ -500,16 +541,14 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
     );
     const hashedPassword = passwordChanged ? bcrypt.hashSync(password, 10) : member.password;
 
-    const pinChanged = isOperationalRole(targetRole)
-      ? Boolean(member.pin_hash)
-      : pin !== undefined &&
-        (hasNonEmptyPin(pin)
-          ? !member.pin_hash || !bcrypt.compareSync(String(pin), member.pin_hash)
-          : Boolean(member.pin_hash));
+    const pinChanged =
+      pin !== undefined &&
+      (hasNonEmptyPin(pin)
+        ? !member.pin_hash || !bcrypt.compareSync(String(pin), member.pin_hash)
+        : Boolean(member.pin_hash));
 
-    const hashedPin = isOperationalRole(targetRole)
-      ? null
-      : pin !== undefined
+    const hashedPin =
+      pin !== undefined
         ? hasNonEmptyPin(pin)
           ? pinChanged
             ? bcrypt.hashSync(String(pin), 10)
@@ -543,36 +582,51 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
       role: targetRole,
       isActive: member.is_active === 1,
     });
-    const result = db
-      .prepare(`
-      UPDATE users SET
-        name       = COALESCE(?, name),
-        email      = CASE WHEN ? = 1 THEN ? ELSE email END,
-        password   = ?,
-        role       = COALESCE(?, role),
-        pin_hash   = ?,
-        staff_code_hash = ?,
-        tokens_valid_after = ?,
-        updated_at = ?
-      WHERE id = ?
-        AND (
-          ? = 0
-          OR (SELECT COUNT(*) FROM users WHERE role = 'owner' AND is_active = 1) > 1
-        )
-    `)
-      .run(
-        name || null,
-        emailProvided ? 1 : 0,
-        normalizedEmail || null,
-        hashedPassword,
-        role || null,
-        hashedPin,
-        hashedStaffCode,
-        tokensValidAfter,
-        now(),
-        req.params.id,
-        demotesActiveOwner ? 1 : 0,
-      );
+    let ownerEmailSynced = false;
+    const result = db.transaction(() => {
+      const updateResult = db
+        .prepare(`
+        UPDATE users SET
+          name       = COALESCE(?, name),
+          email      = CASE WHEN ? = 1 THEN ? ELSE email END,
+          password   = ?,
+          role       = COALESCE(?, role),
+          pin_hash   = ?,
+          staff_code_hash = ?,
+          tokens_valid_after = ?,
+          updated_at = ?
+        WHERE id = ?
+          AND (
+            ? = 0
+            OR (SELECT COUNT(*) FROM users WHERE role = 'owner' AND is_active = 1) > 1
+          )
+      `)
+        .run(
+          name || null,
+          emailProvided ? 1 : 0,
+          normalizedEmail || null,
+          hashedPassword,
+          role || null,
+          hashedPin,
+          hashedStaffCode,
+          tokensValidAfter,
+          now(),
+          req.params.id,
+          demotesActiveOwner ? 1 : 0,
+        );
+      if (
+        updateResult.changes > 0 &&
+        member.is_active === 1 &&
+        (member.role === 'owner' || targetRole === 'owner')
+      ) {
+        ownerEmailSynced = syncRegisteredOwnerEmail(
+          db,
+          member.role === 'owner' ? member.email : undefined,
+          targetRole === 'owner' ? (emailProvided ? normalizedEmail : member.email) : undefined,
+        );
+      }
+      return updateResult;
+    })();
     if (result.changes === 0) {
       captureAdministrationAccessGuard();
       return res.status(400).json({
@@ -582,6 +636,13 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
     }
     invalidateUserAuthCache(req.params.id as string);
     syncPostHogIdentity();
+    if (ownerEmailSynced) {
+      try {
+        cloudSync.refreshRegistrationProfile();
+      } catch {
+        // Cloud profile refresh is best-effort and must not fail staff updates.
+      }
+    }
 
     const updated = db
       .prepare(`SELECT ${STAFF_SELECT_FIELDS} FROM users WHERE id = ?`)
@@ -589,6 +650,7 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
 
     res.json({ staff: updated });
   } catch (error: any) {
+    res.locals.postHogError = error;
     if (error instanceof AdministrationUnreachableError) {
       captureAdministrationAccessGuard();
       return res.status(400).json({ error: error.message, code: 'administration_unreachable' });
@@ -620,23 +682,38 @@ router.post('/:id/deactivate', requireStaffWrite, (req: Request, res: Response) 
       role: member.role,
       isActive: false,
     });
-    const result = db
-      .prepare(`
-      UPDATE users SET is_active = 0, tokens_valid_after = ?, updated_at = ?
-      WHERE id = ? AND is_active = 1
-        AND (role != 'owner' OR (SELECT COUNT(*) FROM users WHERE role = 'owner' AND is_active = 1) > 1)
-    `)
-      .run(changedAt, changedAt, req.params.id);
+    let ownerEmailSynced = false;
+    const result = db.transaction(() => {
+      const updateResult = db
+        .prepare(`
+        UPDATE users SET is_active = 0, tokens_valid_after = ?, updated_at = ?
+        WHERE id = ? AND is_active = 1
+          AND (role != 'owner' OR (SELECT COUNT(*) FROM users WHERE role = 'owner' AND is_active = 1) > 1)
+      `)
+        .run(changedAt, changedAt, req.params.id);
+      if (updateResult.changes > 0 && member.role === 'owner') {
+        ownerEmailSynced = syncRegisteredOwnerEmail(db);
+      }
+      return updateResult;
+    })();
     if (result.changes === 0) {
       captureAdministrationAccessGuard();
       return res.status(400).json({ error: 'Cannot deactivate the last owner account' });
     }
     invalidateUserAuthCache(req.params.id as string);
+    if (ownerEmailSynced) {
+      try {
+        cloudSync.refreshRegistrationProfile();
+      } catch {
+        // Cloud profile refresh is best-effort and must not fail staff deactivation.
+      }
+    }
     const updated = db
       .prepare(`SELECT ${STAFF_SELECT_FIELDS} FROM users WHERE id = ?`)
       .get(req.params.id);
     res.json({ staff: updated });
   } catch (error: any) {
+    res.locals.postHogError = error;
     if (error instanceof AdministrationUnreachableError) {
       captureAdministrationAccessGuard();
       return res.status(400).json({ error: error.message, code: 'administration_unreachable' });
@@ -670,6 +747,7 @@ router.post('/:id/reactivate', requireStaffWrite, (req: Request, res: Response) 
       .get(req.params.id);
     res.json({ staff: updated });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

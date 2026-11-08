@@ -44,10 +44,26 @@ const mockApp = {
   getName: () => 'FloCafe',
   getVersion: () => '0.0.0-test',
 };
+const mainFrame = { frameToken: 'frame-main', detached: false };
 const mockBrowserWindow = class {
   loadURL() {}
   on() {}
-  webContents = { send: () => {}, on: () => {} };
+  isDestroyed() {
+    return false;
+  }
+  webContents = { send: () => {}, on: () => {}, mainFrame };
+  static fromWebContents(sender: any) {
+    return sender?.ownerWindow ?? null;
+  }
+};
+const mainWin = new mockBrowserWindow();
+const trustedSender = {
+  sender: {
+    ownerWindow: mainWin,
+    mainFrame,
+    getURL: () => 'http://localhost:3001/',
+  },
+  senderFrame: mainFrame,
 };
 
 Module._load = function (request: string, parent: any, isMain: boolean) {
@@ -156,7 +172,7 @@ async function main() {
     .run(now(), now());
 
   // Register IPC handlers against the mocked ipcMain (printer-ipc pattern).
-  registerIpcHandlers();
+  registerIpcHandlers(undefined, () => mainWin as any);
 
   // Mount a minimal Express app with the real settings router + auth-mock
   const app = express();
@@ -231,7 +247,6 @@ async function main() {
     {
       const handler = registered.get('set-setting');
       assert.ok(!!handler, 'set-setting IPC handler is registered');
-      const trustedSender = { sender: { getURL: () => 'http://localhost:3001/' } };
       const result = await handler!(trustedSender, 'theme_mode', 'bogus');
       assert.equal(result?.success, false, 'returns success: false');
       assert.equal(result?.error, 'Invalid theme_mode value', 'returns the expected error');
@@ -241,7 +256,6 @@ async function main() {
     console.log('\n5. IPC set-setting("theme_mode", "light") → { success: true } and persists');
     {
       const handler = registered.get('set-setting');
-      const trustedSender = { sender: { getURL: () => 'http://localhost:3001/' } };
       const result = await handler!(trustedSender, 'theme_mode', 'light');
       assert.equal(result?.success, true, 'returns success: true');
       const db = getDatabase();
@@ -255,7 +269,6 @@ async function main() {
     console.log('\n6. IPC set-setting("theme_mode", "DARK") → rejected (case-sensitive)');
     {
       const handler = registered.get('set-setting');
-      const trustedSender = { sender: { getURL: () => 'http://localhost:3001/' } };
       const result = await handler!(trustedSender, 'theme_mode', 'DARK');
       assert.equal(result?.success, false, 'uppercase is not a valid ThemeMode');
     }

@@ -82,6 +82,84 @@ test.describe('Server App tableside ordering', () => {
     ).toBeTruthy();
   });
 
+  test('does not open browser print popup when no hardware printer is configured (400)', async ({
+    page,
+  }) => {
+    const managerToken = getE2eToken('e2e-manager', 'manager@flo.local', 'manager');
+    const serverToken = getE2eToken('e2e-server', 'server@flo.local', 'server');
+    const headers = { Authorization: `Bearer ${managerToken}` };
+
+    const tableName = `NoBrowserPrint ${Date.now()}`;
+    const tableRes = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+      headers,
+      data: { number: tableName, capacity: 2 },
+    });
+    expect(tableRes.ok()).toBeTruthy();
+
+    await page.addInitScript(() => {
+      const win = window as unknown as { __browserPrintCalls?: number };
+      win.__browserPrintCalls = 0;
+      window.print = () => {
+        win.__browserPrintCalls = (win.__browserPrintCalls ?? 0) + 1;
+      };
+      const origOpen = window.open.bind(window);
+      window.open = (...args: Parameters<typeof window.open>) => {
+        win.__browserPrintCalls = (win.__browserPrintCalls ?? 0) + 1;
+        return origOpen(...args);
+      };
+    });
+
+    let kotCalls = 0;
+    let billCalls = 0;
+    await page.route('**/api/printers/print-kot', async (route) => {
+      kotCalls += 1;
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'No default printer configured' }),
+      });
+    });
+    await page.route('**/api/printers/print-bill', async (route) => {
+      billCalls += 1;
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'No default printer configured' }),
+      });
+    });
+
+    await openServerApp(page, serverToken);
+    await page.getByRole('button', { name: new RegExp(tableName) }).click();
+
+    const search = page.getByTestId('pos-product-grid').getByPlaceholder('Search menu');
+    await search.fill('E2E Coffee');
+    await search.press('Enter');
+
+    const kotResponsePromise = page.waitForResponse(
+      (res) => res.url().includes('/api/printers/print-kot') && res.status() === 400,
+    );
+    const billResponsePromise = page.waitForResponse(
+      (res) => res.url().includes('/api/printers/print-bill') && res.status() === 400,
+    );
+
+    await page.getByRole('button', { name: 'Send to kitchen' }).first().click();
+    await expect(page.getByText('Order sent', { exact: true }).first()).toBeVisible();
+
+    await Promise.all([kotResponsePromise, billResponsePromise]);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    expect(kotCalls).toBe(1);
+    expect(billCalls).toBe(1);
+
+    const browserPrintCalls = await page.evaluate(
+      () => (window as unknown as { __browserPrintCalls?: number }).__browserPrintCalls ?? 0,
+    );
+    expect(browserPrintCalls).toBe(0);
+    await expect(page.getByText('No default printer configured')).toHaveCount(0);
+    await expect(page.getByText("Order sent, but the kitchen ticket didn't print")).toHaveCount(0);
+    await expect(page.getByText("Order sent, but the bill didn't print")).toHaveCount(0);
+  });
+
   test('explains that tables are required when none are set up', async ({ page }) => {
     const serverToken = getE2eToken('e2e-server', 'server@flo.local', 'server');
     await page.route('**/api/tables?*', (route) =>
@@ -638,4 +716,229 @@ test.describe('Server App tableside ordering', () => {
     const { orders: ordersB } = await ordersBRes.json();
     expect(ordersB).toHaveLength(0);
   });
+
+  test('refreshes move-table permission, closes mobile ticket drawer when opening MoveTableModal, and preserves pending send retry key across a table move', async ({
+    page,
+  }) => {
+    const managerToken = getE2eToken('e2e-manager', 'manager@flo.local', 'manager');
+    const serverToken = getE2eToken('e2e-server', 'server@flo.local', 'server');
+    const headers = { Authorization: `Bearer ${managerToken}` };
+    await page.request.put(`${E2E_BASE_URL}/api/settings/language`, {
+      headers,
+      data: { value: 'en' },
+    });
+
+    const stamp = Date.now();
+    const tableSrcName = `MoveSrc ${stamp}`;
+    const tableDstName = `MoveDst ${stamp}`;
+    const [srcRes, dstRes] = await Promise.all([
+      page.request.post(`${E2E_BASE_URL}/api/tables`, {
+        headers,
+        data: { number: tableSrcName, capacity: 4 },
+      }),
+      page.request.post(`${E2E_BASE_URL}/api/tables`, {
+        headers,
+        data: { number: tableDstName, capacity: 4 },
+      }),
+    ]);
+    expect(srcRes.ok()).toBeTruthy();
+    expect(dstRes.ok()).toBeTruthy();
+    const { table: tableSrc } = await srcRes.json();
+    const { table: tableDst } = await dstRes.json();
+
+    // Start on a phone viewport with tables.orders.move initially omitted from /api/auth/me.
+    await page.setViewportSize({ width: 390, height: 844 });
+    let grantMovePermission = false;
+    let delayNextAuthMe = false;
+    let markAuthMeIntercepted: () => void = () => {};
+    let releaseAuthMe: () => void = () => {};
+    const authMeIntercepted = new Promise<void>((resolve) => {
+      markAuthMeIntercepted = resolve;
+    });
+    const authMeGate = new Promise<void>((resolve) => {
+      releaseAuthMe = resolve;
+    });
+    await page.route('**/api/auth/me', async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      if (delayNextAuthMe) {
+        delayNextAuthMe = false;
+        markAuthMeIntercepted();
+        await authMeGate;
+      }
+      if (!grantMovePermission && Array.isArray(json?.user?.permission_ids)) {
+        json.user.permission_ids = json.user.permission_ids.filter(
+          (id: string) => id !== 'tables.orders.move',
+        );
+      }
+      await route.fulfill({ response, json });
+    });
+
+    await openServerApp(page, serverToken);
+    await page.getByRole('button', { name: new RegExp(tableSrcName) }).click();
+
+    // Create the initial dine-in order on Table Src.
+    const search = page.getByTestId('pos-product-grid').getByPlaceholder('Search menu');
+    await search.fill('E2E Coffee');
+    await search.press('Enter');
+    await page.getByRole('button', { name: 'Current ticket' }).click();
+    await page.getByRole('button', { name: 'Send to kitchen' }).last().click();
+    await expect(page.getByText('Order sent').first()).toBeVisible();
+
+    await pickTable(page, tableSrcName);
+    // Open mobile ticket drawer: Move Table is hidden while tables.orders.move is not granted.
+    await page.getByRole('button', { name: 'Current ticket' }).click();
+    await expect(page.getByRole('button', { name: 'Move Table' })).toHaveCount(0);
+
+    // Close drawer, grant tables.orders.move, mark the order as served, and tap Refresh:
+    // served orders must remain loaded in currentOrder so Move Table is available.
+    await page.keyboard.press('Escape');
+    const srcOrdersLookup = await page.request.get(`${E2E_BASE_URL}/api/orders`, {
+      headers,
+      params: { table_id: tableSrc.id, type: 'dine_in', per_page: 5 },
+    });
+    const { orders: srcOrdersBeforeMove } = await srcOrdersLookup.json();
+    expect(srcOrdersBeforeMove).toHaveLength(1);
+    const markServedRes = await page.request.patch(
+      `${E2E_BASE_URL}/api/orders/${srcOrdersBeforeMove[0].id}/status`,
+      {
+        headers,
+        data: { status: 'served' },
+      },
+    );
+    expect(markServedRes.ok()).toBeTruthy();
+
+    grantMovePermission = true;
+    const authMeRefresh = page.waitForResponse(
+      (res) => res.url().includes('/api/auth/me') && res.ok(),
+    );
+    const servedOrderRefresh = page.waitForResponse(
+      (res) =>
+        res.url().includes('/api/orders') &&
+        res.url().includes(`table_id=${tableSrc.id}`) &&
+        res.url().includes('served') &&
+        res.ok(),
+    );
+    await page.locator('header').getByRole('button', { name: 'Refresh' }).click();
+    await Promise.all([authMeRefresh, servedOrderRefresh]);
+
+    // Add a second item whose append commits on the backend while its HTTP reply is lost (500).
+    await search.fill('E2E Coffee');
+    await search.press('Enter');
+
+    const appendIdempotencyKeys: string[] = [];
+    let simulateLostAppendReply = true;
+    await page.route('**/api/orders/*/items', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      appendIdempotencyKeys.push(route.request().headers()['idempotency-key'] || '');
+      if (simulateLostAppendReply) {
+        simulateLostAppendReply = false;
+        const committed = await route.fetch();
+        expect(committed.ok()).toBeTruthy();
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Temporary failure after append commit' }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.getByRole('button', { name: 'Current ticket' }).click();
+    const moveTableButton = page.getByRole('button', { name: 'Move Table' }).last();
+    await expect(moveTableButton).toBeVisible();
+    await page.getByRole('button', { name: 'Add to order' }).last().click();
+    await expect(page.getByRole('button', { name: 'Add to order' }).last()).toBeEnabled();
+    expect(appendIdempotencyKeys).toHaveLength(1);
+    expect(appendIdempotencyKeys[0]).toContain(`server-app-${tableSrc.id}-`);
+
+    let markMoveIntercepted: () => void = () => {};
+    let releaseMoveOrder: () => void = () => {};
+    const moveIntercepted = new Promise<void>((resolve) => {
+      markMoveIntercepted = resolve;
+    });
+    const moveGate = new Promise<void>((resolve) => {
+      releaseMoveOrder = resolve;
+    });
+    await page.route('**/api/tables/*/move-order', async (route) => {
+      markMoveIntercepted();
+      await moveGate;
+      await route.continue();
+    });
+
+    // Tap Move Table inside the mobile ticket drawer: the drawer closes so MoveTableModal is uncovered and clickable.
+    await moveTableButton.click();
+    const modal = page.getByTestId('move-table-modal');
+    await expect(modal).toBeVisible();
+    await modal.getByRole('button', { name: new RegExp(tableDstName) }).click();
+    await modal.getByRole('button', { name: new RegExp(`Move to ${tableDstName}`) }).click();
+    await moveIntercepted;
+
+    // While the move request is in flight, both the header X close button and the footer Cancel button must be disabled.
+    const cancelButtons = modal.getByRole('button', { name: 'Cancel' });
+    await expect(cancelButtons.first()).toBeDisabled();
+    await expect(cancelButtons.last()).toBeDisabled();
+
+    releaseMoveOrder();
+    await expect(modal).toBeHidden();
+    await expect(page.locator('header')).toContainText(tableDstName);
+
+    // Retry sending the pending draft on Table Dst: must reuse the original Idempotency-Key and not duplicate the item.
+    await page.getByRole('button', { name: 'Current ticket' }).click();
+    await page.getByRole('button', { name: 'Add to order' }).last().click();
+    await expect(page.getByText('Order sent').first()).toBeVisible();
+    expect(appendIdempotencyKeys).toHaveLength(2);
+    expect(appendIdempotencyKeys[1]).toBe(appendIdempotencyKeys[0]);
+
+    const dstOrdersRes = await page.request.get(`${E2E_BASE_URL}/api/orders`, {
+      headers,
+      params: { table_id: tableDst.id, type: 'dine_in', per_page: 5 },
+    });
+    const { orders: dstOrders } = await dstOrdersRes.json();
+    expect(dstOrders).toHaveLength(1);
+    const totalCoffeeQty = (dstOrders[0]?.items || [])
+      .filter((item: { product_name: string }) => item.product_name === 'E2E Coffee')
+      .reduce((sum: number, item: { quantity: number }) => sum + item.quantity, 0);
+    expect(totalCoffeeQty).toBe(2);
+
+    // A late /api/auth/me reply finishing after logout must not restore the logged-out user.
+    await page.keyboard.press('Escape');
+    delayNextAuthMe = true;
+    const delayedAuthMeResponse = page.waitForResponse((res) => res.url().includes('/api/auth/me'));
+    await page.locator('header').getByRole('button', { name: 'Refresh' }).click();
+    await authMeIntercepted;
+    await page.locator('header').getByRole('button', { name: 'Logout' }).click();
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+    releaseAuthMe();
+    await delayedAuthMeResponse;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  });
+});
+
+test('Server App locks locally on configured inactivity even if logout fails', async ({ page }) => {
+  await page.clock.install();
+  await page.route('**/api/settings/auto_lock_minutes', (route) =>
+    route.fulfill({ json: { setting: { value: '1' } } }),
+  );
+  let logoutAttempts = 0;
+  await page.route('**/api/auth/logout', (route) => {
+    logoutAttempts += 1;
+    return route.fulfill({ status: 503, json: { error: 'offline' } });
+  });
+  const serverToken = getE2eToken('e2e-server', 'server@flo.local', 'server');
+  await openServerApp(page, serverToken);
+  await expect(page.getByTestId('pos-product-grid')).toBeVisible();
+  await page.clock.fastForward('00:59');
+  await page.keyboard.press('Shift');
+  await page.clock.fastForward('00:59');
+  await expect(page.getByTestId('pos-product-grid')).toBeVisible();
+  await page.clock.fastForward('00:02');
+  await expect(page.getByRole('button', { name: 'Sign In' })).toBeVisible();
+  expect(await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY)).toBeNull();
+  await expect.poll(() => logoutAttempts).toBe(1);
 });

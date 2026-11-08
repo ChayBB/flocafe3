@@ -206,6 +206,19 @@ async function main() {
     assert.equal(singleOrder.status, 200, 'a server reads one order through Server App');
     assert.ok(Array.isArray(singleOrder.body.order?.bills), 'the order carries its bills');
 
+    setSetting('auto_lock_minutes', '1');
+    const unauthIdleSetting = await fetch(`${baseUrl}/api/settings/auto_lock_minutes`);
+    assert.equal(unauthIdleSetting.status, 401, 'Server App idle setting requires authentication');
+    for (const role of ['server', 'manager', 'owner']) {
+      const setting = await getJson(baseUrl, '/api/settings/auto_lock_minutes', roleTokens[role]);
+      assert.equal(setting.status, 200, `${role} can read the idle timeout`);
+      assert.equal(setting.body.setting.value, '1', `${role} receives the configured timeout`);
+    }
+    const otherSetting = await fetch(`${baseUrl}/api/settings/country`, {
+      headers: { Authorization: `Bearer ${roleTokens.server}` },
+    });
+    assert.equal(otherSetting.status, 404, 'Server App does not proxy general settings');
+
     const liveServerLogin = await postJson(baseUrl, '/api/auth/login', {
       email: 'server@server-app.test',
       password: 'ServerPass123!',
@@ -363,10 +376,52 @@ async function main() {
       'Unrevoked manager token with kitchen permission remains usable on KDS after memory reset',
     );
 
-    // Protected forwarded routes must rate-limit LAN clients before auth or downstream work.
-    const customerResponses = await Promise.all(
-      Array.from({ length: 151 }, () => postJson(baseUrl, '/api/customers', {})),
+    db.prepare(
+      `INSERT INTO tables (id, number, capacity, status, is_active, created_at, updated_at)
+       VALUES (?, ?, 4, ?, 1, ?, ?)`,
+    ).run('tbl-move-src', '10', 'occupied', now(), now());
+    db.prepare(
+      `INSERT INTO tables (id, number, capacity, status, is_active, created_at, updated_at)
+       VALUES (?, ?, 4, ?, 1, ?, ?)`,
+    ).run('tbl-move-dst', '11', 'available', now(), now());
+    const moveOrderResult = db
+      .prepare(
+        `INSERT INTO orders (order_number, table_id, user_id, type, status, subtotal, total, created_at, updated_at)
+         VALUES ('ORD-MOVE-1', 'tbl-move-src', 'server-app-server', 'dine_in', 'pending', 10, 10, ?, ?)`,
+      )
+      .run(now(), now());
+    const moveOrderId = Number(moveOrderResult.lastInsertRowid);
+
+    const unauthMove = await postJson(baseUrl, '/api/tables/tbl-move-src/move-order', {
+      target_table_id: 'tbl-move-dst',
+    });
+    assert.equal(
+      unauthMove.status,
+      401,
+      'Unauthenticated Server App move-order is rejected with 401',
     );
+
+    const serverMove = await postJson(
+      baseUrl,
+      '/api/tables/tbl-move-src/move-order',
+      { target_table_id: 'tbl-move-dst', order_id: String(moveOrderId) },
+      liveServerLogin.body.access_token,
+    );
+    assert.equal(
+      serverMove.status,
+      200,
+      'Authenticated server role can move an active table order via Server App',
+    );
+    assert.equal(serverMove.body.order.id, moveOrderId);
+    assert.equal(serverMove.body.order.table_id, 'tbl-move-dst');
+    assert.equal(serverMove.body.sourceTable.status, 'available');
+    assert.equal(serverMove.body.targetTable.status, 'occupied');
+
+    // Protected forwarded routes must rate-limit LAN clients before auth or downstream work.
+    const customerResponses = [];
+    for (let i = 0; i < 151; i += 1) {
+      customerResponses.push(await postJson(baseUrl, '/api/customers', {}));
+    }
     assert.equal(
       customerResponses.filter(({ status }) => status === 401).length,
       150,
@@ -378,9 +433,10 @@ async function main() {
       'customer requests over the limit are throttled on localhost',
     );
 
-    const printKotResponses = await Promise.all(
-      Array.from({ length: 29 }, () => postJson(baseUrl, '/api/printers/print-kot', {})),
-    );
+    const printKotResponses = [];
+    for (let i = 0; i < 29; i += 1) {
+      printKotResponses.push(await postJson(baseUrl, '/api/printers/print-kot', {}));
+    }
     assert(
       printKotResponses.every(({ status }) => status === 401),
       'KOT requests below the shared print limit reach authentication',

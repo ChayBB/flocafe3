@@ -3,6 +3,7 @@
 import axios, { AxiosInstance } from 'axios';
 import toast from 'react-hot-toast';
 import {
+  ArrowRightLeft,
   LayoutGrid,
   Minus,
   Plus,
@@ -20,7 +21,15 @@ import {
   Clock,
 } from 'lucide-react';
 import { Drawer, DrawerContent, DrawerTrigger } from '@/components/ui/drawer';
-import { FormEvent, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { parsePhone } from '@/lib/phone';
 import { useSyncServerLanguage, writeLanguageOverride } from '@/lib/i18n';
 import type { Language } from '@/lib/i18n/languages';
@@ -50,14 +59,17 @@ import { toastApiError } from '@/lib/api-error';
 import { parseDbTimestamp } from '@/lib/utils';
 import { formatCurrencyForTenant } from '@/lib/countries';
 import { createPaymentIdempotencyKey } from '@/lib/payment-idempotency';
-import { printerService } from '@/lib/printer/PrinterService';
 import { generateCartItemId } from '@/lib/cart-identity';
 import { productNeedsCustomizer, scannedVariantNeedsCustomizer } from '@/lib/product-variants';
 import AddonModal from '@/components/pos/AddonModal';
 import ProductGrid, { type QuickFilter } from '@/components/pos/ProductGrid';
 import { hasTag } from '@/components/pos/DietaryBadge';
+import type { PosCategorySort, PosItemSort } from '@/lib/pos-sort';
+import MoveTableModal from '@/components/tables/MoveTableModal';
+import { tenantCan } from '@/lib/permissions';
 import type {
-  Order as FullOrder,
+  Table as FullTable,
+  Tenant,
   Product,
   Addon,
   CartItem,
@@ -69,7 +81,7 @@ import { playSoundFile, unlockKdsAlertSound } from '@/lib/kds-alert-sound';
 
 const SERVE_CONFIRM_BELL = '/sounds/serve-confirm-bell.wav';
 
-type User = { id: string; name: string; email: string; role: string };
+type User = { id: string; name: string; email: string; role: string; permission_ids?: string[] };
 type Table = {
   id: string;
   name?: string;
@@ -118,6 +130,8 @@ type ServerAppInfo = {
   business_name?: string;
   store_logo_version?: string | null;
   store_cover_version?: string | null;
+  category_sort?: PosCategorySort;
+  item_sort?: PosItemSort;
 };
 
 const TOKEN_KEY = 'flocafe:server-app-token';
@@ -138,7 +152,7 @@ function createApi(): AxiosInstance {
   const api = axios.create({ baseURL: window.location.origin, timeout: 10000 });
   api.interceptors.request.use((config) => {
     const token = localStorage.getItem(TOKEN_KEY);
-    if (token) config.headers.Authorization = `Bearer ${token}`;
+    if (token && !config.headers.Authorization) config.headers.Authorization = `Bearer ${token}`;
     return config;
   });
   api.interceptors.response.use(
@@ -165,6 +179,7 @@ function money(value: number | string, regional: ServerAppInfo | null) {
 
 type SendSnapshot = {
   tableId: string;
+  requestTableId?: string;
   tableName: string | undefined;
   orderId: number | null;
   orderCustomer: Order['customer'] | null;
@@ -368,6 +383,7 @@ export default function ServerStandalonePage() {
   const [addonModalVariant, setAddonModalVariant] = useState<ProductVariant | null>(null);
   const [editingDraftLine, setEditingDraftLine] = useState<DraftLine | null>(null);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
+  const [moveTableModalOpen, setMoveTableModalOpen] = useState(false);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -402,15 +418,75 @@ export default function ServerStandalonePage() {
   const orderLoadedTableIdRef = useRef('');
   const orderLookupFailedRef = useRef(false);
   const orderLoadSeqRef = useRef(0);
+  const authSessionSeqRef = useRef(0);
+  const activeUserIdRef = useRef<string | null>(null);
+  const [autoLockMinutes, setAutoLockMinutes] = useState(0);
+  const lastActivityRef = useRef(0);
+  const liveDraftRef = useRef({
+    tableId: '',
+    draft: [] as DraftLine[],
+    customerName: '',
+    customerPhone: '',
+    orderNotes: '',
+  });
+  const suspendedDraftRef = useRef<
+    | (typeof liveDraftRef.current & {
+        ownerId: string;
+        attempt: typeof sendAttemptRef.current;
+      })
+    | null
+  >(null);
+
+  useEffect(() => {
+    liveDraftRef.current = {
+      tableId: selectedTableId,
+      draft,
+      customerName,
+      customerPhone,
+      orderNotes,
+    };
+  }, [selectedTableId, draft, customerName, customerPhone, orderNotes]);
+
+  const loadUser = useCallback(async () => {
+    if (!api || sendInFlightRef.current) return;
+    const requestToken = localStorage.getItem(TOKEN_KEY);
+    if (!requestToken) return;
+    const sessionSeq = authSessionSeqRef.current;
+    const res = await api.get('/api/auth/me');
+    if (
+      sendInFlightRef.current ||
+      sessionSeq !== authSessionSeqRef.current ||
+      localStorage.getItem(TOKEN_KEY) !== requestToken ||
+      !res.data?.user
+    ) {
+      return;
+    }
+    const nextUser: User = res.data.user;
+    setUser((prev) => {
+      if (!prev || prev.id !== nextUser.id) return prev;
+      if (
+        prev.role === nextUser.role &&
+        prev.name === nextUser.name &&
+        prev.email === nextUser.email &&
+        (prev.permission_ids || []).join(',') === (nextUser.permission_ids || []).join(',')
+      ) {
+        return prev;
+      }
+      return nextUser;
+    });
+  }, [api]);
 
   async function loadAll(options?: { allowWhileSending?: boolean }) {
     if (!api) return;
     if (sendInFlightRef.current && !options?.allowWhileSending) return;
+    const session = authSessionSeqRef.current;
+    const token = localStorage.getItem(TOKEN_KEY);
     const [categoriesRes, productsRes, tablesRes] = await Promise.all([
       api.get('/api/categories', { params: { active: 'true' } }),
       api.get('/api/products', { params: { active: 'true' } }),
       api.get('/api/tables', { params: { active: 'true' } }),
     ]);
+    if (session !== authSessionSeqRef.current || token !== localStorage.getItem(TOKEN_KEY)) return;
     if (sendInFlightRef.current && !options?.allowWhileSending) return;
     setCategories(categoriesRes.data.categories || []);
     setProducts(productsRes.data.products || []);
@@ -483,10 +559,13 @@ export default function ServerStandalonePage() {
       }
       const order = res.data.orders?.[0] || null;
       setCurrentOrder(order);
+      const suspended = suspendedDraftRef.current;
       const pendingAttempt =
         sendAttemptRef.current?.snapshot.tableId === tableId
           ? sendAttemptRef.current.snapshot
-          : null;
+          : suspended?.ownerId === activeUserIdRef.current && suspended.tableId === tableId
+            ? suspended
+            : null;
       if (pendingAttempt) {
         setCustomerName(pendingAttempt.customerName);
         setCustomerPhone(pendingAttempt.customerPhone);
@@ -497,6 +576,7 @@ export default function ServerStandalonePage() {
         setCustomerName('');
         setCustomerPhone('');
       }
+      if (suspended && !sendInFlightRef.current) suspendedDraftRef.current = null;
       setCustomerMatch(null);
       setCustomerSearched(false);
       orderLoadedTableIdRef.current = tableId;
@@ -617,8 +697,115 @@ export default function ServerStandalonePage() {
     };
   }, [api]);
 
+  const userId = user?.id;
+
   useEffect(() => {
-    if (!user || !api) return;
+    activeUserIdRef.current = userId ?? null;
+  }, [userId]);
+
+  useEffect(() => {
+    if (!api || !userId) return;
+    let cancelled = false;
+    const session = authSessionSeqRef.current;
+    const token = localStorage.getItem(TOKEN_KEY);
+    const refresh = () => {
+      api
+        .get('/api/settings/auto_lock_minutes')
+        .then((response) => {
+          if (
+            cancelled ||
+            session !== authSessionSeqRef.current ||
+            token !== localStorage.getItem(TOKEN_KEY)
+          )
+            return;
+          const minutes = Number(response.data?.setting?.value);
+          if ([0, 1, 5, 15, 30].includes(minutes)) setAutoLockMinutes(minutes);
+        })
+        .catch(() => {});
+    };
+    lastActivityRef.current = Date.now();
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', refresh);
+    };
+  }, [api, userId]);
+
+  useEffect(() => {
+    if (!api || !userId || autoLockMinutes <= 0) return;
+    const timeout = autoLockMinutes * 60_000;
+    let timer: ReturnType<typeof setTimeout>;
+    let locked = false;
+    const lock = () => {
+      if (locked) return;
+      locked = true;
+      const token = localStorage.getItem(TOKEN_KEY);
+      suspendedDraftRef.current = {
+        ...liveDraftRef.current,
+        ownerId: userId,
+        attempt: sendAttemptRef.current,
+      };
+      authSessionSeqRef.current += 1;
+      orderLoadSeqRef.current += 1;
+      sendSeqRef.current += 1;
+      cancelPendingCustomerLookup();
+      localStorage.removeItem(TOKEN_KEY);
+      sendAttemptRef.current = null;
+      selectedTableIdRef.current = '';
+      orderLoadedTableIdRef.current = '';
+      activeUserIdRef.current = null;
+      setUser(null);
+      setEmail('');
+      setPassword('');
+      setDraft([]);
+      setOrderNotes('');
+      setCustomerName('');
+      setCustomerPhone('');
+      setCustomerMatch(null);
+      setCustomerSearched(false);
+      setSelectedTableId('');
+      setOrderLoadedTableId('');
+      setCurrentOrder(null);
+      setAddonModalProduct(null);
+      setEditingDraftLine(null);
+      setMoveTableModalOpen(false);
+      setMobileCartOpen(false);
+      setAutoLockMinutes(0);
+      if (token)
+        void api
+          .post('/api/auth/logout', {}, { headers: { Authorization: `Bearer ${token}` } })
+          .catch(() => {});
+    };
+    const check = () => {
+      const remaining = timeout - (Date.now() - lastActivityRef.current);
+      if (remaining <= 0) lock();
+      else timer = setTimeout(check, remaining);
+    };
+    const activity = () => {
+      lastActivityRef.current = Date.now();
+      clearTimeout(timer);
+      timer = setTimeout(check, timeout);
+    };
+    const visible = () => {
+      if (document.visibilityState === 'visible') {
+        clearTimeout(timer);
+        check();
+      }
+    };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'wheel', 'mousemove'] as const;
+    events.forEach((event) => window.addEventListener(event, activity, { passive: true }));
+    document.addEventListener('visibilitychange', visible);
+    check();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((event) => window.removeEventListener(event, activity));
+      document.removeEventListener('visibilitychange', visible);
+    };
+  }, [api, userId, autoLockMinutes]);
+
+  useEffect(() => {
+    if (!userId || !api) return;
     let cancelled = false;
     api
       .get('/api/products/popular')
@@ -688,7 +875,7 @@ export default function ServerStandalonePage() {
     return () => {
       cancelled = true;
     };
-  }, [api, selectedTableId, user, t]);
+  }, [api, selectedTableId, userId, t]);
 
   const refreshLiveRef = useRef(refreshLive);
   useEffect(() => {
@@ -811,7 +998,7 @@ export default function ServerStandalonePage() {
   };
 
   useEffect(() => {
-    if (!selectedTableId || !user || !api) return;
+    if (!selectedTableId || !userId || !api) return;
     let cancelled = false;
     const loadSeq = ++orderLoadSeqRef.current;
     const targetTableId = selectedTableId;
@@ -830,10 +1017,13 @@ export default function ServerStandalonePage() {
         }
         const order = res.data.orders?.[0] || null;
         setCurrentOrder(order);
+        const suspended = suspendedDraftRef.current;
         const pendingAttempt =
           sendAttemptRef.current?.snapshot.tableId === targetTableId
             ? sendAttemptRef.current.snapshot
-            : null;
+            : suspended?.ownerId === activeUserIdRef.current && suspended.tableId === targetTableId
+              ? suspended
+              : null;
         if (pendingAttempt) {
           setCustomerName(pendingAttempt.customerName);
           setCustomerPhone(pendingAttempt.customerPhone);
@@ -844,6 +1034,7 @@ export default function ServerStandalonePage() {
           setCustomerName('');
           setCustomerPhone('');
         }
+        if (suspended && !sendInFlightRef.current) suspendedDraftRef.current = null;
         setCustomerMatch(null);
         setCustomerSearched(false);
         orderLoadedTableIdRef.current = targetTableId;
@@ -865,7 +1056,18 @@ export default function ServerStandalonePage() {
     return () => {
       cancelled = true;
     };
-  }, [api, selectedTableId, user]);
+  }, [api, selectedTableId, userId]);
+
+  useEffect(() => {
+    if (!userId || !api) return;
+    const onFocus = () => {
+      loadUser().catch(() => {});
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [api, loadUser, userId]);
 
   useEffect(() => {
     return () => {
@@ -879,10 +1081,36 @@ export default function ServerStandalonePage() {
     setOrderNotes(value.slice(0, 200));
   }
 
-  /** Moves the table's open order to a free table and follows it there. */
+  function movePendingSendAttempt(
+    sourceTableId: string,
+    targetTableId: string,
+    targetTableName?: string,
+  ) {
+    const attempt = sendAttemptRef.current;
+    if (attempt?.snapshot.tableId !== sourceTableId) return;
+    const snapshot: SendSnapshot = {
+      ...attempt.snapshot,
+      tableId: targetTableId,
+      requestTableId: attempt.snapshot.requestTableId ?? sourceTableId,
+      tableName: targetTableName ?? attempt.snapshot.tableName,
+    };
+    sendAttemptRef.current = {
+      signature: sendAttemptSignature(
+        targetTableId,
+        snapshot.draftLines,
+        snapshot.customerName,
+        snapshot.customerPhone,
+        snapshot.orderNotes,
+      ),
+      nonce: attempt.nonce,
+      snapshot,
+    };
+  }
+
   /** Moves the open order to a free table, or merges all its items into another table's order. */
   async function transferOrderTo(mode: TransferMode, target: TransferTable) {
-    if (!api || !currentOrder || !selectedTableId) return;
+    if (!api || !currentOrder || !selectedTableId || sendInFlightRef.current) return;
+    if (mode === 'move' && !canMoveTable) return;
     setTransferring(true);
     try {
       if (mode === 'move') {
@@ -890,6 +1118,7 @@ export default function ServerStandalonePage() {
           target_table_id: target.id,
           order_id: currentOrder.id,
         });
+        movePendingSendAttempt(selectedTableId, target.id, target.name);
       } else {
         await api.post(`/api/orders/${currentOrder.id}/merge-table`, {
           target_table_id: target.id,
@@ -926,8 +1155,18 @@ export default function ServerStandalonePage() {
   /** Prints the table's bill and records the request, so the POS times the wait for payment. */
   async function requestBill() {
     if (!api || !currentOrder) return;
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+    const session = authSessionSeqRef.current;
+    const isCurrent = () =>
+      authSessionSeqRef.current === session && localStorage.getItem(TOKEN_KEY) === token;
     try {
-      const { data } = await api.post(`/api/orders/${currentOrder.id}/bill-request`, {});
+      const { data } = await api.post(
+        `/api/orders/${currentOrder.id}/bill-request`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!isCurrent()) return;
       // The table stops taking orders as soon as its bill is out.
       if (data?.order)
         setCurrentOrder((order) =>
@@ -936,13 +1175,15 @@ export default function ServerStandalonePage() {
             : order,
         );
     } catch (error: unknown) {
+      if (!isCurrent()) return;
       const code = (error as { response?: { data?: { code?: string } } })?.response?.data?.code;
       if (code === 'weight_pending') toast.error(t('billBlockedPricePending'));
       else if (code === 'served_unconfirmed') toast.error(t('billBlockedNotServed'));
       else toastApiError(error, t('billRequestFailed'), apiErrorT);
       return;
     }
-    const printed = await printOrderSlip(currentOrder.id);
+    const printed = await printOrderSlip(currentOrder.id, token, isCurrent);
+    if (printed === 'cancelled' || !isCurrent()) return;
     if (printed === 'printed') toast.success(t('billRequested'));
     else if (printed === 'not-allowed') toast.success(t('billRequestNotified'));
     else toast.error(t('billRequestCashierPrintFailed'));
@@ -1013,6 +1254,7 @@ export default function ServerStandalonePage() {
       return;
     }
     selectedTableIdRef.current = tableId;
+    setMoveTableModalOpen(false);
     orderLookupFailedRef.current = false;
     orderLoadedTableIdRef.current = '';
     setOrderLoadedTableId('');
@@ -1058,7 +1300,30 @@ export default function ServerStandalonePage() {
         identifier: email.trim(),
         password,
       });
+      authSessionSeqRef.current += 1;
       localStorage.setItem(TOKEN_KEY, res.data.access_token);
+      const suspended = suspendedDraftRef.current;
+      if (suspended && suspended.ownerId === res.data.user.id) {
+        selectedTableIdRef.current = suspended.tableId;
+        setSelectedTableId(suspended.tableId);
+        setDraft(suspended.draft);
+        setCustomerName(suspended.customerName);
+        setCustomerPhone(suspended.customerPhone);
+        setOrderNotes(suspended.orderNotes);
+        sendAttemptRef.current = suspended.attempt;
+      } else if (suspended) {
+        const hadDraft =
+          suspended.draft.length > 0 ||
+          Boolean(suspended.attempt) ||
+          Boolean(suspended.orderNotes.trim()) ||
+          Boolean(suspended.customerName.trim()) ||
+          Boolean(suspended.customerPhone.trim());
+        suspendedDraftRef.current = null;
+        if (hadDraft) {
+          toast(t('draftDiscardedOnUserChange'));
+        }
+      }
+      activeUserIdRef.current = res.data.user.id;
       setUser(res.data.user);
       setShowLogin(false);
     } catch (error: unknown) {
@@ -1101,6 +1366,7 @@ export default function ServerStandalonePage() {
   }, [user]);
 
   async function logout() {
+    authSessionSeqRef.current += 1;
     try {
       await api?.post('/api/auth/logout');
     } catch {}
@@ -1216,6 +1482,8 @@ export default function ServerStandalonePage() {
   async function ensureCustomer(
     submittedName: string,
     submittedPhone: string,
+    token: string,
+    isCurrent: () => boolean,
   ): Promise<string | null> {
     if (!api) return null;
     const name = submittedName.trim();
@@ -1228,57 +1496,77 @@ export default function ServerStandalonePage() {
       try {
         const lookup = await api.get('/api/crm/lookup', {
           params: { phone: normalizedPhone },
+          headers: { Authorization: `Bearer ${token}` },
         });
+        if (!isCurrent()) throw new Error('Session changed');
         if (lookup.data.found && lookup.data.customer?.id) return lookup.data.customer.id;
-      } catch {}
+      } catch {
+        if (!isCurrent()) throw new Error('Session changed');
+      }
     }
+    if (!isCurrent()) throw new Error('Session changed');
     const fallbackName = name || t('guestFallbackName', { last4: rawPhone.slice(-4) });
-    const res = await api.post('/api/customers', {
-      name: fallbackName,
-      phone: normalizedPhone || undefined,
-    });
+    const res = await api.post(
+      '/api/customers',
+      {
+        name: fallbackName,
+        phone: normalizedPhone || undefined,
+      },
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!isCurrent()) throw new Error('Session changed');
     return res.data.customer?.id || null;
   }
 
-  // Falls back to this device's browser print dialog when no hardware printer is configured (400).
-  async function printKotForOrder(orderId: number, orderForPrint: Record<string, unknown>) {
-    if (!api) return;
+  // Stays quiet on 400 (no hardware printer configured) so tableside devices never open window.print().
+  async function printKotForOrder(
+    orderId: number,
+    orderForPrint: Record<string, unknown>,
+    token: string,
+    isCurrent: () => boolean,
+  ) {
+    if (!api || !isCurrent()) return;
     try {
-      await api.post('/api/printers/print-kot', {
-        orderId,
-        items: orderForPrint.items,
-      });
-      return;
+      await api.post(
+        '/api/printers/print-kot',
+        {
+          orderId,
+          items: orderForPrint.items,
+        },
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
     } catch (printError: unknown) {
+      if (!isCurrent()) return;
       const status = axios.isAxiosError(printError) ? printError.response?.status : undefined;
-      if (status !== 400) {
-        toastApiError(printError, t('kotPrintFailed'), apiErrorT);
-        return;
-      }
-    }
-    try {
-      const { generateKotHtml, resolveKotTicketLanguage } =
-        await import('@/lib/printer/kot-web-print');
-      const html = generateKotHtml(orderForPrint as unknown as FullOrder, {
-        paperWidth: 80,
-        language: resolveKotTicketLanguage(),
-        stationName: t('kitchen'),
-      });
-      await printerService.printViaBrowser(html, 80);
-    } catch (fallbackError: unknown) {
-      toastApiError(fallbackError, t('kotPrintFailed'), apiErrorT);
+      const errorCode = axios.isAxiosError(printError)
+        ? (printError.response?.data as { code?: unknown } | undefined)?.code
+        : undefined;
+      if (status === 400 || (status === 403 && errorCode === 'KOT_PRINTING_DISABLED')) return;
+      toastApiError(printError, t('kotPrintFailed'), apiErrorT);
     }
   }
 
-  /** Bills print only on the cashier's printer, never on this device; 403 means servers may not print bills. */
-  async function printOrderSlip(orderId: number): Promise<'printed' | 'not-allowed' | 'failed'> {
-    if (!api) return 'failed';
+  async function printOrderSlip(
+    orderId: number,
+    token: string,
+    isCurrent: () => boolean,
+  ): Promise<'printed' | 'not-allowed' | 'unavailable' | 'failed' | 'cancelled'> {
+    if (!api || !isCurrent()) return 'cancelled';
     try {
-      await api.post('/api/printers/print-bill', { orderId });
-      return 'printed';
+      await api.post(
+        '/api/printers/print-bill',
+        { orderId },
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      return isCurrent() ? 'printed' : 'cancelled';
     } catch (printError: unknown) {
-      const status = axios.isAxiosError(printError) ? printError.response?.status : undefined;
-      return status === 403 ? 'not-allowed' : 'failed';
+      if (!isCurrent()) return 'cancelled';
+      const response = axios.isAxiosError(printError) ? printError.response : undefined;
+      if (response?.status === 400) return 'unavailable';
+      if (response?.status === 403 && response.data?.code === 'BILL_PRINTING_DISABLED') {
+        return 'not-allowed';
+      }
+      return 'failed';
     }
   }
 
@@ -1384,6 +1672,13 @@ export default function ServerStandalonePage() {
     ) {
       return;
     }
+    const requestToken = localStorage.getItem(TOKEN_KEY);
+    const requestSession = authSessionSeqRef.current;
+    const requestOwner = user?.id;
+    if (!requestToken || !requestOwner) return;
+    const isCurrent = () =>
+      authSessionSeqRef.current === requestSession &&
+      localStorage.getItem(TOKEN_KEY) === requestToken;
     const snapshotTable = tables.find((table) => table.id === selectedTableId) || null;
     const candidateSnapshot: SendSnapshot = {
       tableId: selectedTableId,
@@ -1416,14 +1711,21 @@ export default function ServerStandalonePage() {
       };
     }
     const { nonce, snapshot } = sendAttemptRef.current;
-    const idempotencyKey = `server-app-${snapshot.tableId}-${nonce}`;
+    const requestTableId = snapshot.requestTableId ?? snapshot.tableId;
+    const idempotencyKey = `server-app-${requestTableId}-${nonce}`;
     sendSeqRef.current += 1;
     orderLoadSeqRef.current += 1;
     cancelPendingCustomerLookup();
     sendInFlightRef.current = true;
     setSending(true);
     try {
-      const customerId = await ensureCustomer(snapshot.customerName, snapshot.customerPhone);
+      const customerId = await ensureCustomer(
+        snapshot.customerName,
+        snapshot.customerPhone,
+        requestToken,
+        isCurrent,
+      );
+      if (!isCurrent()) return;
       const items = snapshot.draftLines.map((line) => cartItemToOrderItem(line));
       const specialInstructions = snapshot.orderNotes.trim() || undefined;
       let orderId: number;
@@ -1434,20 +1736,23 @@ export default function ServerStandalonePage() {
           `/api/orders/${snapshot.orderId}/items`,
           { items, special_instructions: specialInstructions },
           {
-            headers: { 'Idempotency-Key': idempotencyKey },
+            headers: { 'Idempotency-Key': idempotencyKey, Authorization: `Bearer ${requestToken}` },
           },
         );
         orderId = data.order.id;
         rawOrder = data.order;
         // Print only what this call added — omitting items reprints every pending item on the order.
-        newItems = (data.order.items || []).filter(
-          (item: OrderItem) => !snapshot.existingItemIds.has(item.id),
-        );
+        newItems =
+          Array.isArray(data.added_items) && data.added_items.length > 0
+            ? data.added_items
+            : (data.order.items || []).filter(
+                (item: OrderItem) => !snapshot.existingItemIds.has(item.id),
+              );
       } else {
         const { data } = await api.post(
           '/api/orders',
           {
-            table_id: snapshot.tableId,
+            table_id: requestTableId,
             customer_id: customerId,
             type: 'dine_in',
             special_instructions: specialInstructions,
@@ -1458,6 +1763,26 @@ export default function ServerStandalonePage() {
         orderId = data.order.id;
         rawOrder = data.order;
         newItems = data.order.items || [];
+      }
+      if (!isCurrent()) {
+        const suspended = suspendedDraftRef.current;
+        if (suspended?.ownerId === requestOwner && suspended.attempt?.nonce === nonce) {
+          const submitted = new Map(snapshot.draftLines.map((line) => [line.id, line.quantity]));
+          const remaining = suspended.draft.flatMap((line) => {
+            const count = submitted.get(line.id);
+            if (count === undefined) return [line];
+            return line.quantity > count ? [{ ...line, quantity: line.quantity - count }] : [];
+          });
+          suspended.draft = remaining;
+          if (suspended.orderNotes === snapshot.orderNotes) suspended.orderNotes = '';
+          suspended.attempt = null;
+          if (activeUserIdRef.current === requestOwner) {
+            setDraft(remaining);
+            setOrderNotes(suspended.orderNotes);
+            if (sendAttemptRef.current?.nonce === nonce) sendAttemptRef.current = null;
+          }
+        }
+        return;
       }
       if (sendAttemptRef.current?.signature === signature) {
         sendAttemptRef.current = null;
@@ -1482,6 +1807,7 @@ export default function ServerStandalonePage() {
         loadAll({ allowWhileSending: true }),
         loadOrder(snapshot.tableId, { allowWhileSending: true }),
       ]).catch(() => {});
+      if (!isCurrent()) return;
       toast.success(t('orderSent'));
       if (user && !guestTable) clearSelectedTable();
       // rawOrder only has table_id/customer_id; the KOT/slip renderers need the nested table/customer for display.
@@ -1495,10 +1821,17 @@ export default function ServerStandalonePage() {
       // Backgrounded so an unreachable printer can't block Send; sequenced (not concurrent)
       // since KOT and bill can share a default printer and race its socket connection.
       void (async () => {
-        await printKotForOrder(orderId, { ...enrichedOrder, items: newItems });
-        if ((await printOrderSlip(orderId)) === 'failed') toast.error(t('billPrintFailed'));
+        await printKotForOrder(
+          orderId,
+          { ...enrichedOrder, items: newItems },
+          requestToken,
+          isCurrent,
+        );
+        const printed = await printOrderSlip(orderId, requestToken, isCurrent);
+        if (printed === 'failed' && isCurrent()) toast.error(t('billPrintFailed'));
       })();
     } catch (error: unknown) {
+      if (!isCurrent()) return;
       if (
         (error as { response?: { data?: { code?: string } } })?.response?.data?.code ===
         'bill_awaiting_payment'
@@ -1535,6 +1868,7 @@ export default function ServerStandalonePage() {
   const headerTableText = activeTable
     ? t('tableLabel', { name: activeTable.name ?? String(activeTable.number) })
     : t('selectTable');
+  const canMoveTable = tenantCan(user as unknown as Tenant, 'tables.orders.move');
   const draftTotal = draft.reduce((sum, line) => {
     const addonTotal = line.addons.reduce(
       (addonSum, addon) => addonSum + Number(addon.price || 0) * (addon.quantity || 1),
@@ -1720,6 +2054,21 @@ export default function ServerStandalonePage() {
     <>
       <div className="relative flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">{t('currentTicket')}</h2>
+        {currentOrder && activeTable && canMoveTable && (
+          <button
+            type="button"
+            disabled={sending}
+            onClick={() => {
+              if (sendInFlightRef.current) return;
+              setMobileCartOpen(false);
+              setMoveTableModalOpen(true);
+            }}
+            className="flex items-center gap-1 text-xs font-medium text-brand hover:underline disabled:opacity-50"
+          >
+            <ArrowRightLeft size={13} />
+            {tTables('moveTable')}
+          </button>
+        )}
         {user && currentOrder && selectedTableId && (
           <>
             <button
@@ -1739,22 +2088,24 @@ export default function ServerStandalonePage() {
                 role="menu"
                 className="absolute end-0 top-full z-20 min-w-44 overflow-hidden rounded-lg border border-border bg-card shadow-lg"
               >
-                {(['move', 'merge'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setTicketMenuOpen(false);
-                      setMobileCartOpen(false);
-                      setTransferMode(mode);
-                    }}
-                    className="flex w-full items-center gap-2 px-3 py-2.5 text-start text-sm hover:bg-muted"
-                  >
-                    {mode === 'move' ? <ArrowLeftRight size={16} /> : <Merge size={16} />}
-                    {mode === 'move' ? t('moveTable') : t('mergeTable')}
-                  </button>
-                ))}
+                {(['move', 'merge'] as const)
+                  .filter((mode) => mode === 'merge' || canMoveTable)
+                  .map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setTicketMenuOpen(false);
+                        setMobileCartOpen(false);
+                        setTransferMode(mode);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2.5 text-start text-sm hover:bg-muted"
+                    >
+                      {mode === 'move' ? <ArrowLeftRight size={16} /> : <Merge size={16} />}
+                      {mode === 'move' ? t('moveTable') : t('mergeTable')}
+                    </button>
+                  ))}
               </div>
             )}
           </>
@@ -2204,6 +2555,8 @@ export default function ServerStandalonePage() {
               search={query}
               setSearch={setQuery}
               currency={regional?.currency || ''}
+              categorySort={regional?.category_sort}
+              itemSort={regional?.item_sort}
               disabled={sending || orderingLocked}
               onProductClick={(product, quantity) => {
                 if (sendInFlightRef.current) return;
@@ -2279,7 +2632,7 @@ export default function ServerStandalonePage() {
           formatPrice={(amount) => money(amount, regional)}
           imageOf={productImageOf}
           onPrintBill={requestBill}
-          onMoveTable={() => setTransferMode('move')}
+          onMoveTable={canMoveTable ? () => setTransferMode('move') : undefined}
           onMergeTable={() => setTransferMode('merge')}
         />
       )}
@@ -2352,6 +2705,34 @@ export default function ServerStandalonePage() {
             setEditingDraftLine(null);
             if (reopenCartAfterEditRef.current) setMobileCartOpen(true);
             reopenCartAfterEditRef.current = false;
+          }}
+        />
+      )}
+
+      {moveTableModalOpen && activeTable && currentOrder && canMoveTable && (
+        <MoveTableModal
+          sourceTable={
+            {
+              ...activeTable,
+              activeOrder: currentOrder,
+            } as unknown as FullTable
+          }
+          apiClient={api || undefined}
+          formatPrice={(amount) => money(amount, regional)}
+          onClose={() => setMoveTableModalOpen(false)}
+          onSuccess={async (movedData) => {
+            const sourceTableId = String(
+              (movedData.sourceTable as Table | undefined)?.id ?? activeTable.id,
+            );
+            const targetTable = movedData.targetTable as Table;
+            const targetTableId = String(targetTable.id);
+            const targetTableName = targetTable.name || targetTable.number;
+            movePendingSendAttempt(sourceTableId, targetTableId, targetTableName);
+            setMoveTableModalOpen(false);
+            if (selectedTableIdRef.current === sourceTableId) {
+              selectTable(targetTableId);
+            }
+            await loadAll().catch(() => {});
           }}
         />
       )}

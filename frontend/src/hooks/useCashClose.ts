@@ -12,6 +12,7 @@ import { printerService } from '@/lib/printer/PrinterService';
 import { displayAmountToCents } from '@/lib/money';
 import { businessDateForInstant } from '@shared/business-date';
 import { downloadBlob } from '@/lib/download';
+import { exportReportAsPdf, MenuPopupBlockedError } from '@/lib/export-pdf';
 import {
   shareCashCloseViaWhatsApp,
   type XReportExport,
@@ -62,6 +63,27 @@ interface XReport {
   priorClosedCashCents: number | null;
   priorBusinessDate: string | null;
   alreadyClosed: boolean;
+  session?: {
+    id: number;
+    opened_by: string;
+    opened_by_name: string;
+    opened_at: string;
+    closed_at: string | null;
+    status: string;
+    opening_float_cents: number;
+    expected_cash_cents: number;
+  } | null;
+  openShifts?: {
+    id: number;
+    opened_by: string;
+    opened_by_name: string;
+    opened_at: string;
+  }[];
+  blockingOpenShift?: {
+    id: number;
+    opened_by_name: string;
+    opened_at: string;
+  } | null;
 }
 
 /** Immutable close-of-day snapshot returned by POST /api/cash-closures and
@@ -115,6 +137,7 @@ export function useCashClose() {
   const t = useTranslations('dashboard');
   const tCommon = useTranslations('common');
   const tPrint = useTranslations('print');
+  const tProducts = useTranslations('products');
   const tSettings = useTranslations('settings');
   const locale = useLocale();
   const fmt = useFormatCurrency();
@@ -153,6 +176,7 @@ export function useCashClose() {
   // already-closed day) the effect below jumps straight to 3 once the
   // x-report says `alreadyClosed: true`.
   const [closeStep, setCloseStep] = useState<1 | 2 | 3>(1);
+  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
   // F3: derive a token from `openToken + businessDate`. The render-time
   // `if (closeOpen && xToken !== refXToken)` block wipes stale X-report
   // state when the token changes (modal open OR operator picks a different
@@ -160,7 +184,7 @@ export function useCashClose() {
   // counter so the wipe is automatic — same pattern as the `syncKey`
   // block above (recommended by React for "adjusting state when a prop
   // changes" and avoids the cascading-renders lint rule).
-  const xToken = `${openToken}:${businessDate}`;
+  const xToken = `${openToken}:${businessDate}:${selectedSessionId ?? 'all'}`;
   const [refXToken, setRefXToken] = useState(xToken);
   const [openingFloatInput, setOpeningFloatInput] = useState('');
   const [countedInput, setCountedInput] = useState('');
@@ -213,7 +237,13 @@ export function useCashClose() {
     const isActive = () => !controller.signal.aborted;
     // Use the operator-selected date so past-day closes work.
     api
-      .get('/reports/x-report', { params: { date: businessDate }, signal: controller.signal })
+      .get('/reports/x-report', {
+        params: {
+          date: businessDate,
+          ...(selectedSessionId ? { session_id: selectedSessionId } : {}),
+        },
+        signal: controller.signal,
+      })
       .then((res) => {
         if (!isActive()) return;
         setXReport(res.data.xReport);
@@ -306,7 +336,7 @@ export function useCashClose() {
       });
     return () => controller.abort();
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [closeOpen, openToken, businessDate]);
+  }, [closeOpen, openToken, businessDate, selectedSessionId]);
 
   // Reset modal state at the start of each new open (React-recommended
   // pattern for "adjusting state when a prop changes" — the equivalent of
@@ -323,6 +353,7 @@ export function useCashClose() {
     setAlreadyClosedOverride(false);
     setBusinessDate(dateOverride ?? todayLocal);
     setDateOverride(null);
+    setSelectedSessionId(null);
     setOpeningFloatInput('');
     setCountedInput('');
     setSubmitError(null);
@@ -388,21 +419,44 @@ export function useCashClose() {
     setOpenToken((n) => n + 1);
   };
 
-  const exportReport = async (report: 'x' | 'z', format: 'csv' | 'xlsx') => {
+  const exportReport = async (report: 'x' | 'z', format: 'csv' | 'xlsx' | 'pdf') => {
     if (report === 'z' && !closedZ) return;
     setExportingReport(true);
     try {
-      const res = await api.get(`/reports/${report}-report/export`, {
-        params: { date: businessDate, format },
+      const endpoint = `/reports/${report}-report/export`;
+      const isShiftScopedX = report === 'x' && selectedSessionId !== null;
+      const exportDate =
+        isShiftScopedX && xReport?.session?.id === selectedSessionId && xReport.businessDate
+          ? xReport.businessDate
+          : businessDate;
+      const baseFilename =
+        report === 'x'
+          ? isShiftScopedX
+            ? `x-report-${exportDate}-shift-${selectedSessionId}`
+            : `x-report-${businessDate}`
+          : `z-report-Z${closedZ!.z_number}-${businessDate}`;
+      const baseParams = isShiftScopedX
+        ? { date: exportDate, session_id: selectedSessionId }
+        : { date: businessDate };
+      if (format === 'pdf') {
+        await exportReportAsPdf({
+          endpoint,
+          params: baseParams,
+          filename: `${baseFilename}.pdf`,
+        });
+        return;
+      }
+      const res = await api.get(endpoint, {
+        params: { ...baseParams, format },
         responseType: 'blob',
       });
-      const filename =
-        report === 'x'
-          ? `x-report-${businessDate}.${format}`
-          : `z-report-Z${closedZ!.z_number}-${businessDate}.${format}`;
-      downloadBlob(res.data as Blob, filename);
-    } catch {
-      toast.error(tCommon('downloadFailed'));
+      downloadBlob(res.data as Blob, `${baseFilename}.${format}`);
+    } catch (error) {
+      toast.error(
+        error instanceof MenuPopupBlockedError
+          ? tProducts('menuPopupBlocked')
+          : tCommon('downloadFailed'),
+      );
     } finally {
       setExportingReport(false);
     }
@@ -547,13 +601,30 @@ export function useCashClose() {
       setCloseStep(3);
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response?.status === 409) {
-        // The backend's 409 carries alreadyClosed; surface the message and
-        // keep the form so the operator can retry once they have the prior Z.
-        setSubmitError(t('alreadyClosed'));
-        // F4: the X report still says alreadyClosed:false until it re-fetches.
-        // Set the local override so the Submit button disables immediately and
-        // the alreadyClosed banner shows without waiting for a re-fetch.
-        setAlreadyClosedOverride(true);
+        const data = err.response.data as {
+          display_code?: string;
+          error?: string;
+          blocking_shift?: { id: number; opened_by_name: string };
+        };
+        if (data?.display_code === 'open_shift_blocks_day_close') {
+          const shift = data.blocking_shift;
+          setSubmitError(
+            shift
+              ? t('dayCloseOpenShiftBlocks', {
+                  id: shift.id,
+                  name: shift.opened_by_name,
+                })
+              : data.error || t('dayCloseOpenShiftBlocksGeneric'),
+          );
+        } else {
+          // The backend's 409 carries alreadyClosed; surface the message and
+          // keep the form so the operator can retry once they have the prior Z.
+          setSubmitError(t('alreadyClosed'));
+          // F4: the X report still says alreadyClosed:false until it re-fetches.
+          // Set the local override so the Submit button disables immediately and
+          // the alreadyClosed banner shows without waiting for a re-fetch.
+          setAlreadyClosedOverride(true);
+        }
       } else {
         const msg = axios.isAxiosError(err)
           ? err.response?.data?.error || err.message
@@ -609,6 +680,8 @@ export function useCashClose() {
     closeAnotherDay,
     businessDate,
     setBusinessDate,
+    selectedSessionId,
+    setSelectedSessionId,
     xReport,
     xLoading,
     xError,

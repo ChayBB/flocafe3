@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import Database from 'better-sqlite3';
 import {
+  backfillWhatsAppMessageAttempts,
   captureKitchenStationSecurityState,
   captureKdsEnabledSetting,
   captureRestoreProtectedSettings,
@@ -44,7 +45,10 @@ import { parsePhoneE164 } from '../lib/phone';
 import { isRole } from '../../shared/role-permissions';
 import { randomUUID } from 'node:crypto';
 import { googleDrive } from '../services/google-drive';
-import { consumeRestoreFileSelection } from '../services/restore-file-selection';
+import {
+  consumeRestoreFileSelection,
+  peekRestoreFileSelection,
+} from '../services/restore-file-selection';
 
 const router = Router();
 
@@ -163,6 +167,7 @@ router.get('/export', requirePermission('database.manage'), (req: Request, res: 
       data: result.exportData,
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[DB Export] Error:', error);
     res.status(500).json({ error: 'Export failed' });
   }
@@ -177,7 +182,8 @@ router.post(
     const overwrite = Boolean(body?.overwrite);
     const schemaVersionMismatch =
       body?.data && typeof body.data === 'object'
-        ? parseImportSchemaVersion(body.data.schema_version) !== getCurrentSchemaVersion()
+        ? parseImportSchemaVersion(body.data.schema_version ?? body.data.schemaVersion) !==
+          getCurrentSchemaVersion()
         : false;
     return overwrite || schemaVersionMismatch ? requireMasterPin(req, res, next) : next();
   },
@@ -210,7 +216,9 @@ router.post(
           );
           const importBatchId = randomUUID();
           const importTimestamp = now();
-          const importSchemaVersion = parseImportSchemaVersion(data.schema_version);
+          const importSchemaVersion = parseImportSchemaVersion(
+            data.schema_version ?? data.schemaVersion,
+          );
           const hasVersionMismatch = importSchemaVersion !== getCurrentSchemaVersion();
 
           if (hasVersionMismatch) {
@@ -252,6 +260,22 @@ router.post(
             });
           }
 
+          const invalidSupplyCostIndex = Array.isArray(importData.supplies)
+            ? importData.supplies.findIndex(
+                (supply) =>
+                  supply?.unit_cost !== undefined &&
+                  supply?.unit_cost !== null &&
+                  (typeof supply.unit_cost !== 'number' ||
+                    !Number.isFinite(supply.unit_cost) ||
+                    supply.unit_cost < 0),
+              )
+            : -1;
+          if (invalidSupplyCostIndex >= 0) {
+            return res.status(400).json({
+              error: `supplies[${invalidSupplyCostIndex}].unit_cost must be a non-negative finite number or null`,
+            });
+          }
+
           if (Array.isArray(importData.products) && importData.products.length > 0) {
             if (!Array.isArray(importData.inventory_movements)) {
               const legacyZeroStockImport =
@@ -269,13 +293,11 @@ router.post(
               }
             }
             const importAddons = Array.isArray(importData.addons)
-              ? importSchemaVersion !== null && importSchemaVersion < 104
-                ? importData.addons.map((a) =>
-                    a && typeof a === 'object' && !('stock_quantity' in a)
-                      ? { ...a, stock_quantity: 0 }
-                      : a,
-                  )
-                : importData.addons
+              ? importData.addons.map((a) =>
+                  a && typeof a === 'object' && a.stock_quantity === undefined
+                    ? { ...a, stock_quantity: 0 }
+                    : a,
+                )
               : [];
             if (
               Array.isArray(importData.inventory_movements) &&
@@ -406,6 +428,8 @@ router.post(
             throwIfDatabaseMaintenanceAborted(signal);
             db.exec('BEGIN IMMEDIATE');
             try {
+              let whatsappMessagesCleared = false;
+              let whatsappMessagesImported = false;
               for (const tableName of importedTables) {
                 throwIfDatabaseMaintenanceAborted(signal);
                 if (!allowedTables.has(tableName) || EXPORT_EXCLUDE_TABLES.has(tableName)) continue;
@@ -427,6 +451,9 @@ router.post(
                       );
                     } else {
                       db.exec(`DELETE FROM ${tableName}`);
+                      if (tableName === 'whatsapp_messages') {
+                        whatsappMessagesCleared = true;
+                      }
                     }
                   }
                   continue;
@@ -435,7 +462,10 @@ router.post(
                 const currentCols = getTableColumns(db, tableName);
                 // Validate and filter column names to prevent SQL injection
                 const importCols =
-                  tableName === 'product_variants'
+                  tableName === 'product_variants' ||
+                  tableName === 'addons' ||
+                  tableName === 'order_item_addons' ||
+                  tableName === 'orders'
                     ? Array.from(
                         new Set(rows.flatMap((row) => Object.keys(row).filter(isSafeIdentifier))),
                       )
@@ -458,7 +488,13 @@ router.post(
                     );
                   } else {
                     db.exec(`DELETE FROM ${tableName}`);
+                    if (tableName === 'whatsapp_messages') {
+                      whatsappMessagesCleared = true;
+                    }
                   }
+                }
+                if (tableName === 'whatsapp_messages') {
+                  whatsappMessagesImported = true;
                 }
 
                 if (tableName === 'inventory_movements') {
@@ -533,6 +569,13 @@ router.post(
                     row.value === '[REDACTED]'
                   )
                     continue;
+                  if (
+                    tableName === 'settings' &&
+                    !overwrite &&
+                    !hasVersionMismatch &&
+                    String(row.key) === 'offline_mode'
+                  )
+                    continue;
 
                   if (tableName === 'customers' && row.phone) {
                     const parsed = parsePhoneE164(String(row.phone), tenantCountry);
@@ -545,9 +588,21 @@ router.post(
                   }
 
                   const rowCols =
-                    tableName === 'product_variants'
-                      ? commonCols.filter((column) =>
-                          Object.prototype.hasOwnProperty.call(row, column),
+                    tableName === 'product_variants' ||
+                    tableName === 'addons' ||
+                    tableName === 'order_item_addons' ||
+                    tableName === 'orders'
+                      ? commonCols.filter(
+                          (column) =>
+                            Object.prototype.hasOwnProperty.call(row, column) &&
+                            row[column] !== undefined &&
+                            !(
+                              tableName === 'orders' &&
+                              (column === 'release_status' ||
+                                column === 'checkout_stage' ||
+                                column === 'dispatch_policy') &&
+                              row[column] === null
+                            ),
                         )
                       : commonCols;
                   const rowColumnKey = rowCols.join(', ');
@@ -565,6 +620,15 @@ router.post(
                 console.log(
                   `[DB Import] ${tableName}: ${rows.length} rows (${commonCols.length} columns)`,
                 );
+              }
+
+              if (whatsappMessagesCleared || whatsappMessagesImported) {
+                backfillWhatsAppMessageAttempts(db, {
+                  reset:
+                    whatsappMessagesCleared &&
+                    (!importedTables.includes('whatsapp_message_attempts') ||
+                      !Array.isArray(importData.whatsapp_message_attempts)),
+                });
               }
 
               const placeholderUsersCreated = restoreRedactedUserPlaceholders(
@@ -652,6 +716,7 @@ router.post(
                 cleanupPending: cleanup.cleanupPending,
               });
             } catch (err: any) {
+              res.locals.postHogError = err;
               try {
                 db.exec('ROLLBACK');
               } catch {}
@@ -661,6 +726,7 @@ router.post(
             db.pragma(`foreign_keys = ${previousForeignKeys ? 'ON' : 'OFF'}`);
           }
         } catch (error: any) {
+          res.locals.postHogError = error;
           console.error('[DB Import] Error:', error);
           res.status(500).json({ error: 'Import failed' });
         }
@@ -770,6 +836,7 @@ router.post(
         schemaVersion,
       });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[DB Backup] Error:', error);
       res.status(500).json({ error: 'Backup failed' });
     }
@@ -784,62 +851,75 @@ const RESTORE_CONFIRMATION = 'RESTORE BACKUP';
 // path is only accepted when it is the one the main process just handed out from
 // that dialog (see services/restore-file-selection). The restore itself runs
 // through the same restoreBackup() mechanism as every other route.
+export async function handleRestoreFromPickedFile(req: Request, res: Response) {
+  if (req.body?.confirmation !== RESTORE_CONFIRMATION) {
+    return res.status(400).json({ error: `Type "${RESTORE_CONFIRMATION}" to confirm` });
+  }
+
+  const selectionToken =
+    typeof req.body?.selection_token === 'string' ? req.body.selection_token : '';
+  const backupPath = peekRestoreFileSelection(selectionToken);
+  if (!backupPath) {
+    return res
+      .status(400)
+      .json({ error: 'Choose a backup file in the restore dialog before confirming' });
+  }
+
+  if (!fs.existsSync(backupPath)) {
+    return res.status(404).json({ error: 'Backup file no longer exists' });
+  }
+
+  const backupVersion = getSchemaVersionFromBackup(backupPath);
+  if (backupVersion === null) {
+    return res.status(400).json({
+      error:
+        'Invalid backup file: missing schema version metadata. This backup may have been created with an older version of Flo.',
+    });
+  }
+
+  if (!consumeRestoreFileSelection(selectionToken)) {
+    return res
+      .status(400)
+      .json({ error: 'Choose a backup file in the restore dialog before confirming' });
+  }
+
+  const currentVersion = getCurrentSchemaVersion();
+  const versionMismatch = backupVersion !== currentVersion;
+
+  await googleDrive.prepareForDatabaseRestore();
+  try {
+    const restoreResult = await withDatabaseMaintenanceLock(
+      (signal) => restoreBackup(backupPath, !versionMismatch, signal),
+      getHttpRequestSignal(req),
+    );
+    if (!restoreResult.success) {
+      return res.status(422).json({ error: restoreResult.error || 'Restore failed' });
+    }
+    const cleanup = googleDrive.completeDatabaseRestore();
+    clearUserAuthCache();
+    clearInMemoryRevokedTokens();
+    clearJWTSecretCache();
+    res.json({
+      success: true,
+      mode: restoreResult.mode,
+      backupVersion,
+      currentVersion,
+      tablesRestored: restoreResult.tablesRestored,
+      cleanupPending: restoreResult.cleanupPending === true || cleanup?.cleanupPending === true,
+    });
+  } catch (error: any) {
+    res.locals.postHogError = error;
+    console.error('[DB Restore] Error:', error);
+    res.status(500).json({ error: 'Restore failed' });
+  } finally {
+    googleDrive.releaseDatabaseRestore();
+  }
+}
+
 router.post(
   '/restore',
   requirePermission('database.manage'),
-  asyncHandler(async (req: Request, res: Response) => {
-    if (req.body?.confirmation !== RESTORE_CONFIRMATION) {
-      return res.status(400).json({ error: `Type "${RESTORE_CONFIRMATION}" to confirm` });
-    }
-
-    const selectionToken =
-      typeof req.body?.selection_token === 'string' ? req.body.selection_token : '';
-    const backupPath = consumeRestoreFileSelection(selectionToken);
-    if (!backupPath) {
-      return res
-        .status(400)
-        .json({ error: 'Choose a backup file in the restore dialog before confirming' });
-    }
-
-    const backupVersion = getSchemaVersionFromBackup(backupPath);
-    if (backupVersion === null) {
-      return res.status(400).json({
-        error:
-          'Invalid backup file: missing schema version metadata. This backup may have been created with an older version of Flo.',
-      });
-    }
-
-    const currentVersion = getCurrentSchemaVersion();
-    const versionMismatch = backupVersion !== currentVersion;
-
-    await googleDrive.prepareForDatabaseRestore();
-    try {
-      const restoreResult = await withDatabaseMaintenanceLock(
-        (signal) => restoreBackup(backupPath, !versionMismatch, signal),
-        getHttpRequestSignal(req),
-      );
-      if (!restoreResult.success) {
-        return res.status(422).json({ error: restoreResult.error || 'Restore failed' });
-      }
-      const cleanup = googleDrive.completeDatabaseRestore();
-      clearUserAuthCache();
-      clearInMemoryRevokedTokens();
-      clearJWTSecretCache();
-      res.json({
-        success: true,
-        mode: restoreResult.mode,
-        backupVersion,
-        currentVersion,
-        tablesRestored: restoreResult.tablesRestored,
-        cleanupPending: restoreResult.cleanupPending === true || cleanup?.cleanupPending === true,
-      });
-    } catch (error: any) {
-      console.error('[DB Restore] Error:', error);
-      res.status(500).json({ error: 'Restore failed' });
-    } finally {
-      googleDrive.releaseDatabaseRestore();
-    }
-  }),
+  asyncHandler(handleRestoreFromPickedFile),
 );
 
 router.get(
@@ -899,6 +979,7 @@ router.get(
           console.error('[DB Download] Stream error:', (error as Error).message);
         });
     } catch (error: any) {
+      res.locals.postHogError = error;
       if (tempDir) {
         try {
           fs.rmSync(tempDir, { recursive: true, force: true });
@@ -931,6 +1012,7 @@ router.get('/tables', requirePermission('database.manage'), (req: Request, res: 
 
     res.json({ tables: tableInfo });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[DB Tables] Error:', error);
     res.status(500).json({ error: 'Could not fetch database tables' });
   }

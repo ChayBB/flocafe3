@@ -14,6 +14,7 @@ import {
   refreshCustomerLoyalty,
   setTierOverride,
 } from '../lib/loyalty-points';
+import { ACTIVE_CATEGORIES_CTE_CLAUSES } from './categories';
 
 export function parseCustomer(c: any): any {
   if (!c) return c;
@@ -167,7 +168,8 @@ export function getCustomerTopItems(
   const terminalPlaceholders = TERMINAL_ITEM_STATUSES.map(() => '?').join(', ');
   const rows = db
     .prepare(`
-    WITH sale_lines AS (
+    WITH RECURSIVE ${ACTIVE_CATEGORIES_CTE_CLAUSES},
+    sale_lines AS (
       SELECT oi.id, oi.order_id, oi.product_id, oi.quantity
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
@@ -193,11 +195,11 @@ export function getCustomerTopItems(
       t.total_quantity,
       t.order_count,
       CASE WHEN p.id IS NOT NULL AND p.deleted_at IS NULL AND p.is_active = 1
-        AND (c.id IS NULL OR c.is_active = 1) THEN 1 ELSE 0 END AS available
+        AND (NULLIF(TRIM(p.category_id), '') IS NULL OR c.id IN (SELECT id FROM active_categories)) THEN 1 ELSE 0 END AS available
     FROM product_totals t
     JOIN order_items latest ON latest.id = t.latest_line_id
     LEFT JOIN products p ON p.id = t.product_id
-    LEFT JOIN categories c ON c.id = p.category_id
+    LEFT JOIN categories c ON c.id = p.category_id AND c.deleted_at IS NULL
     ORDER BY t.total_quantity DESC,
       t.order_count DESC,
       COALESCE(p.name, latest.product_name) COLLATE NOCASE ASC,
@@ -228,6 +230,7 @@ router.delete(
       const result = db.prepare('DELETE FROM customers WHERE id IS NULL').run();
       res.json({ message: `Deleted ${result.changes} customers with null IDs` });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -281,6 +284,7 @@ router.post(
         conflictedCount,
       });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -304,6 +308,7 @@ router.get(
 
       res.json({ invalidPhonesCount: result.count });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -422,6 +427,7 @@ router.get(
       const customers = db.prepare(query).all(...params);
       res.json({ data: customers });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -456,6 +462,7 @@ router.get(
 
       res.json({ customer: { ...customer, walletBalance, loyaltyHistory, recentOrders } });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -584,6 +591,7 @@ router.get(
         },
       });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -604,6 +612,7 @@ router.get(
       }
       res.json({ items: getCustomerTopItems(db, customerId) });
     } catch (error) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -747,6 +756,7 @@ router.post(
       const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
       res.status(201).json({ customer });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[Customer POST error]', error);
       res
         .status(500)
@@ -888,6 +898,7 @@ router.put(
       const updated = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
       res.json({ customer: updated });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }

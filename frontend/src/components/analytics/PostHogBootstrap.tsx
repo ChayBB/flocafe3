@@ -7,6 +7,7 @@ import { scrubPostHogEvent, scrubPathname, type ScrubbableEvent } from '@shared/
 import { createScreenViewThrottle, screenKey } from '@shared/posthog-screen-views';
 import { setPostHogClient } from '@/lib/posthog-client';
 import { useAuthStore } from '@/store/auth';
+import { PRIVACY_CHANGED_EVENT } from '@/lib/privacy-events';
 
 let boot: Promise<PostHog | null> | null = null;
 let client: PostHog | null = null;
@@ -59,13 +60,18 @@ async function refreshConsent(): Promise<void> {
 
 /** Puts the event on the id main reports now, not the one the page loaded with. */
 function withCurrentIdentity(event: ScrubbableEvent): ScrubbableEvent {
-  if (!identity.distinctId) return event;
+  if (!identity.distinctId) return withProcessType(event);
   const properties: Record<string, unknown> = {
     ...(event.properties ?? {}),
     distinct_id: identity.distinctId,
   };
   if (!identity.identified && !consent.telemetry) properties.$process_person_profile = false;
-  return { ...event, properties };
+  return withProcessType({ ...event, properties });
+}
+
+/** The renderer is a process of its own; main and the local API tag their own events. */
+function withProcessType(event: ScrubbableEvent): ScrubbableEvent {
+  return { ...event, properties: { ...(event.properties ?? {}), process_type: 'renderer' } };
 }
 
 async function bootPostHog() {
@@ -176,9 +182,11 @@ export function PostHogBootstrap() {
   useEffect(() => {
     const timer = window.setInterval(refresh, CONSENT_REFRESH_MS);
     window.addEventListener('focus', refresh);
+    window.addEventListener(PRIVACY_CHANGED_EVENT, refresh);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener('focus', refresh);
+      window.removeEventListener(PRIVACY_CHANGED_EVENT, refresh);
     };
   }, []);
 

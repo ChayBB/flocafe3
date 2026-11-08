@@ -1,9 +1,11 @@
 import { Router, Request, Response } from 'express';
 import {
+  attachEffectiveAddons,
   getDatabase,
   isGuestQrOrderingEnabled,
   isServerAppEnabled,
   now,
+  parseItemJson,
   parseRowJson,
   recordOrderAudit,
   withTxn,
@@ -37,6 +39,7 @@ function activeOrderForTable(
   db: ReturnType<typeof getDatabase>,
   tableId: string,
   orderId?: number | string,
+  options: { includeItems?: boolean } = {},
 ) {
   const whereOrder = orderId ? ' AND id = ?' : '';
   const params = orderId ? [tableId, orderId] : [tableId];
@@ -49,10 +52,26 @@ function activeOrderForTable(
   `)
       .get(...params) as any,
   );
-  if (!order?.customer_id) return order;
+  if (!order) return order;
 
-  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(order.customer_id);
-  return { ...order, customer: customer || null };
+  const hydratedOrder = options.includeItems
+    ? {
+        ...order,
+        items: attachEffectiveAddons(
+          db,
+          db
+            .prepare('SELECT * FROM order_items WHERE order_id = ?')
+            .all(order.id)
+            .map(parseItemJson) as Array<{ id: number; [key: string]: unknown }>,
+        ),
+      }
+    : order;
+  if (!hydratedOrder.customer_id) return hydratedOrder;
+
+  const customer = db
+    .prepare('SELECT * FROM customers WHERE id = ?')
+    .get(hydratedOrder.customer_id);
+  return { ...hydratedOrder, customer: customer || null };
 }
 
 /** Kitchen progress of an open order's menu lines: still waiting or cooking, ready, and served. */
@@ -176,16 +195,48 @@ router.get('/', requirePermission('tables.view'), (req: Request, res: Response) 
     query += ' ORDER BY number';
 
     const rows = db.prepare(query).all(...params);
-    const includeReservationCustomer = hasPermission(
-      (req as Request & { user?: { userId?: string } }).user?.userId || '',
-      'customers.view',
-    );
+    const userId = (req as Request & { user?: { userId?: string } }).user?.userId || '';
+    const includeReservationCustomer = hasPermission(userId, 'customers.view');
+    const includeOrderItems =
+      (req.query.include_items === '1' || req.query.include_items === 'true') &&
+      hasPermission(userId, 'orders.read');
+    const activeOrdersByTableId = new Map<string, any>();
+    for (const t of rows as any[]) {
+      const activeOrder = activeOrderForTable(db, t.id, undefined, { includeItems: false });
+      if (activeOrder) activeOrdersByTableId.set(t.id, activeOrder);
+    }
+    if (includeOrderItems && activeOrdersByTableId.size > 0) {
+      const orderIds = Array.from(
+        new Set(Array.from(activeOrdersByTableId.values()).map((order) => order.id)),
+      );
+      const placeholders = orderIds.map(() => '?').join(', ');
+      const hydratedItems = attachEffectiveAddons(
+        db,
+        db
+          .prepare(`SELECT * FROM order_items WHERE order_id IN (${placeholders})`)
+          .all(...orderIds)
+          .map(parseItemJson) as Array<{ id: number; order_id: number; [key: string]: unknown }>,
+      );
+      const itemsByOrderId = new Map<number, Array<Record<string, unknown>>>();
+      for (const item of hydratedItems) {
+        const list = itemsByOrderId.get(Number(item.order_id)) || [];
+        list.push(item);
+        itemsByOrderId.set(Number(item.order_id), list);
+      }
+      for (const [tableId, activeOrder] of activeOrdersByTableId.entries()) {
+        activeOrdersByTableId.set(tableId, {
+          ...activeOrder,
+          items: itemsByOrderId.get(Number(activeOrder.id)) || [],
+        });
+      }
+    }
     // Normalize: frontend expects `name`, schema column is `number`
     const tables = rows.map((t: any) =>
-      tableShape(db, t, activeOrderForTable(db, t.id), includeReservationCustomer),
+      tableShape(db, t, activeOrdersByTableId.get(t.id) || null, includeReservationCustomer),
     );
     res.json({ tables });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -695,15 +746,16 @@ router.get('/:id', requirePermission('tables.view'), (req: Request, res: Respons
       return res.status(404).json({ error: 'Table not found' });
     }
 
-    const activeOrder = activeOrderForTable(db, req.params.id as string);
-    const includeReservationCustomer = hasPermission(
-      (req as Request & { user?: { userId?: string } }).user?.userId || '',
-      'customers.view',
-    );
+    const userId = (req as Request & { user?: { userId?: string } }).user?.userId || '';
+    const activeOrder = activeOrderForTable(db, req.params.id as string, undefined, {
+      includeItems: hasPermission(userId, 'orders.read'),
+    });
+    const includeReservationCustomer = hasPermission(userId, 'customers.view');
 
     // Normalize: frontend expects `name`, schema column is `number`
     res.json({ table: tableShape(db, table as any, activeOrder, includeReservationCustomer) });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -735,6 +787,7 @@ router.patch('/floors/:name', requirePermission('tables.manage'), (req: Request,
 
     res.json({ floor: newName, previousFloor: oldName, affected: result.changes });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Floor rename failed:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -757,13 +810,14 @@ router.delete(
       const db = getDatabase();
       const result = db
         .prepare(`
-      UPDATE tables SET floor = NULL, updated_at = ?
+      UPDATE tables SET floor = NULL, position_x = NULL, position_y = NULL, updated_at = ?
       WHERE floor = ?
     `)
         .run(now(), name);
 
       res.json({ floor: null, removedFloor: name, affected: result.changes });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Floor delete failed:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -843,6 +897,7 @@ router.post('/', requirePermission('tables.manage'), (req: Request, res: Respons
     const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId);
     res.status(201).json({ table });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -932,6 +987,7 @@ router.patch('/positions', requirePermission('tables.manage'), (req: Request, re
 
     res.json({ success: true, count: updates.length });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -1032,6 +1088,7 @@ router.put('/:id', requirePermission('tables.manage'), (req: Request, res: Respo
       table: tableShape(db, updated as any, activeOrderForTable(db, req.params.id as string)),
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -1067,6 +1124,7 @@ router.post(
       const updated = db.prepare('SELECT * FROM tables WHERE id = ?').get(req.params.id);
       res.json({ table: tableShape(db, updated as any) });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1094,6 +1152,7 @@ router.post(
       const updated = db.prepare('SELECT * FROM tables WHERE id = ?').get(req.params.id);
       res.json({ table: tableShape(db, updated as any) });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1231,6 +1290,7 @@ router.post(
         targetTable: moved.targetTable,
       });
     } catch (error: any) {
+      res.locals.postHogError = error;
       const statusCode = error.status || 500;
       console.error('[API] Table move failed:', error);
       res
@@ -1303,6 +1363,7 @@ router.patch('/:id/status', requirePermission('tables.manage'), (req: Request, r
     };
     res.json({ table: { ...updated, ...reservationCustomerShape(db, updated) } });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

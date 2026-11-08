@@ -1,5 +1,4 @@
 import { formatPhoneLocal } from '../lib/phone';
-import { isTerminalItemStatus } from '../../shared/order-item-status';
 import { formatVariantItemHeading, parseVariantSelection } from '../printers/formatting-helpers';
 import { buildPromptPayPayload } from '../lib/promptpay';
 import {
@@ -31,13 +30,14 @@ import {
   printViaNetwork,
   printViaUSB,
   osPrinterName,
-  buildTestPage,
+  renderTestPage,
   printReceiptDetailed,
   printKOTDetailed,
   printDeliverySlipDetailed,
   printPaymentRequestSlip,
   buildPaymentRequestSlipHtml,
   WINDOWS_DOCUMENT_PRINTER_MARKER,
+  printPaymentTicketDetailed,
   detectConnectedPrinters,
   prepareReceipt,
   escPosToText,
@@ -50,6 +50,8 @@ import {
 import { buildMenuDocument } from '../printers/document-menu';
 import { detectPrintLanguageDirection } from '../printers/document-classic';
 import type { DeliverySlipPaymentBill } from '../../shared/print';
+import { PRINTER_TEXT_SIZES, normalizePrinterTextSize } from '../../shared/print/text-size';
+import { isTerminalItemStatus } from '../../shared/order-item-status';
 import {
   BILL_LANGUAGE_POLICY_KEY,
   KOT_LANGUAGE_POLICY_KEY,
@@ -69,7 +71,7 @@ import {
   capabilitiesForPrinter,
 } from '../printers/profiles';
 import { hasPermission, requirePermission, requireAnyPermission } from '../services/authorization';
-import { getOpenSession } from '../services/shift-session-gate';
+import { getOpenSession, listOpenSessions } from '../services/shift-session-gate';
 import {
   formatCurrencyForTenant,
   formatDateForTenant,
@@ -140,6 +142,9 @@ function validatePrinterFields(body: any, existing?: any): string | null {
   if (body.paper_width !== undefined && !PRINTER_COLUMN_WIDTHS.includes(body.paper_width)) {
     return 'paper_width must be cols-32, cols-36, cols-40, cols-42, cols-44, or cols-48';
   }
+  if (body.text_size !== undefined && !PRINTER_TEXT_SIZES.includes(body.text_size)) {
+    return 'text_size must be normal, large, or extra_large';
+  }
 
   const connectionType =
     body.connection_type !== undefined ? body.connection_type : existing?.connection_type;
@@ -182,13 +187,14 @@ function getDeliverySlipBills(
     : [latestBill];
 }
 
-function printerShape(printer: any) {
+export function printerShape(printer: any) {
   if (!printer) return printer;
   const profile = resolvePrinterProfile(printer);
-  const capabilities = capabilitiesForPrinter(
-    profile,
-    printer.paper_width || profile.defaultPaperWidth,
-  );
+  const textSize = normalizePrinterTextSize(printer.text_size);
+  const capabilities = {
+    ...capabilitiesForPrinter(profile, printer.paper_width || profile.defaultPaperWidth),
+    textSize,
+  };
   return {
     id: printer.id,
     name: printer.name,
@@ -199,6 +205,7 @@ function printerShape(printer: any) {
     is_default: printer.is_default,
     cash_drawer_pulse_enabled: printer.cash_drawer_pulse_enabled,
     paper_width: printer.paper_width,
+    text_size: textSize,
     created_at: printer.created_at,
     updated_at: printer.updated_at,
     profile_id: profile.id,
@@ -215,6 +222,7 @@ interface DefaultPrinter {
   port: number | null;
   is_default: number;
   paper_width: string | null;
+  text_size?: string | null;
 }
 
 function printerReadinessShape(printer: DefaultPrinter) {
@@ -223,6 +231,7 @@ function printerReadinessShape(printer: DefaultPrinter) {
     name: printer.name,
     connection_type: printer.connection_type,
     is_default: printer.is_default,
+    text_size: normalizePrinterTextSize(printer.text_size),
     readiness_state: 'configured',
   };
 }
@@ -261,6 +270,7 @@ router.get(
       const defaultPrinter = getDefaultPrinter(db);
       res.json({ printers: defaultPrinter ? [printerReadinessShape(defaultPrinter)] : [] });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -277,6 +287,7 @@ router.get(
       console.log('[Printer] Detected printers:', printers);
       res.json({ printers });
     } catch (error: any) {
+      res.locals.postHogError = error;
       if (getHttpRequestSignal(req)?.aborted) {
         if (!res.headersSent) res.status(503).end();
         else if (!res.writableEnded) res.destroy();
@@ -311,6 +322,7 @@ router.get('/:id', requirePermission('printers.manage'), (req: Request, res: Res
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
     res.json({ printer: printerShape(printer) });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -324,6 +336,7 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
       ip_address,
       port,
       paper_width,
+      text_size,
       is_default,
       cash_drawer_pulse_enabled,
     } = req.body;
@@ -358,8 +371,8 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
       const shouldBeDefault = Boolean(is_default) || isFirstPrinter;
       if (shouldBeDefault) db.prepare('UPDATE printers SET is_default = 0').run();
       db.prepare(`
-        INSERT INTO printers (id, name, device_name, connection_type, ip_address, port, paper_width, is_default, cash_drawer_pulse_enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO printers (id, name, device_name, connection_type, ip_address, port, paper_width, text_size, is_default, cash_drawer_pulse_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         name,
@@ -368,6 +381,7 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
         ip_address ?? null,
         port ?? 9100,
         paper_width ?? 'cols-42',
+        text_size ?? 'normal',
         shouldBeDefault ? 1 : 0,
         cash_drawer_pulse_enabled === true ? 1 : 0,
         now(),
@@ -379,6 +393,7 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(id);
     res.status(201).json({ printer: printerShape(printer) });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -396,6 +411,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
       ip_address,
       port,
       paper_width,
+      text_size,
       is_default,
       cash_drawer_pulse_enabled,
     } = req.body;
@@ -418,7 +434,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
       db.prepare(`
         UPDATE printers SET
           name = ?, device_name = ?, connection_type = ?, ip_address = ?, port = ?,
-          paper_width = ?, is_default = ?, cash_drawer_pulse_enabled = ?, updated_at = ?
+          paper_width = ?, text_size = ?, is_default = ?, cash_drawer_pulse_enabled = ?, updated_at = ?
         WHERE id = ?
       `).run(
         name !== undefined ? name : existing.name,
@@ -427,6 +443,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
         updatedIpAddress === undefined ? null : updatedIpAddress,
         port !== undefined ? port : existing.port,
         paper_width !== undefined ? paper_width : existing.paper_width,
+        text_size !== undefined ? text_size : existing.text_size,
         becameDefault ? 1 : is_default === false ? 0 : existing.is_default,
         cash_drawer_pulse_enabled !== undefined
           ? cash_drawer_pulse_enabled
@@ -457,6 +474,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     res.json({ printer: printerShape(printer) });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
     res.status(500).json({ error: 'Internal server error' });
@@ -491,6 +509,7 @@ router.delete('/:id', requirePermission('printers.manage'), (req: Request, res: 
     })();
     res.json({ message: 'Printer deleted' });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
     res.status(500).json({ error: 'Internal server error' });
@@ -517,6 +536,7 @@ router.post(
 
       res.json({ message: 'Default printer set' });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -544,12 +564,13 @@ router.post(
         profile,
         printer.paper_width || profile.defaultPaperWidth,
       );
-      const testData = buildTestPage(
+      const testData = await renderTestPage(
         printer.paper_width || profile.defaultPaperWidth,
         profile.cutMode,
         tenantLanguage(db),
         timezone,
-        req.body?.rasterProbe === true ? capabilities : undefined,
+        capabilities,
+        { rasterProbe: req.body?.rasterProbe === true },
       );
       let result: { ok: boolean; detail?: string } = { ok: false };
 
@@ -582,6 +603,7 @@ router.post(
         });
       }
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -595,7 +617,13 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     try {
       const db = getDatabase();
-      if (!getOpenSession(db)) {
+      const actorUser = (req as Request & { user?: { userId?: string; role?: string } }).user;
+      const actorUserId = String(actorUser?.userId || '');
+      const actorRole = String(actorUser?.role || '');
+      const hasOpenShift =
+        Boolean(getOpenSession(db, actorUserId)) ||
+        ((actorRole === 'owner' || actorRole === 'manager') && listOpenSessions(db).length > 0);
+      if (!hasOpenShift) {
         return res.status(409).json({ error: 'open_cash_shift_required' });
       }
       const printer = getDefaultPrinter(db);
@@ -647,6 +675,7 @@ router.post(
         res.status(502).json({ error: 'Cash drawer kick failed' });
       }
     } catch (error: unknown) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -668,11 +697,16 @@ router.post(
       if (!timezone) return res.status(409).json({ error: 'regional_not_configured' });
 
       const profile = resolvePrinterProfile(printer);
-      const testData = buildTestPage(
+      const capabilities = capabilitiesForPrinter(
+        profile,
+        printer.paper_width || profile.defaultPaperWidth,
+      );
+      const testData = await renderTestPage(
         printer.paper_width || profile.defaultPaperWidth,
         profile.cutMode,
         tenantLanguage(db),
         timezone,
+        capabilities,
       );
       let result: { ok: boolean; detail?: string } = { ok: false };
 
@@ -711,6 +745,7 @@ router.post(
         res.status(502).json({ error: 'Test print failed' });
       }
     } catch (error: unknown) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -750,7 +785,7 @@ router.post(
       const categories = (
         db
           .prepare(`
-      SELECT id, name, is_active, sort_order
+      SELECT id, name, parent_id, is_active, sort_order
       FROM categories
       WHERE deleted_at IS NULL
       ORDER BY sort_order, name
@@ -758,12 +793,17 @@ router.post(
           .all() as Array<{
           id: string | number;
           name: string | null;
+          parent_id: string | number | null;
           is_active: number;
           sort_order: number | null;
         }>
       ).map((category) => ({
         id: String(category.id),
         name: String(category.name ?? ''),
+        parentId:
+          category.parent_id !== null && category.parent_id !== undefined
+            ? String(category.parent_id)
+            : null,
         isActive: category.is_active === 1,
         sortOrder: Number(category.sort_order) || 0,
       }));
@@ -934,6 +974,7 @@ router.post(
         warnings: result.warnings || [],
       });
     } catch (error) {
+      res.locals.postHogError = error;
       if (error instanceof RegionalNotConfiguredError) {
         return res.status(409).json({ error: 'regional_not_configured' });
       }
@@ -954,6 +995,7 @@ router.post(
       return res.status(403).json({
         error:
           'Bill printing is disabled for the server role. An owner or manager can enable it in Settings.',
+        code: 'BILL_PRINTING_DISABLED',
       });
     }
     try {
@@ -1216,6 +1258,7 @@ router.post(
         });
       }
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[Print Bill] Error:', error);
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -1303,6 +1346,7 @@ router.post(
   requirePermission('printing.execute'),
   asyncHandler(async (req: Request, res: Response) => {
     const outcome = await printOrderKot(req.body ?? {}, getHttpRequestSignal(req));
+    if (outcome.error !== undefined) res.locals.postHogError = outcome.error;
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -1311,10 +1355,16 @@ router.post(
 export async function printOrderKot(
   body: Record<string, any>,
   signal?: AbortSignal,
-): Promise<{ status: number; body: Record<string, unknown> }> {
+): Promise<{ status: number; body: Record<string, unknown>; error?: unknown }> {
   // Enforce master KOT printing toggle for all automatic and manual print requests.
   if (!isKotPrintingEnabled()) {
-    return { status: 403, body: { error: 'KOT printing is disabled for this business' } };
+    return {
+      status: 403,
+      body: {
+        error: 'KOT printing is disabled for this business',
+        code: 'KOT_PRINTING_DISABLED',
+      },
+    };
   }
   try {
     const { orderId, stationName, items, useUnicode = false } = body;
@@ -1327,6 +1377,16 @@ export async function printOrderKot(
     }
 
     const db = getDatabase();
+    const order: any = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+    if (order?.release_status && order.release_status !== 'released') {
+      return {
+        status: 409,
+        body: {
+          error: 'Cannot print KOT for a scheduled order before it is released to the kitchen',
+        },
+      };
+    }
+
     const printer = db
       .prepare(
         `SELECT * FROM printers
@@ -1343,7 +1403,6 @@ export async function printOrderKot(
       };
     }
 
-    const order: any = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
     if (!order) {
       return { status: 404, body: { error: 'Order not found' } };
     }
@@ -1460,7 +1519,7 @@ export async function printOrderKot(
   } catch (error: any) {
     console.error('[Print KOT] Error:', error);
     console.error('[API] Internal error:', error);
-    return { status: 500, body: { error: 'Internal server error' } };
+    return { status: 500, body: { error: 'Internal server error' }, error };
   }
 }
 
@@ -1497,6 +1556,7 @@ router.get(
       );
       return res.json({ payment });
     } catch (error: unknown) {
+      res.locals.postHogError = error;
       console.error('[Delivery Slip Payment] Error:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
@@ -1609,6 +1669,7 @@ router.post(
         stage: result.stage,
       });
     } catch (error: unknown) {
+      res.locals.postHogError = error;
       console.error('[Print Delivery Slip] Error:', error);
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -1725,6 +1786,155 @@ router.post(
   }),
 );
 
+router.post(
+  '/print-payment-ticket',
+  requirePermission('printing.execute'),
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const orderId = req.body.orderId || req.body.order_id;
+      const printerId = req.body.printerId || req.body.printer_id;
+      const { useUnicode = false, preview = false } = req.body;
+      if (!orderId) {
+        return res.status(400).json({ error: 'orderId is required' });
+      }
+
+      const db = getDatabase();
+      let printer = printerId
+        ? db.prepare('SELECT * FROM printers WHERE id = ?').get(printerId)
+        : db
+            .prepare(
+              `SELECT * FROM printers
+               WHERE connection_type != 'webusb'
+               ORDER BY is_default DESC, name
+               LIMIT 1`,
+            )
+            .get() ||
+          db
+            .prepare(
+              `SELECT * FROM printers
+               WHERE connection_type = 'webusb'
+               ORDER BY is_default DESC, name
+               LIMIT 1`,
+            )
+            .get();
+
+      if (!printer && preview === true) {
+        printer = { id: 0, name: 'Default 80mm Preview', paper_width: '80mm' };
+      }
+
+      if (!printer) {
+        return res
+          .status(400)
+          .json({ error: 'No default printer configured. Add a printer in Settings.' });
+      }
+
+      const order = getOrderWithItems(db, Number(orderId));
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+
+      let tableName: string | null = null;
+      if (order.table_id) {
+        const tableRow = db
+          .prepare('SELECT number FROM tables WHERE id = ?')
+          .get(order.table_id) as { number: string } | undefined;
+        tableName = tableRow?.number ?? null;
+      }
+
+      const rawItems = (order.items || []) as Array<{
+        status?: string;
+        product_name?: string;
+        quantity?: number;
+        unit_price?: number;
+        total?: number;
+      }>;
+      const items = rawItems
+        .filter((item) => !isTerminalItemStatus(item.status))
+        .map((item) => ({
+          product_name: item.product_name || '',
+          quantity: item.quantity || 1,
+          unit_price: item.unit_price || 0,
+          total: item.total || 0,
+        }));
+      const refundedItemsTotal = rawItems
+        .filter((item) => item.status === 'refunded')
+        .reduce((sum, item) => sum + Number(item.total || 0), 0);
+      const ticketTotal =
+        items.length === 0
+          ? 0
+          : Math.max(0, Number((Number(order.total || 0) - refundedItemsTotal).toFixed(4)));
+
+      const balanceRow = db
+        .prepare(
+          `SELECT COALESCE(SUM(CASE WHEN payment_status != 'refunded' THEN balance ELSE 0 END), 0) AS total_balance,
+                  COUNT(*) AS bill_count
+           FROM bills
+           WHERE order_id = ?`,
+        )
+        .get(order.id) as { total_balance: number; bill_count: number } | undefined;
+      const balance =
+        balanceRow && balanceRow.bill_count > 0 ? Number(balanceRow.total_balance) : ticketTotal;
+
+      const result = await printPaymentTicketDetailed(
+        {
+          id: order.id,
+          order_number: order.order_number,
+          type: order.type,
+          table_id: order.table_id,
+          table_name: tableName,
+          total: ticketTotal,
+          created_at: order.created_at,
+          scheduled_for: order.scheduled_for,
+        },
+        items,
+        {
+          balance: Number(balance),
+          useUnicode,
+          targetPrinter: printer,
+          signal: getHttpRequestSignal(req),
+          preview: Boolean(preview),
+        },
+      );
+
+      if (preview && result.ok) {
+        return res.json({
+          success: true,
+          preview: true,
+          bytes: result.bytes || [],
+          warnings: result.warnings || [],
+        });
+      }
+
+      if (result.ok && result.connection_type === 'webusb') {
+        return res.json({
+          success: true,
+          webusb: true,
+          bytes: Array.from(result.bytes || []),
+          printerName: (printer as { name?: string }).name,
+          warnings: result.warnings || [],
+        });
+      }
+
+      if (result.ok) {
+        return res.json({ success: true, warnings: result.warnings || [] });
+      }
+      return res.status(502).json({
+        error: result.detail || 'Payment ticket print failed. Check printer connection.',
+        detail: result.detail,
+        failure_class: result.failureClass,
+        code: result.code,
+        correlation_id: result.correlationId,
+        stage: result.stage,
+      });
+    } catch (error: unknown) {
+      res.locals.postHogError = error;
+      console.error('[Print Payment Ticket] Error:', error);
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }),
+);
+
 export const printerRoutes = router;
 
 /** Tenant-configured language for print labels, defaulting to 'en'. */
@@ -1772,4 +1982,82 @@ function resolveTenantKotLanguage(db: ReturnType<typeof getDatabase>): string {
     tenantSettingValue(db, KOT_LANGUAGE_POLICY_KEY),
   ) as KotLanguagePolicy;
   return resolveKotLanguage(policy, tenantLanguage(db));
+}
+
+/**
+ * Automatically prints KOT tickets via configured backend printers when a
+ * scheduled order is released to the kitchen and `auto_print_kot` is enabled.
+ */
+export async function autoPrintReleasedOrderKot(
+  db: ReturnType<typeof getDatabase>,
+  orderId: string | number,
+): Promise<boolean> {
+  try {
+    if (!isKotPrintingEnabled()) return false;
+    if (tenantSettingValue(db, 'auto_print_kot') !== 'true') return false;
+
+    const printer = db
+      .prepare(
+        `SELECT * FROM printers
+         WHERE connection_type != 'webusb'
+         ORDER BY is_default DESC, name
+         LIMIT 1`,
+      )
+      .get();
+    if (!printer) return false;
+
+    const order = db
+      .prepare("SELECT * FROM orders WHERE id = ? AND release_status = 'released'")
+      .get(orderId) as
+      | (Record<string, unknown> & {
+          table_id?: string | number | null;
+          customer_id?: string | number | null;
+        })
+      | undefined;
+    if (!order) return false;
+
+    if (order.table_id) {
+      const table = db.prepare('SELECT number FROM tables WHERE id = ?').get(order.table_id) as
+        | { number: string }
+        | undefined;
+      if (table) order.table = { name: table.number };
+    }
+    if (order.customer_id) {
+      const customer = db
+        .prepare('SELECT name FROM customers WHERE id = ?')
+        .get(order.customer_id) as { name: string } | undefined;
+      if (customer) order.customer = { name: customer.name };
+    }
+
+    const kotLanguage = resolveTenantKotLanguage(db);
+    const useUnicode = tenantSettingValue(db, 'printer_use_unicode') === 'true';
+    const arabicShapingSetting = tenantSettingValue(db, 'printer_arabic_shaping');
+    const arabicShapingOverride =
+      arabicShapingSetting !== undefined ? arabicShapingSetting === 'true' : undefined;
+
+    const kotSourceItems = getEffectiveOrderItems(db, String(orderId)).filter(
+      (item: { status?: string | null }) => isKotItemPending(item?.status),
+    );
+    if (kotSourceItems.length === 0) return false;
+
+    const groups = routeItemsToStations(db, kotSourceItems).filter((g) => g.items.length > 0);
+    let anyPrinted = false;
+    for (const group of groups) {
+      const result = await printKOTDetailed(
+        order as Parameters<typeof printKOTDetailed>[0],
+        group.items,
+        group.stationName,
+        useUnicode,
+        group.printer || undefined,
+        undefined,
+        arabicShapingOverride,
+        kotLanguage,
+      );
+      if (result.ok) anyPrinted = true;
+    }
+    return anyPrinted;
+  } catch (error) {
+    console.error('[Scheduled Release KOT] Automatic KOT print failed:', error);
+    return false;
+  }
 }

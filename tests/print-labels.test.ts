@@ -263,6 +263,40 @@ function run(): void {
     printLabel('ne', 'pos.subtotal') === 'उप-जम्मा' &&
       printLabel('ne', 'print.grandTotal') !== printLabel('ne', 'pos.subtotal'),
   );
+  assert(
+    'Hausa grand total is localized',
+    printLabel('ha', 'print.grandTotal') === 'BABBAR JIMILLA',
+  );
+  assert(
+    'Hausa bill number label is localized',
+    printLabel('ha', 'receipt.billNumber') === 'Lambar lissafi #',
+  );
+  assert('Hausa print-test amount is localized', printLabel('ha', 'printTest.amt') === 'Kuɗi');
+  assert(
+    'Hausa takeaway is distinct from delivery',
+    printLabel('ha', 'pos.orderTypeTakeaway') === 'Tafi da shi' &&
+      printLabel('ha', 'pos.orderTypeDelivery') === 'Isarwa',
+  );
+  assert(
+    'Hausa subtotal stays distinct from grand total',
+    printLabel('ha', 'pos.subtotal') === 'Jimillar ƙasa' &&
+      printLabel('ha', 'print.grandTotal') !== printLabel('ha', 'pos.subtotal'),
+  );
+  assert('Javanese grand total is localized', printLabel('jv', 'print.grandTotal') === 'GUNGGUNG');
+  assert(
+    'Javanese KOT banner is localized',
+    printLabel('jv', 'print.kot.banner') === 'TIKET PESENAN PAWON',
+  );
+  assert(
+    'Javanese takeaway is distinct from delivery',
+    printLabel('jv', 'pos.orderTypeTakeaway') === 'Gawa Mulih' &&
+      printLabel('jv', 'pos.orderTypeDelivery') === 'Kiriman',
+  );
+  assert(
+    'Javanese subtotal stays distinct from grand total',
+    printLabel('jv', 'pos.subtotal') === 'Sub-gunggung' &&
+      printLabel('jv', 'print.grandTotal') !== printLabel('jv', 'pos.subtotal'),
+  );
 
   console.log('\n✅ Test 2: classic receipt honors language');
   {

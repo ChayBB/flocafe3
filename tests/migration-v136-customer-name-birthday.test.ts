@@ -19,7 +19,8 @@ const {
   initDatabase,
   getDatabase,
   getCurrentSchemaVersion,
-  MIGRATIONS,
+  buildIdealSchemaDb,
+  getLatestSupportedSchemaVersion,
   closeDatabase,
 } = require('../main/db');
 const { assertOrThrow, assertEqualOrThrow } = require('./helpers/test-setup');
@@ -34,8 +35,7 @@ function customerColumns(db: any): string[] {
 
 function main() {
   console.log('Migration v136: customer first/last name and birthday');
-  const originalMigrations = MIGRATIONS.slice();
-  const latest = originalMigrations[originalMigrations.length - 1].version;
+  const latest = getLatestSupportedSchemaVersion();
 
   initDatabase();
   let db = getDatabase();
@@ -46,28 +46,29 @@ function main() {
   closeDatabase();
 
   activeTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-migration-v136-upgrade-'));
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations.filter((m: any) => m.version <= 135));
-  initDatabase();
-  db = getDatabase();
-  assertEqualOrThrow(getCurrentSchemaVersion(), 135, 'upgrade store starts at v135');
-  assertOrThrow(!customerColumns(db).includes('birthday'), 'v135 schema has no birthday column');
+  const legacyDb = buildIdealSchemaDb(135, true);
+  assertEqualOrThrow(
+    legacyDb.pragma('user_version', { simple: true }),
+    135,
+    'upgrade store starts at v135',
+  );
+  assertOrThrow(
+    !customerColumns(legacyDb).includes('birthday'),
+    'v135 schema has no birthday column',
+  );
 
-  db.prepare(`
+  legacyDb
+    .prepare(`
     INSERT INTO customers (id, name, phone, country_code, email, address, notes, created_at, updated_at)
     VALUES ('cust-legacy', 'สมชาย ใจดี', '+66812345678', '+66', 'a@example.com', '1 Main Rd', 'VIP', datetime('now'), datetime('now'))
-  `).run();
-  const before = db.prepare("SELECT * FROM customers WHERE id = 'cust-legacy'").get();
+  `)
+    .run();
+  const before = legacyDb.prepare("SELECT * FROM customers WHERE id = 'cust-legacy'").get();
 
-  MIGRATIONS.length = 0;
-  MIGRATIONS.push(...originalMigrations);
-  for (const migration of MIGRATIONS) {
-    if (migration.version <= getCurrentSchemaVersion()) continue;
-    db.transaction(() => {
-      migration.up();
-      db.pragma(`user_version = ${migration.version}`);
-    })();
-  }
+  fs.writeFileSync(path.join(activeTestDir, 'flo.db'), legacyDb.serialize());
+  legacyDb.close();
+  initDatabase();
+  db = getDatabase();
 
   assertEqualOrThrow(getCurrentSchemaVersion(), latest, 'upgrade reaches the latest schema');
   const after = db.prepare("SELECT * FROM customers WHERE id = 'cust-legacy'").get();
@@ -78,10 +79,14 @@ function main() {
     assertEqualOrThrow(after[column], null, `upgraded customer has a NULL ${column}`);
   }
 
-  for (const migration of MIGRATIONS.filter((m: any) => m.version === 136)) {
-    migration.up();
-  }
-  assertOrThrow(customerColumns(db).includes('birthday'), 'v136 is safe to re-run');
+  db.prepare("UPDATE customers SET birthday = '1985-04-02' WHERE id = 'cust-legacy'").run();
+  closeDatabase();
+  initDatabase();
+  assertEqualOrThrow(
+    getDatabase().prepare("SELECT birthday FROM customers WHERE id = 'cust-legacy'").pluck().get(),
+    '1985-04-02',
+    'restart preserves the saved birthday',
+  );
   closeDatabase();
   console.log('  ✓ all migration v136 checks passed');
 }

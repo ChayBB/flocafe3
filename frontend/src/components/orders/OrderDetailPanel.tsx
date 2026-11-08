@@ -46,6 +46,7 @@ import {
   Bike,
   Pencil,
   UserCog,
+  Tag,
 } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import type { Order, OrderItem, Bill, Customer } from '@/lib/types';
@@ -57,7 +58,19 @@ import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { useFormatDate } from '@/hooks/useFormatDate';
 import { parseDbTimestamp } from '@/lib/utils';
 import { kdsItemLine } from '@/lib/item-options-note';
+import { useAuthStore } from '@/store/auth';
 import { isTerminalItemStatus } from '../../../../shared/order-item-status';
+import { ROLE_ACCESS, hasRole } from '../../../../shared/role-permissions';
+import {
+  canCheckoutOrder,
+  getOrderBills,
+  getRefundEligibleBills,
+  isBillPayableForCheckout,
+  isOrderCustomerEditLocked,
+  isOrderItemEditLocked,
+  orderHasCollectedFunds,
+  resolveOrderPaymentStatus,
+} from '@/lib/order-payment-state';
 import PendingOrderItemEdits from './PendingOrderItemEdits';
 import {
   itemStatusDot,
@@ -80,6 +93,8 @@ export interface OrderDetailPanelProps {
   canEditItems?: boolean;
   onEditItem?: (order: Order, item: OrderItem) => void;
   onWeighItem?: (order: Order, item: OrderItem) => void;
+  canOverridePrice?: boolean;
+  onOverridePrice?: (order: Order, item: OrderItem) => void;
   canRestoreItems: boolean;
   canRefund: boolean;
   isWhatsAppReady: boolean;
@@ -102,6 +117,7 @@ export interface OrderDetailPanelProps {
   onPayBill?: (bill: Bill) => void;
   onAddItems: (order: Order) => void;
   onRefund: (order: Order, bills: Bill[]) => void;
+  onCorrectPaymentMethod?: (order: Order, bills: Bill[]) => void;
   onConvertToTakeaway: (order: Order) => void;
   onCancelOrder: (order: Order) => void;
   onPrint: (billId: number) => void;
@@ -121,6 +137,20 @@ export interface OrderDetailPanelProps {
   onItemEditResolved?: (orderId: number) => Promise<boolean> | void;
 }
 
+type PaymentDetailLine = NonNullable<Bill['payment_details']>[number];
+
+export function normalizeBillPaymentDetails(raw: unknown): PaymentDetailLine[] {
+  if (Array.isArray(raw)) {
+    return raw.filter(
+      (line): line is PaymentDetailLine => Boolean(line) && typeof line === 'object',
+    );
+  }
+  if (raw && typeof raw === 'object') {
+    return [raw as PaymentDetailLine];
+  }
+  return [];
+}
+
 function OrderDetailContent({
   order,
   now,
@@ -128,6 +158,8 @@ function OrderDetailContent({
   canEditItems = false,
   onEditItem,
   onWeighItem,
+  canOverridePrice = false,
+  onOverridePrice,
   canRestoreItems,
   canRefund,
   isWhatsAppReady,
@@ -146,6 +178,7 @@ function OrderDetailContent({
   onPayBill,
   onAddItems,
   onRefund,
+  onCorrectPaymentMethod,
   onConvertToTakeaway,
   onCancelOrder,
   onPrint,
@@ -194,36 +227,41 @@ function OrderDetailContent({
 
   const bill = order.bill;
   const isPaid = bill?.payment_status === 'paid';
-  const payStatus: 'paid' | 'partial' | 'unpaid' | null = (() => {
-    if (order.status === 'cancelled') return null;
-    if (bill?.payment_status === 'paid') return 'paid';
-    if (bill?.payment_status === 'partial') return 'partial';
-    return 'unpaid';
-  })();
+  const payStatus = resolveOrderPaymentStatus(order);
 
-  const orderBills = order.bills && order.bills.length > 0 ? order.bills : bill ? [bill] : [];
+  const orderBills = getOrderBills(order);
   const splitBills = orderBills.filter((candidate) => Boolean(candidate.split_group_id));
-  const canPaySplitBill = (candidate: Bill) =>
-    candidate.payment_status === 'unpaid' || candidate.payment_status === 'partial';
+  const paymentReferences = orderBills.flatMap((candidate) =>
+    normalizeBillPaymentDetails(candidate.payment_details).filter((line) =>
+      Boolean(line.transaction_id),
+    ),
+  );
+  const canPaySplitBill = isBillPayableForCheckout;
   const hasUnpaidSplitBills = splitBills.some(canPaySplitBill);
-  const paidBills = orderBills.filter(
-    (b) => Number(b.paid_amount) > 0 && b.payment_status !== 'refunded',
+  const paidBills = getRefundEligibleBills(order);
+  const storeRole = useAuthStore(
+    (s) => s.currentTenant?.role ?? (s.user as { role?: string } | null)?.role,
+  );
+  const authRole =
+    storeRole ??
+    useAuthStore.getState?.()?.currentTenant?.role ??
+    (useAuthStore.getState?.()?.user as { role?: string } | null)?.role;
+  const correctablePaidBills = orderBills.filter((b) => b.payment_status === 'paid');
+  const canCorrectPaymentMethod =
+    Boolean(onCorrectPaymentMethod) &&
+    hasRole(authRole, ROLE_ACCESS.ownerManager) &&
+    correctablePaidBills.length > 0;
+  const hasCorrectablePayment = correctablePaidBills.some(
+    (b) => b.payment_method_correction?.correctable === true,
   );
   const hasEligibleRefund = paidBills.length > 0;
-  const hasCollectedFunds = orderBills.some((candidate) => {
-    const status = String(candidate.payment_status || '');
-    const paidAmount = Number(candidate.paid_amount || 0);
-    const total = Number(candidate.total || 0);
-    const detailsCount = Array.isArray(candidate.payment_details)
-      ? candidate.payment_details.length
-      : 0;
-    return (
-      (paidAmount > 0 && status !== 'refunded') ||
-      status === 'partial' ||
-      status === 'partially_refunded' ||
-      (status === 'paid' && (total > 0 || detailsCount > 0))
-    );
-  });
+  const hasCollectedFunds = orderHasCollectedFunds(order);
+  const customerEditLocked = isOrderCustomerEditLocked(order);
+  const itemEditLocked = isOrderItemEditLocked(order);
+  const canCheckout = canCheckoutOrder(order);
+  const canAddItems = !isPaid && !itemEditLocked;
+  const canSendWhatsAppReceipt =
+    (isPaid || order.status === 'completed') && isWhatsAppReady && Boolean(order.customer?.phone);
   const cancelRequiresPin =
     order.status !== 'pending' ||
     Boolean(
@@ -358,7 +396,7 @@ function OrderDetailContent({
                       : tOrders('convertToTakeaway')}
                   </DropdownMenuItem>
                 )}
-                {!['completed', 'cancelled'].includes(order.status) && (
+                {!customerEditLocked && (
                   <DropdownMenuItem onClick={() => onLinkCustomer(order.id)}>
                     <User size={14} className="me-2" />
                     {order.customer ? tOrders('changeCustomer') : tOrders('linkCustomer')}
@@ -368,6 +406,26 @@ function OrderDetailContent({
                   <DropdownMenuItem onClick={() => onDownloadPrintPreview(bill.id)}>
                     <Download size={14} className="me-2" />
                     {tOrders('downloadPrintPreview')}
+                  </DropdownMenuItem>
+                )}
+                {canCorrectPaymentMethod && onCorrectPaymentMethod && (
+                  <DropdownMenuItem
+                    data-testid="correct-payment-method-menu-item"
+                    disabled={!hasCorrectablePayment}
+                    title={
+                      !hasCorrectablePayment ? tOrders('correctPaymentUnavailable') : undefined
+                    }
+                    onClick={() => onCorrectPaymentMethod(order, correctablePaidBills)}
+                  >
+                    <CreditCard size={14} className="me-2" />
+                    <span>
+                      {tOrders('correctPaymentMethod')}
+                      {!hasCorrectablePayment && (
+                        <span className="block text-xs">
+                          {tOrders('correctPaymentUnavailable')}
+                        </span>
+                      )}
+                    </span>
                   </DropdownMenuItem>
                 )}
                 {!['completed', 'cancelled'].includes(order.status) && (
@@ -461,7 +519,7 @@ function OrderDetailContent({
         )}
 
         {/* Customer card */}
-        {isLinkingCustomer ? (
+        {isLinkingCustomer && !customerEditLocked ? (
           <div className="px-4 py-2.5 bg-orange-50/80 dark:bg-orange-950/40 border-b border-orange-100 dark:border-orange-900/40 space-y-2">
             <div className="flex items-center gap-2">
               <input
@@ -558,7 +616,7 @@ function OrderDetailContent({
                 <span>{tOrders('newOrder')}</span>
               </button>
             )}
-            {!order.customer && order.status !== 'cancelled' && (
+            {!order.customer && !customerEditLocked && (
               <button
                 type="button"
                 onClick={() => onLinkCustomer(order.id)}
@@ -653,6 +711,7 @@ function OrderDetailContent({
                     {canEditItems &&
                       onEditItem &&
                       !isPaid &&
+                      !itemEditLocked &&
                       !['completed', 'cancelled'].includes(order.status) &&
                       !itemEditBlocked(item.id) && (
                         <button
@@ -664,8 +723,25 @@ function OrderDetailContent({
                           <Pencil size={14} />
                         </button>
                       )}
+                    {canOverridePrice &&
+                      onOverridePrice &&
+                      !isPaid &&
+                      !itemEditLocked &&
+                      !['completed', 'cancelled'].includes(order.status) &&
+                      !['cancelled', 'voided', 'void_adjustment'].includes(item.status) &&
+                      !itemEditBlocked(item.id) && (
+                        <button
+                          type="button"
+                          onClick={() => onOverridePrice(order, item)}
+                          className="size-8 flex items-center justify-center text-muted-foreground hover:text-foreground active:scale-95 rounded-md hover:bg-muted transition-colors touch-manipulation"
+                          title={tOrders('overridePrice')}
+                        >
+                          <Tag size={14} />
+                        </button>
+                      )}
                     {canCancelItems &&
                       !isPaid &&
+                      !itemEditLocked &&
                       !['completed', 'cancelled'].includes(order.status) &&
                       !itemEditBlocked(item.id) && (
                         <div className="flex items-center gap-1 ms-1">
@@ -694,6 +770,13 @@ function OrderDetailContent({
                       )}
                   </div>
                 </div>
+                {Boolean(item.price_overridden) && (
+                  <div className="ps-6 mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                    {tOrders('priceOverriddenMenu', {
+                      price: fmt(Number(item.original_unit_price ?? 0)),
+                    })}
+                  </div>
+                )}
                 {instructions && (
                   <div className="ps-6 mt-0.5 text-xs text-red-500/90 italic">
                     &quot;{instructions}&quot;
@@ -731,6 +814,7 @@ function OrderDetailContent({
                   </span>
                   {cItem.status === 'cancelled' &&
                     !isPaid &&
+                    !itemEditLocked &&
                     !['completed', 'cancelled'].includes(order.status) &&
                     onRestoreItem && (
                       <button
@@ -804,6 +888,26 @@ function OrderDetailContent({
               <span className="text-red-600 dark:text-red-400 font-bold">
                 {tOrders('balance')}: {money(Number(bill.balance))}
               </span>
+            </div>
+          )}
+
+          {paymentReferences.length > 0 && (
+            <div className="mt-2.5 space-y-1 text-xs text-muted-foreground">
+              {paymentReferences.map((line, index) => (
+                <div
+                  key={`${line.method}:${line.transaction_id}:${index}`}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <CreditCard size={12} className="shrink-0" />
+                    <span className="truncate">
+                      {line.method === 'card' ? tPos('methodCard') : line.method} ·{' '}
+                      {tOrders('transactionNumber')}: <Ltr>{line.transaction_id}</Ltr>
+                    </span>
+                  </span>
+                  <span className="font-medium text-foreground">{fmt(Number(line.amount))}</span>
+                </div>
+              ))}
             </div>
           )}
 
@@ -892,7 +996,7 @@ function OrderDetailContent({
               </Button>
             )}
           </div>
-        ) : isPaid || order.status === 'completed' ? (
+        ) : !canCheckout ? (
           <div className="flex items-center gap-2">
             {bill && (
               <Button
@@ -909,7 +1013,7 @@ function OrderDetailContent({
                 {printCount > 0 ? tCommon('reprint') : tCommon('print')}
               </Button>
             )}
-            {isWhatsAppReady && order.customer?.phone && (
+            {canSendWhatsAppReceipt && (
               <Button
                 variant="outline"
                 onClick={() => onSendWhatsApp(order)}
@@ -923,6 +1027,26 @@ function OrderDetailContent({
                 )}
                 {tOrders('sendReceipt')}
               </Button>
+            )}
+            {canCorrectPaymentMethod && onCorrectPaymentMethod && (
+              <div className="flex-1">
+                <Button
+                  variant="outline"
+                  data-testid="correct-payment-method-button"
+                  disabled={!hasCorrectablePayment}
+                  title={!hasCorrectablePayment ? tOrders('correctPaymentUnavailable') : undefined}
+                  onClick={() => onCorrectPaymentMethod(order, correctablePaidBills)}
+                  className="flex-1 h-10 border-border text-foreground hover:bg-muted font-semibold text-xs"
+                >
+                  <CreditCard size={15} className="me-1.5 text-muted-foreground" />
+                  {tOrders('correctPaymentMethod')}
+                </Button>
+                {!hasCorrectablePayment && (
+                  <p className="text-xs text-muted-foreground">
+                    {tOrders('correctPaymentUnavailable')}
+                  </p>
+                )}
+              </div>
             )}
             {canRefund && hasEligibleRefund && (
               <Button
@@ -974,14 +1098,26 @@ function OrderDetailContent({
                 {checkoutButtonLabel}
               </Button>
             )}
-            <Button
-              variant="outline"
-              onClick={() => onAddItems(order)}
-              className="flex-1 h-10 border-green-300 text-green-600 hover:bg-green-50 hover:text-green-700 dark:hover:bg-green-950/40 dark:border-green-800 font-semibold text-xs"
-            >
-              <Plus size={15} className="me-1.5" />
-              {tOrders('addItem')}
-            </Button>
+            {canAddItems && (
+              <Button
+                variant="outline"
+                onClick={() => onAddItems(order)}
+                className="flex-1 h-10 border-green-300 text-green-600 hover:bg-green-50 hover:text-green-700 dark:hover:bg-green-950/40 dark:border-green-800 font-semibold text-xs"
+              >
+                <Plus size={15} className="me-1.5" />
+                {tOrders('addItem')}
+              </Button>
+            )}
+            {canRefund && hasEligibleRefund && (
+              <Button
+                variant="outline"
+                onClick={() => onRefund(order, paidBills)}
+                className="flex-1 h-10 border-border text-foreground hover:bg-muted font-semibold text-xs"
+              >
+                <RotateCcw size={15} className="me-1.5 text-muted-foreground" />
+                {tOrders('refundButton')}
+              </Button>
+            )}
           </div>
         )}
 

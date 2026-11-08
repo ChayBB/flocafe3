@@ -56,6 +56,7 @@ import { allocateEqualShares } from '@/lib/money';
 import { parseAppliedCharges, type AppliedCharge } from '@/lib/charges';
 import { useChargesStore, chargesForOrderType } from '@/store/charges';
 import { classifyOrderRequestFailure, type OperationFailureMetadata } from '@/lib/order-attempt';
+import { isScheduledOrderEditLocked } from '@/lib/order-payment-state';
 import { ApproverSelect } from '@/components/ApproverSelect';
 import { isAwaitingBillPayment } from '@/lib/bill-print-flow';
 import { useManagerApprovers } from '@/hooks/useManagerApprovers';
@@ -84,6 +85,7 @@ interface Payment {
   method: string;
   payment_method_id?: number;
   amount: string;
+  transaction_id?: string;
 }
 
 type AmountTarget =
@@ -110,7 +112,12 @@ type PendingPaymentAttempt = {
   key: string;
   operationId: string | null;
   zeroBalance: boolean;
-  lines: { method: string; amount: number | null; payment_method_id?: number }[];
+  lines: {
+    method: string;
+    amount: number | null;
+    payment_method_id?: number;
+    transaction_id?: string;
+  }[];
   customerId: string | number | null;
 };
 
@@ -214,6 +221,7 @@ export default function PaymentModal({
   const [walletAmount, setWalletAmount] = useState('');
   const [customMethods, setCustomMethods] = useState<CustomPaymentMethod[]>([]);
   const managerApprovers = useManagerApprovers();
+  const [cardTransactionIdRequired, setCardTransactionIdRequired] = useState(false);
   const [kitchenOverrideRequired, setKitchenOverrideRequired] = useState(
     Boolean(initialOverridePin),
   );
@@ -302,10 +310,12 @@ export default function PaymentModal({
 
   const appliedCharges: AppliedCharge[] = parseAppliedCharges(bill.charges_breakdown);
   const applicableCharges = chargesForOrderType(charges, bill.order?.type || '');
+  const scheduledOrderEditLocked = isScheduledOrderEditLocked(bill.order, [bill]);
   // The backend rejects a waiver on a split check (its charges are already
   // allocated) and on a settled bill, so the toggle is not offered there.
   const canToggleCharges =
     !bill.split_group_id &&
+    !scheduledOrderEditLocked &&
     bill.payment_status !== 'paid' &&
     Number(bill.paid_amount || 0) === 0 &&
     bill.payment_status !== 'refunded' &&
@@ -598,6 +608,10 @@ export default function PaymentModal({
       })
       .catch(() => {});
     api
+      .get('/settings/card_transaction_id_required')
+      .then((res) => setCardTransactionIdRequired(res.data?.setting?.value === 'true'))
+      .catch(() => {});
+    api
       .get('/payment-methods')
       .then((res) => {
         const methods: CustomPaymentMethod[] = res.data.payment_methods || [];
@@ -692,7 +706,7 @@ export default function PaymentModal({
     setPayments((rows) =>
       rows.map((row, index) =>
         index === applied.index && row.amount === applied.amountInput
-          ? { ...row, amount: '' }
+          ? { ...row, amount: '', transaction_id: '' }
           : row,
       ),
     );
@@ -749,6 +763,20 @@ export default function PaymentModal({
       ),
     );
   };
+
+  const updatePaymentTransactionId = (idx: number, value: string) => {
+    if (attemptLocked) return;
+    setPayments((current) =>
+      current.map((payment, index) =>
+        index === idx ? { ...payment, transaction_id: value } : payment,
+      ),
+    );
+  };
+
+  const needsTransactionId = (payment: Payment) =>
+    cardTransactionIdRequired &&
+    payment.method === 'card' &&
+    payment.payment_method_id === undefined;
 
   // Choosing a method moves the whole balance (less any wallet amount) onto it and clears the others.
   const allocateRemainingTo = (idx: number) => {
@@ -1077,6 +1105,9 @@ export default function PaymentModal({
         method: p.payment_method_id === undefined ? p.method : 'custom',
         ...(p.payment_method_id !== undefined ? { payment_method_id: p.payment_method_id } : {}),
         amount: toStoredUnit(parseFloat(p.amount) || 0),
+        ...(needsTransactionId(p) && p.transaction_id?.trim()
+          ? { transaction_id: p.transaction_id.trim() }
+          : {}),
       }))
       .filter((p) => p.amount > 0 && !isNaN(p.amount));
     if (walletAmt > 0) splitLines.push({ method: 'wallet', amount: walletAmt });
@@ -1164,6 +1195,9 @@ export default function PaymentModal({
       setRequestFailure(null);
       setKitchenOverrideRequired(false);
       if (updatedBill.payment_status !== 'paid') {
+        setPayments((rows) =>
+          rows.map((row) => (row.transaction_id ? { ...row, transaction_id: '' } : row)),
+        );
         if (onBillUpdate) onBillUpdate({ ...bill, ...updatedBill, order: bill.order });
         if (
           updatedBill.payment_status === 'partial' &&
@@ -1254,6 +1288,7 @@ export default function PaymentModal({
       const paymentDisplayMessages: Record<string, string> = {
         transaction_reference_used: t('paymentTransactionReferenceUsed'),
         transaction_reference_reused: t('paymentTransactionReferenceReused'),
+        card_transaction_id_required: t('cardTransactionIdMissing'),
         bill_refunded: t('paymentBillRefunded'),
         bill_already_paid: t('paymentBillAlreadyPaid'),
         customer_mismatch: t('paymentCustomerMismatch'),
@@ -1269,6 +1304,10 @@ export default function PaymentModal({
         payment_input_invalid: t('paymentInputInvalid'),
         cash_session_required: tExpenses('cashSessionClosed'),
       };
+      // The setting may be unreadable for this role; the backend's refusal still reveals it.
+      if (failure.displayCode === 'card_transaction_id_required') {
+        setCardTransactionIdRequired(true);
+      }
       const reasonMessage =
         failure.outcome === 'applied'
           ? t('paymentCompletionApplied')
@@ -1433,6 +1472,15 @@ export default function PaymentModal({
     }
     if (walletAmount.trim() && !amountPattern.test(walletAmount.trim())) {
       toast.error(t('paymentFailed'));
+      return;
+    }
+    if (
+      payments.some(
+        (p) =>
+          needsTransactionId(p) && (parseFloat(p.amount) || 0) > 0 && !p.transaction_id?.trim(),
+      )
+    ) {
+      toast.error(t('cardTransactionIdMissing'));
       return;
     }
     const nonCashTotalMinor =
@@ -1764,7 +1812,7 @@ export default function PaymentModal({
             )}
 
             {/* Discount */}
-            {!bill.split_group_id && discountMode !== 'none' && (
+            {!bill.split_group_id && !scheduledOrderEditLocked && discountMode !== 'none' && (
               <div className="rounded-xl border border-border overflow-hidden">
                 <button
                   type="button"
@@ -2227,6 +2275,19 @@ export default function PaymentModal({
                         />
                       </div>
                     </div>
+                    {needsTransactionId(payment) && active && (
+                      <input
+                        type="text"
+                        value={payment.transaction_id ?? ''}
+                        disabled={processing || attemptLocked}
+                        onChange={(e) => updatePaymentTransactionId(idx, e.target.value)}
+                        placeholder={t('cardTransactionIdLabel')}
+                        aria-label={t('cardTransactionIdLabel')}
+                        maxLength={256}
+                        autoComplete="off"
+                        className="w-full min-h-11 rounded-xl border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand"
+                      />
+                    )}
                     {isAppliedShare && (
                       <p className="px-1 text-[11px] font-medium text-brand">
                         {t('equalShareBadge')}
@@ -2353,7 +2414,7 @@ export default function PaymentModal({
             </>
           ) : (
             <>
-              {onPrintBill && !awaitingConfirmation ? (
+              {onPrintBill && !awaitingConfirmation && !pendingAttempt ? (
                 <Button
                   data-testid="payment-print-bill"
                   onClick={handlePrintInstead}

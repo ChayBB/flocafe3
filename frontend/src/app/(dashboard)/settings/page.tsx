@@ -4,17 +4,24 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
-import { usePosSettingsStore, type BillTemplate } from '@/store/pos-settings';
+import {
+  usePosSettingsStore,
+  normalizeAutoLockMinutesValue,
+  type BillTemplate,
+} from '@/store/pos-settings';
 import { useThemeMode, isThemeVariant, type ThemeMode, type ThemeVariant } from '@/store/theme';
 
 const THEME_VARIANTS: readonly ThemeVariant[] = ['1', '2', '3'];
 import { useOrdersLayoutPreference } from '@/hooks/useOrdersLayout';
+import { usePosSortPreference } from '@/hooks/usePosSort';
+import { POS_CATEGORY_SORTS, POS_ITEM_SORTS } from '@/lib/pos-sort';
 import { CustomerDisplayCard } from '@/components/settings/CustomerDisplayCard';
 import type {
   KotLanguagePolicy,
   PrimaryLanguageSelection,
   ReceiptLanguagePolicy,
 } from '@print/types';
+import { shouldAutoEnableBillShowLogo } from '@print/image-raster';
 import {
   parseStoredKotLanguagePolicy,
   parseStoredReceiptLanguagePolicy,
@@ -42,6 +49,7 @@ import {
   Percent,
   AlertTriangle,
   SunMoon,
+  ArrowUpDown,
   LayoutPanelTop,
 } from 'lucide-react';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
@@ -66,6 +74,7 @@ import { StoreBrandingCard } from '@/components/settings/StoreBrandingCard';
 import { MasterPinPrompt } from '@/components/settings/MasterPinPrompt';
 import AutoUpdateCheckToggle from '@/components/settings/AutoUpdateCheckToggle';
 import BetaChannelToggle from '@/components/settings/BetaChannelToggle';
+import { OfflineModeCard } from '@/components/settings/OfflineModeCard';
 import { HealthCheckDialog } from '@/components/settings/HealthCheckDialog';
 import { InitializeDatabaseDialog } from '@/components/settings/InitializeDatabaseDialog';
 import { CurrencyResetDialog } from '@/components/settings/CurrencyResetDialog';
@@ -99,6 +108,8 @@ import {
 import { Toggle } from '@/components/settings/Toggle';
 import { SettingsTabShell } from '@/components/settings/SettingsTabShell';
 import { MarketingMembersCard } from '@/components/settings/MarketingMembersCard';
+import { QrMenuSettingsTab } from '@/components/settings/QrMenuSettingsTab';
+import { CountersSettingsTab } from '@/components/settings/CountersSettingsTab';
 import type { HealthCheckReport } from '@/types/electron';
 import { useTranslations } from 'use-intl';
 import { Ltr } from '@/components/layout/Ltr';
@@ -362,6 +373,7 @@ export default function SettingsPage() {
   const whatsappEnabled = posSettings.whatsappEnabled;
   const { printMethod, setPrintMethod } = usePrinterStore();
   const t = useTranslations('settings');
+  const tPos = useTranslations('pos');
   const tAnalytics = useTranslations('productAnalytics');
   const tCommon = useTranslations('common');
   const tRestore = useTranslations('restore');
@@ -374,6 +386,8 @@ export default function SettingsPage() {
   const canManageTaxPacks = tenantCan(currentTenant, 'tax-packs.manage');
   const canViewTaxConfiguration = tenantCan(currentTenant, 'tax-packs.view-test');
   const canManageMobileAccess = tenantCan(currentTenant, 'mobile-access.manage');
+  const canManageGoogleDrive = tenantCan(currentTenant, 'google-drive.manage');
+  const canManageQrMenu = tenantCan(currentTenant, 'catalog.manage') || canManageGoogleDrive;
   const { confirm, ConfirmDialog } = useConfirm();
 
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(false);
@@ -420,6 +434,8 @@ export default function SettingsPage() {
   const activeTabRef = useRef(activeTab);
   const currentTenantIdRef = useRef<number | null>(currentTenant?.id ?? null);
   const hydrationTouchVersions = useRef(new Map<string, number>());
+  const pendingLogoAutoEnableRef = useRef(false);
+  const logoVisibilityOverriddenRef = useRef(false);
   const pendingKitchenSaves = useRef(
     new Map<'kdsEnabled' | 'kotPrintingEnabled' | 'requireKitchenDelivered', number>(),
   );
@@ -441,6 +457,8 @@ export default function SettingsPage() {
     if (currentTenantIdRef.current !== tenantId) {
       currentTenantIdRef.current = tenantId;
       hydrationTouchVersions.current.clear();
+      pendingLogoAutoEnableRef.current = false;
+      logoVisibilityOverriddenRef.current = false;
       pendingKitchenSaves.current.clear();
       confirmedKitchenVersions.current.clear();
       failedKitchenSaveVersions.current.clear();
@@ -448,6 +466,9 @@ export default function SettingsPage() {
     }
   };
   const markHydrationTouched = (field: string) => {
+    if (field === 'billShowLogo' && pendingLogoAutoEnableRef.current) {
+      logoVisibilityOverriddenRef.current = true;
+    }
     const nextVersion = (hydrationTouchVersions.current.get(field) || 0) + 1;
     hydrationTouchVersions.current.set(field, nextVersion);
     return nextVersion;
@@ -485,9 +506,11 @@ export default function SettingsPage() {
   const [savingAllSettings, setSavingAllSettings] = useState(false);
   const [saveAllHydrationRun, setSaveAllHydrationRun] = useState(0);
   const savingAllSettingsInFlight = useRef(false);
+  const autoLockSaveGenRef = useRef(0);
 
   const themeMode = useThemeMode((s) => s.mode);
   const { layout: ordersLayout, save: saveOrdersLayout } = useOrdersLayoutPreference();
+  const { categorySort, itemSort, save: savePosSort } = usePosSortPreference();
   const setThemeMode = useThemeMode((s) => s.setMode);
   const markUserSelectedTheme = useThemeMode((s) => s.markUserSelected);
   const setStoreDarkVariant = useThemeMode((s) => s.setDarkVariant);
@@ -1020,12 +1043,14 @@ export default function SettingsPage() {
     setPinGate({ mode: 'delete-backup', payload: { fileName: backup.fileName } });
   };
 
+  const initializeLocalBackupFailedRef = useRef(false);
   const handleInitializeDatabase = async (pin: string) => {
     try {
       const { data } = await api.post('/db-tools/initialize', {
         master_pin: pin,
         confirmation_phrase: 'INITIALIZE',
       });
+      initializeLocalBackupFailedRef.current = data.localBackupFailed === true;
       return { success: true, backupPath: data.backupPath };
     } catch {
       return { success: false, error: t('initializeFailedGeneric') };
@@ -1462,7 +1487,9 @@ export default function SettingsPage() {
           return !touchedAfterStart && Object.is(previous[field], initial[field]);
         }),
       ) as Partial<PrintingForm>;
-      return { ...previous, ...applicablePatch };
+      const next = { ...previous, ...applicablePatch };
+      printingFormRef.current = next;
+      return next;
     });
   };
   const [zReportLanguagePolicyLoaded, setZReportLanguagePolicyLoaded] = useState(false);
@@ -1472,7 +1499,10 @@ export default function SettingsPage() {
     if (printingSaveInFlight.current) return;
     printingSaveInFlight.current = true;
     setSavingPrinting(true);
-    const formSnapshot = printingForm;
+    const formSnapshot = {
+      ...printingForm,
+      billShowLogo: printingFormRef.current.billShowLogo,
+    };
     try {
       const receiptPrimary: PrimaryLanguageSelection =
         formSnapshot.receiptPrimaryLanguage === 'inherit'
@@ -1514,6 +1544,9 @@ export default function SettingsPage() {
           ? { primary: zReportPrimary, additional: [zReportSecond] as const }
           : { primary: zReportPrimary, additional: [] as const };
       const printingPayload = {
+        auto_print_kot: formSnapshot.autoPrintKot,
+        printer_use_unicode: formSnapshot.printerUseUnicode,
+        printer_arabic_shaping: formSnapshot.printerArabicShaping,
         printer_trim_decimals: formSnapshot.printerTrimDecimals,
         bill_language_policy: billLanguagePolicy,
         kot_language_policy: kotLanguagePolicy,
@@ -1566,7 +1599,12 @@ export default function SettingsPage() {
       setSavingPrinting(false);
     }
   };
-  const resetPrinting = () => setPrintingForm(savedPrinting);
+  const resetPrinting = () => {
+    pendingLogoAutoEnableRef.current = false;
+    logoVisibilityOverriddenRef.current = false;
+    printingFormRef.current = savedPrinting;
+    setPrintingForm(savedPrinting);
+  };
 
   // Bill template local state; billTemplateSource preserves pack
   // qualifier if ID collides with core template names.
@@ -1765,6 +1803,8 @@ export default function SettingsPage() {
   const [savingServerAppBillPrintingEnabled, setSavingServerAppBillPrintingEnabled] =
     useState(false);
   const [kotPrintingEnabledSetting, setKotPrintingEnabledSetting] = useState(true);
+  const [scheduledOrdersEnabled, setScheduledOrdersEnabled] = useState(false);
+  const [savingScheduledOrdersEnabled, setSavingScheduledOrdersEnabled] = useState(false);
 
   const [savedOrderNumberForm, setSavedOrderNumberForm] = useState<OrderNumberForm>({
     prefix: 'ORD',
@@ -1874,6 +1914,8 @@ export default function SettingsPage() {
       };
       setSavedBusiness(loaded);
       setForm(loaded);
+      pendingLogoAutoEnableRef.current = false;
+      logoVisibilityOverriddenRef.current = false;
       setTaxIdFormat(d.tax_id_format || null);
       setTaxIdFormatCountryCode(loaded.countryCode);
       const billDisplay = {
@@ -1888,7 +1930,11 @@ export default function SettingsPage() {
         billDeliveryShowCustomerPhoneAlways: d.bill_delivery_show_customer_phone_always !== false,
         billShowTableNumber: d.bill_show_table_number !== false,
       };
-      setPrintingForm((previous) => ({ ...previous, ...billDisplay }));
+      setPrintingForm((previous) => {
+        const next = { ...previous, ...billDisplay };
+        printingFormRef.current = next;
+        return next;
+      });
       setSavedPrinting((previous) => ({ ...previous, ...billDisplay }));
       posSettings.hydrateReceiptSettings({
         ...d,
@@ -2374,12 +2420,18 @@ export default function SettingsPage() {
       billFormAtHydrationStart: BillTemplateForm,
     ) => {
       const [
+        autoPrintKotResponse,
+        useUnicodeResponse,
+        arabicShapingResponse,
         trimResponse,
         cashEnabledResponse,
         cashMethodsResponse,
         billLanguageResponse,
         kotLanguageResponse,
       ] = await Promise.all([
+        readOptional('/settings/auto_print_kot'),
+        readOptional('/settings/printer_use_unicode'),
+        readOptional('/settings/printer_arabic_shaping'),
         readOptional('/settings/printer_trim_decimals'),
         readOptional('/settings/cash_drawer_pulse_enabled'),
         readOptional('/settings/cash_drawer_pulse_methods'),
@@ -2387,6 +2439,49 @@ export default function SettingsPage() {
         readOptional('/settings/kot_language_policy'),
       ]);
       if (!active()) return;
+
+      const autoPrintKotSetting = autoPrintKotResponse?.data?.setting;
+      if (
+        autoPrintKotSetting?.updated_at != null &&
+        (autoPrintKotSetting.value === 'true' || autoPrintKotSetting.value === 'false')
+      ) {
+        const enabled = autoPrintKotSetting.value === 'true';
+        posSettings.setAutoPrintKot(enabled);
+        mergeHydratedPrinting(
+          { autoPrintKot: enabled },
+          printingAtHydrationStart,
+          hydrationTouchSnapshot,
+        );
+        setSavedPrinting((p) => ({ ...p, autoPrintKot: enabled }));
+      }
+      const useUnicodeSetting = useUnicodeResponse?.data?.setting;
+      if (
+        useUnicodeSetting?.updated_at != null &&
+        (useUnicodeSetting.value === 'true' || useUnicodeSetting.value === 'false')
+      ) {
+        const enabled = useUnicodeSetting.value === 'true';
+        posSettings.setPrinterUseUnicode(enabled);
+        mergeHydratedPrinting(
+          { printerUseUnicode: enabled },
+          printingAtHydrationStart,
+          hydrationTouchSnapshot,
+        );
+        setSavedPrinting((p) => ({ ...p, printerUseUnicode: enabled }));
+      }
+      const arabicShapingSetting = arabicShapingResponse?.data?.setting;
+      if (
+        arabicShapingSetting?.updated_at != null &&
+        (arabicShapingSetting.value === 'true' || arabicShapingSetting.value === 'false')
+      ) {
+        const enabled = arabicShapingSetting.value === 'true';
+        posSettings.setPrinterArabicShaping(enabled);
+        mergeHydratedPrinting(
+          { printerArabicShaping: enabled },
+          printingAtHydrationStart,
+          hydrationTouchSnapshot,
+        );
+        setSavedPrinting((p) => ({ ...p, printerArabicShaping: enabled }));
+      }
 
       if (trimResponse) {
         const enabled = trimResponse.data.setting?.value === 'true';
@@ -2699,6 +2794,13 @@ export default function SettingsPage() {
           ]);
         if (!kdsInfoLoaded || !settingLoaded || !kotSettingLoaded || !deliverySettingLoaded) {
           throw new Error('KDS hydration failed');
+        }
+        return;
+      }
+      if (tab === 'pos') {
+        const res = await readOptional('/settings/scheduled_orders_enabled');
+        if (active()) {
+          setScheduledOrdersEnabled(res?.data?.setting?.value === 'true');
         }
         return;
       }
@@ -3207,7 +3309,7 @@ export default function SettingsPage() {
         setGoogleDriveStatus((previous) => ({ ...previous, job }));
         if (job.state === 'succeeded' || job.state === 'retention_pending') {
           await Promise.all([fetchGoogleDriveStatus(), fetchRemoteGoogleDriveBackups()]);
-          if (job.state === 'retention_pending') toast.error(t('googleDriveRetentionPending'));
+          if (job.state === 'retention_pending') toast(t('googleDriveRetentionPending'));
           else toast.success(t('googleDriveBackupSuccess'));
           return;
         }
@@ -3528,6 +3630,23 @@ export default function SettingsPage() {
     );
   };
 
+  const saveScheduledOrdersEnabled = async (enabled: boolean) => {
+    const previous = scheduledOrdersEnabled;
+    setScheduledOrdersEnabled(enabled);
+    setSavingScheduledOrdersEnabled(true);
+    try {
+      await api.put('/settings/scheduled_orders_enabled', {
+        value: enabled ? 'true' : 'false',
+      });
+      toast.success(t('diagnosticsSettingSaved'));
+    } catch {
+      setScheduledOrdersEnabled(previous);
+      toast.error(t('saveFailed'));
+    } finally {
+      setSavingScheduledOrdersEnabled(false);
+    }
+  };
+
   const saveLoyalty = async (silent = false) => {
     setSavingLoyalty(true);
     try {
@@ -3594,6 +3713,17 @@ export default function SettingsPage() {
 
     setSavingBusiness(true);
     try {
+      const logoChanged =
+        form.receiptLogo !== savedBusiness.receiptLogo ||
+        form.receiptLogoRaster !== savedBusiness.receiptLogoRaster;
+      const enableLogoOnSave = shouldAutoEnableBillShowLogo({
+        logoChanged,
+        receiptLogo: form.receiptLogo,
+        pendingAutoEnable: pendingLogoAutoEnableRef.current,
+        visibilityOverriddenAfterUpload:
+          logoVisibilityOverriddenRef.current ||
+          printingForm.billShowLogo !== savedPrinting.billShowLogo,
+      });
       const putRes = await api.put('/settings/business', {
         business_name: form.businessName,
         timezone: form.timezone,
@@ -3610,11 +3740,11 @@ export default function SettingsPage() {
         currency_display: form.currencyDisplay,
         number_digits: form.numberDigits,
         calendar: form.calendar,
-        ...(form.receiptLogo !== savedBusiness.receiptLogo ||
-        form.receiptLogoRaster !== savedBusiness.receiptLogoRaster
+        ...(logoChanged
           ? {
               receipt_logo: form.receiptLogo ?? '',
               receipt_logo_raster: form.receiptLogoRaster ?? '',
+              ...(enableLogoOnSave ? { bill_show_logo: true } : {}),
             }
           : {}),
       });
@@ -3661,6 +3791,13 @@ export default function SettingsPage() {
       setForm(updatedForm);
       setTaxIdFormat(resolvedTaxIdFormat);
       setTaxIdFormatCountryCode(form.countryCode);
+      pendingLogoAutoEnableRef.current = false;
+      logoVisibilityOverriddenRef.current = false;
+      if (enableLogoOnSave) {
+        printingFormRef.current = { ...printingFormRef.current, billShowLogo: true };
+        setPrintingForm((prev) => ({ ...prev, billShowLogo: true }));
+        setSavedPrinting((prev) => ({ ...prev, billShowLogo: true }));
+      }
       posSettings.hydrateReceiptSettings({
         tax_registration_number: form.taxRegistrationNumber,
         business_address: form.businessAddress,
@@ -3669,6 +3806,7 @@ export default function SettingsPage() {
         tables_required: form.tablesRequired,
         receipt_logo: form.receiptLogo || '',
         receipt_logo_raster: form.receiptLogoRaster || '',
+        ...(enableLogoOnSave ? { bill_show_logo: true } : {}),
       });
       updateCurrentTenant({
         currency: form.currency,
@@ -3726,7 +3864,14 @@ export default function SettingsPage() {
         invoice_financial_year_start_month: orderNumberForm.invoiceFinancialYearStartMonth,
         invoice_financial_year_start_day: orderNumberForm.invoiceFinancialYearStartDay,
       });
-      const saved = { ...orderNumberForm, prefix, invoicePrefix };
+      const saved = {
+        ...orderNumberForm,
+        prefix,
+        invoicePrefix,
+        includeDate: orderNumberForm.includeDate || orderNumberForm.resetDaily,
+        invoiceIncludePeriod:
+          orderNumberForm.invoiceIncludePeriod || orderNumberForm.invoiceResetPeriod !== 'never',
+      };
       setOrderNumberForm(saved);
       setSavedOrderNumberForm(saved);
       if (!silent) toast.success(t('orderNumberingSaved'));
@@ -3842,7 +3987,8 @@ export default function SettingsPage() {
     discountMaxAmount !== savedDiscountMaxAmount ||
     discountMode !== savedDiscountMode ||
     discountRequiresApproval !== savedDiscountRequiresApproval ||
-    JSON.stringify(cloudSettings) !== JSON.stringify(savedCloudSettings);
+    JSON.stringify(cloudSettings) !== JSON.stringify(savedCloudSettings) ||
+    JSON.stringify(orderNumberForm) !== JSON.stringify(savedOrderNumberForm);
 
   useEffect(() => {
     if (!isDirty) return;
@@ -3972,6 +4118,20 @@ export default function SettingsPage() {
               active={activeTab}
               onClick={handleSettingsTabChange}
             />
+            {canManageQrMenu && (
+              <SettingsNavItem
+                label={t('tabQrMenu')}
+                value="qr-menu"
+                active={activeTab}
+                onClick={handleSettingsTabChange}
+              />
+            )}
+            <SettingsNavItem
+              label={t('tabCounters')}
+              value="counters"
+              active={activeTab}
+              onClick={handleSettingsTabChange}
+            />
 
             {/* Marketing group */}
             <div className="hidden md:block px-3 pt-4 pb-2 mt-3 mb-1 border-b border-border">
@@ -4089,6 +4249,10 @@ export default function SettingsPage() {
               setOrderNumberForm={setOrderNumberForm}
               markHydrationTouched={markHydrationTouched}
               onRequestCurrencyChange={setCurrencyResetTarget}
+              onLogoUploaded={() => {
+                pendingLogoAutoEnableRef.current = true;
+                logoVisibilityOverriddenRef.current = false;
+              }}
             />
           </TabsContent>
 
@@ -4225,6 +4389,65 @@ export default function SettingsPage() {
                     })}
                   </div>
                 </div>
+
+                <div className="bg-card rounded-xl border border-border p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <ArrowUpDown size={20} className="text-muted-foreground" />
+                    <h2 className="font-semibold text-foreground">{t('posSortTitle')}</h2>
+                  </div>
+                  <p className="mb-4 text-xs text-muted-foreground">{t('posSortHint')}</p>
+                  <div className="flex flex-col gap-4">
+                    <label className="flex items-center justify-between gap-4 text-sm text-foreground">
+                      {t('posCategorySortLabel')}
+                      <select
+                        value={categorySort}
+                        disabled={!isAdmin}
+                        onChange={(e) =>
+                          void savePosSort(
+                            'pos_category_sort',
+                            e.target.value as typeof categorySort,
+                          )
+                        }
+                        className="w-56 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand bg-card"
+                      >
+                        {POS_CATEGORY_SORTS.map((option) => (
+                          <option key={option} value={option}>
+                            {t(
+                              `posSort_${option}` as
+                                | 'posSort_saved'
+                                | 'posSort_name'
+                                | 'posSort_price_asc'
+                                | 'posSort_price_desc',
+                            )}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center justify-between gap-4 text-sm text-foreground">
+                      {t('posItemSortLabel')}
+                      <select
+                        value={itemSort}
+                        disabled={!isAdmin}
+                        onChange={(e) =>
+                          void savePosSort('pos_item_sort', e.target.value as typeof itemSort)
+                        }
+                        className="w-56 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand bg-card"
+                      >
+                        {POS_ITEM_SORTS.map((option) => (
+                          <option key={option} value={option}>
+                            {t(
+                              `posSort_${option}` as
+                                | 'posSort_saved'
+                                | 'posSort_name'
+                                | 'posSort_price_asc'
+                                | 'posSort_price_desc',
+                            )}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
               </SettingsTabShell>
             </TabsContent>
           )}
@@ -4301,6 +4524,57 @@ export default function SettingsPage() {
                           { id: 'pos-local' },
                         );
                       }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-4 pt-2 border-t border-border">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-foreground">{t('autoLockLabel')}</p>
+                      <p className="text-sm text-muted-foreground">{t('autoLockHint')}</p>
+                    </div>
+                    <select
+                      data-testid="setting-auto-lock-minutes"
+                      aria-label={t('autoLockLabel')}
+                      value={String(posSettings.autoLockMinutes)}
+                      disabled={!isAdmin}
+                      onChange={(e) => {
+                        const prev = posSettings.autoLockMinutes;
+                        const next = normalizeAutoLockMinutesValue(e.target.value);
+                        const saveGen = ++autoLockSaveGenRef.current;
+                        posSettings.setAutoLockMinutes(next);
+                        void api
+                          .put('/settings/auto_lock_minutes', { value: String(next) })
+                          .catch(() => {
+                            if (autoLockSaveGenRef.current === saveGen) {
+                              posSettings.setAutoLockMinutes(prev);
+                            }
+                            toast.error(t('saveFailed'));
+                          });
+                      }}
+                      className="w-40 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand bg-card"
+                    >
+                      <option value="0">{t('autoLockOff')}</option>
+                      {([1, 5, 15, 30] as const).map((mins) => (
+                        <option key={mins} value={String(mins)}>
+                          {t('autoLockMinutesOption', { count: mins })}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between pt-3 border-t border-border">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        {tPos('scheduledOrdersTitle')}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {tPos('scheduleOrderToggle')}
+                      </p>
+                    </div>
+                    <Toggle
+                      value={scheduledOrdersEnabled}
+                      onChange={(val) => void saveScheduledOrdersEnabled(val)}
+                      label={tPos('scheduledOrdersTitle')}
+                      disabled={!isAdmin || savingScheduledOrdersEnabled}
+                      dataTestId="setting-scheduled-orders-enabled"
                     />
                   </div>
                 </div>
@@ -4790,6 +5064,20 @@ export default function SettingsPage() {
           </TabsContent>
 
           {/* Kitchen Display — own tab under Operations */}
+          <TabsContent value="qr-menu">
+            <QrMenuSettingsTab
+              canConnectDrive={canManageGoogleDrive}
+              connectingDrive={connectingGoogleDrive}
+              onConnectDrive={() => {
+                void connectGoogleDrive();
+              }}
+            />
+          </TabsContent>
+
+          <TabsContent value="counters">
+            <CountersSettingsTab isOwner={isOwner} />
+          </TabsContent>
+
           <TabsContent value="kds">
             <SettingsTabShell>
               {/* Kitchen Display System enable toggle */}
@@ -5663,6 +5951,7 @@ export default function SettingsPage() {
           {/* Privacy — anonymous telemetry (from the old Integrations tab) + cloud privacy controls (from Account) */}
           <TabsContent value="privacy">
             <SettingsTabShell>
+              <OfflineModeCard canManage={tenantCan(currentTenant, 'offline-mode.manage')} />
               <div className="bg-card rounded-xl border border-border p-6 space-y-4">
                 <div className="flex items-center gap-2">
                   <Lock size={20} className="text-muted-foreground" />
@@ -6708,7 +6997,11 @@ export default function SettingsPage() {
         onConfirm={handleInitializeDatabase}
         onSuccess={() => {
           toast.success(t('dbInitializedRedirecting'));
-          setTimeout(() => window.location.replace('/setup'), 1200);
+          const localBackupFailed = initializeLocalBackupFailedRef.current;
+          if (localBackupFailed) {
+            toast.error(t('initializeLocalBackupFailed'), { duration: 6000 });
+          }
+          setTimeout(() => window.location.replace('/setup'), localBackupFailed ? 6000 : 1200);
         }}
       />
       <CurrencyResetDialog

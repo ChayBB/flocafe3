@@ -18,6 +18,14 @@ import { clearJWTSecretCache } from '../security/jwt-secret';
 import { getHttpRequestSignal } from '../shutdown';
 import { googleDrive } from '../services/google-drive';
 import { isSupportedCurrencyCode } from '../../shared/currencies';
+import {
+  LOCAL_BACKUP_RETENTION,
+  getLastLocalBackupAt,
+  getLocalBackupDir,
+  isLocalBackupEnabled,
+  retainBackupLocally,
+  setLocalBackupEnabled,
+} from '../services/local-backup';
 
 const router = Router();
 
@@ -29,6 +37,7 @@ router.get(
     try {
       res.json(runHealthCheck());
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[DB Tools] health-check error:', error);
       res.status(500).json({ error: 'Health check failed' });
     }
@@ -52,6 +61,7 @@ router.post(
       }
       res.json(applySafeFixes(findingIds as string[] | undefined));
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[DB Tools] apply-safe-fixes error:', error);
       res.status(500).json({ error: 'Applying fixes failed' });
     }
@@ -63,6 +73,7 @@ router.get('/backups', requirePermission('database.manage'), (req: Request, res:
     const pagination = parseBackupPaginationQuery(req.query.limit, req.query.cursor);
     res.json(listBackupsPage(pagination));
   } catch (error: any) {
+    res.locals.postHogError = error;
     if (error?.code === 'ERR_INVALID_BACKUP_PAGINATION') {
       return res.status(400).json({ error: error.message });
     }
@@ -81,6 +92,7 @@ router.post(
       deleteBackup(req.params.fileName as string);
       res.json({ success: true });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[DB Tools] delete backup error:', error);
       if (error?.code === 'ERR_INVALID_BACKUP_NAME') {
         return res.status(400).json({ error: 'Invalid backup file name' });
@@ -92,6 +104,43 @@ router.post(
     }
   },
 );
+
+function localBackupStatus() {
+  return {
+    enabled: isLocalBackupEnabled(),
+    directory: getLocalBackupDir(),
+    retention: LOCAL_BACKUP_RETENTION,
+    lastBackupAt: getLastLocalBackupAt(),
+  };
+}
+
+router.get(
+  '/local-backup',
+  requirePermission('database.manage'),
+  (_req: Request, res: Response) => {
+    try {
+      res.json(localBackupStatus());
+    } catch (error: unknown) {
+      res.locals.postHogError = error;
+      console.error('[DB Tools] local backup status error:', error);
+      res.status(500).json({ error: 'Could not read local backup status' });
+    }
+  },
+);
+
+router.put('/local-backup', requirePermission('database.manage'), (req: Request, res: Response) => {
+  if (typeof req.body?.enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be a boolean' });
+  }
+  try {
+    setLocalBackupEnabled(req.body.enabled);
+    res.json(localBackupStatus());
+  } catch (error: unknown) {
+    res.locals.postHogError = error;
+    console.error('[DB Tools] local backup update error:', error);
+    res.status(500).json({ error: 'Could not update local backup setting' });
+  }
+});
 
 router.get(
   '/master-pin/status',
@@ -131,6 +180,7 @@ router.post(
       resetMasterPin(cleanPin);
       res.json({ success: true });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[DB Tools] set Master PIN error:', error);
       res.status(500).json({ error: 'Failed to set Master PIN' });
     }
@@ -146,6 +196,7 @@ router.get(
     try {
       res.json(getCurrencyResetImpact());
     } catch (error: unknown) {
+      res.locals.postHogError = error;
       console.error('[DB Tools] currency reset impact error:', error);
       res.status(500).json({ error: 'Could not inspect currency reset impact' });
     }
@@ -185,11 +236,18 @@ router.post(
     try {
       await googleDrive.prepareForDatabaseRestore();
       restorePrepared = true;
+      const keepLocalBackup = isLocalBackupEnabled();
       const result = await resetDatabaseForCurrencyChange(
         currency,
         impact.currentCurrency,
         getHttpRequestSignal(req),
       );
+      let localBackupFailed = false;
+      if (keepLocalBackup) {
+        localBackupFailed = retainBackupLocally(result.backupPath) === null;
+      } else {
+        setLocalBackupEnabled(false);
+      }
       const cleanup = googleDrive.completeDatabaseRestore();
       clearUserAuthCache();
       clearInMemoryRevokedTokens();
@@ -199,8 +257,10 @@ router.post(
         currency,
         backupPath: result.backupPath,
         cleanupPending: result.cleanupPending || cleanup.cleanupPending,
+        localBackupFailed,
       });
     } catch (error: unknown) {
+      res.locals.postHogError = error;
       if (
         typeof error === 'object' &&
         error !== null &&
@@ -233,13 +293,26 @@ router.post(
       // never resolve on its own; the reset invalidates Drive state either way.
       await googleDrive.prepareForDatabaseRestore({ discardUnresolvedBoundary: true });
       restorePrepared = true;
+      const keepLocalBackup = isLocalBackupEnabled();
       const { backupPath } = await resetDatabaseWithBackup(getHttpRequestSignal(req));
+      let localBackupFailed = false;
+      if (keepLocalBackup) {
+        localBackupFailed = retainBackupLocally(backupPath) === null;
+      } else {
+        setLocalBackupEnabled(false);
+      }
       const cleanup = googleDrive.completeDatabaseRestore();
       clearUserAuthCache();
       clearInMemoryRevokedTokens();
       clearJWTSecretCache();
-      res.json({ success: true, backupPath, cleanupPending: cleanup.cleanupPending });
+      res.json({
+        success: true,
+        backupPath,
+        cleanupPending: cleanup.cleanupPending,
+        localBackupFailed,
+      });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[DB Tools] initialize error:', error);
       res.status(500).json({ error: 'Initialize failed' });
     } finally {

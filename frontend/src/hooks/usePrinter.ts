@@ -41,10 +41,22 @@ import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import type { Bill, Tenant, Order, OrderItem } from '@/lib/types';
 import { type Language } from '@/lib/i18n/languages';
-import type { ThermalPrinterCapabilities } from '@print/thermal-capabilities';
-import { rasterWebUsbPathEnabled } from '@print/raster';
+import {
+  GENERIC_THERMAL_CAPABILITIES,
+  type ThermalPrinterCapabilities,
+} from '@print/thermal-capabilities';
+import { DEFAULT_RASTER_MAX_BAND_HEIGHT, rasterWebUsbPathEnabled } from '@print/raster';
+import {
+  layoutColumnsForTextSize,
+  normalizePrinterTextSize,
+  type PrinterTextSize,
+} from '@print/text-size';
 import { columnsForConfiguredPrinter } from '@print/width';
-import { ensureReceiptSettingsLoaded } from '@/hooks/useReceiptSettingsSync';
+import {
+  ensureReceiptSettingsLoaded,
+  PrintCancelledOnTenantChangeError,
+  isPrintCancelledOnTenantChangeError,
+} from '@/hooks/useReceiptSettingsSync';
 import { getCountryByCode, getCurrencySymbol, resolveTenantCurrency } from '@/lib/countries';
 import { formatPhoneLocal } from '@/lib/phone';
 
@@ -63,6 +75,8 @@ async function loadBillPaymentQr(total: number): Promise<PaymentQrImage | undefi
   };
 }
 
+export { PrintCancelledOnTenantChangeError, isPrintCancelledOnTenantChangeError };
+
 type CoreBillTemplate = 'classic' | 'compact';
 
 function nativeFallbackCapabilities(
@@ -71,6 +85,60 @@ function nativeFallbackCapabilities(
   return capabilities?.raster.enabled === true
     ? { ...capabilities, raster: { ...capabilities.raster, enabled: false } }
     : capabilities;
+}
+
+export function defaultWebUsbCapabilities(
+  paperWidth: PaperWidth,
+  configuredPaperWidth?: string | null,
+  configuredTextSize?: unknown,
+): ThermalPrinterCapabilities {
+  const cols = columnsForConfiguredPrinter(configuredPaperWidth, paperWidth);
+  const widthDots = cols <= 32 ? 384 : cols <= 36 ? 432 : cols <= 40 ? 480 : 576;
+  const textSize = normalizePrinterTextSize(configuredTextSize);
+  return {
+    ...GENERIC_THERMAL_CAPABILITIES,
+    textSize,
+    raster: {
+      enabled: true,
+      widthDots,
+      maxBandHeight: DEFAULT_RASTER_MAX_BAND_HEIGHT,
+      modes: ['mixed', 'whole-receipt'],
+    },
+  };
+}
+
+export function resolveWebUsbCapabilities(
+  webusbPrinter: HardwarePrinter | null,
+  paperWidth: PaperWidth,
+  fallbackTextSize?: unknown,
+): ThermalPrinterCapabilities {
+  const textSize = normalizePrinterTextSize(
+    webusbPrinter?.text_size ?? webusbPrinter?.capabilities?.textSize ?? fallbackTextSize,
+  );
+  if (webusbPrinter?.capabilities) {
+    return {
+      ...webusbPrinter.capabilities,
+      textSize,
+    };
+  }
+  return defaultWebUsbCapabilities(paperWidth, webusbPrinter?.paper_width, textSize);
+}
+
+export function resolveActivePrinterTextSize(
+  state: Pick<PrinterState, 'defaultPrinter' | 'hardwarePrinter' | 'webusbPrinter'> &
+    Partial<Pick<PrinterState, 'status' | 'deviceInfo' | 'printMethod'>>,
+  override?: unknown,
+): PrinterTextSize {
+  if (override !== undefined) return normalizePrinterTextSize(override);
+  const webusbConnected =
+    state.status === 'connected' || Boolean(state.deviceInfo) || printerService.isConnected;
+  const printer =
+    webusbConnected && state.webusbPrinter
+      ? state.webusbPrinter
+      : state.printMethod === 'escpos' && state.hardwarePrinter
+        ? state.hardwarePrinter
+        : (state.webusbPrinter ?? state.defaultPrinter ?? state.hardwarePrinter);
+  return normalizePrinterTextSize(printer?.text_size ?? printer?.capabilities?.textSize);
 }
 
 function makeRasterFallbackWarning(detail: unknown): PrintWarning {
@@ -132,6 +200,7 @@ export interface HardwarePrinter {
   ip_address?: string | null;
   port?: number | null;
   paper_width?: string | null;
+  text_size?: PrinterTextSize | null;
   is_default: number;
   readiness_state?: 'configured';
   profile_id?: string;
@@ -202,7 +271,13 @@ export const usePrinterStore = create<PrinterState>()(
             list.find((p) => p.connection_type !== 'webusb') ||
             null;
           const webusbPrinters = list.filter((p) => p.connection_type === 'webusb');
-          const webusbPrinter = webusbPrinters.length === 1 ? webusbPrinters[0] : null;
+          const connectedProductName = printerService.deviceInfo?.productName?.trim().toLowerCase();
+          const webusbPrinter =
+            (connectedProductName
+              ? webusbPrinters.find((p) => p.name.trim().toLowerCase() === connectedProductName)
+              : undefined) ||
+            webusbPrinters.find((p) => p.is_default === 1) ||
+            (webusbPrinters.length === 1 ? webusbPrinters[0] : null);
           const configuredDefault = list.find((p) => p.is_default === 1) || null;
           set({
             hardwarePrinter: defaultPrinter,
@@ -230,8 +305,25 @@ export const usePrinterStore = create<PrinterState>()(
       printBill: async (bill, tenant, opts, reservedWindow) => {
         set({ lastError: null });
         let windowTransferred = false;
+        const authTenantIdAtStart = useAuthStore.getState().currentTenant?.id ?? null;
+        const isSameTenant = () =>
+          (useAuthStore.getState().currentTenant?.id ?? null) === authTenantIdAtStart;
+        const throwIfTenantChanged = (): void => {
+          if (isSameTenant()) return;
+          if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+          windowTransferred = true;
+          throw new PrintCancelledOnTenantChangeError();
+        };
         try {
-          await ensureReceiptSettingsLoaded().catch(() => {});
+          const readyForTenant = await ensureReceiptSettingsLoaded(authTenantIdAtStart).catch(() =>
+            isSameTenant(),
+          );
+          if (!readyForTenant) {
+            if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+            windowTransferred = true;
+            throw new PrintCancelledOnTenantChangeError();
+          }
+          throwIfTenantChanged();
           const {
             billTemplate,
             billTemplateSource,
@@ -265,6 +357,7 @@ export const usePrinterStore = create<PrinterState>()(
             (get().webusbPrinter ?? get().hardwarePrinter)?.paper_width,
             configuredPaperWidth,
           );
+          const activeTextSize = resolveActivePrinterTextSize(get(), opts?.capabilities?.textSize);
 
           const isReprint = opts?.isReprint ?? false;
           const isUnknownCoreTemplate =
@@ -281,12 +374,14 @@ export const usePrinterStore = create<PrinterState>()(
 
           const executeBrowserPrint = async (): Promise<PrintWarning[]> => {
             const { printWebBill } = await import('@/lib/printer/web-print');
+            throwIfTenantChanged();
             windowTransferred = true;
             const browserWarnings = await printWebBill(
               bill,
               tenant,
               {
                 paperSize: printerPaperSize,
+                textSize: activeTextSize,
                 columns: billColumns,
                 languages: opts?.languages ?? resolveBillPrintLanguages(),
                 includeTaxId: billShowTaxId,
@@ -359,6 +454,7 @@ export const usePrinterStore = create<PrinterState>()(
           // Await startup silent reconnect before checking isConnected
           // to avoid premature browser print fallbacks.
           await printerService.awaitPendingReconnect();
+          throwIfTenantChanged();
 
           if (
             get().printMethod === 'browser' ||
@@ -376,6 +472,7 @@ export const usePrinterStore = create<PrinterState>()(
           // ESC/POS thermal path: load requested language bundles before resolving labels.
           const languages = opts?.languages ?? resolveBillPrintLanguages();
           const failedLanguages = await ensurePrintLanguagesLoaded(languages);
+          throwIfTenantChanged();
           // Surface failed locale loads as warnings when labels fall back to English.
           const warnings: PrintWarning[] = failedLanguages.map((language) => ({
             field: 'receipt language',
@@ -384,6 +481,21 @@ export const usePrinterStore = create<PrinterState>()(
             kind: 'locale' as const,
           }));
           if (billTemplateWarning) warnings.push(billTemplateWarning);
+          const webusbPrinter = get().webusbPrinter;
+          const webusbCapabilities =
+            opts?.capabilities ??
+            resolveWebUsbCapabilities(
+              webusbPrinter,
+              opts?.paperWidth ?? configuredPaperWidth,
+              activeTextSize,
+            );
+          const rasterizePrintDocument = window.electronAPI?.rasterizePrintDocument;
+          const useElectronRaster = Boolean(
+            rasterBillTemplate &&
+            webusbPrinter &&
+            rasterizePrintDocument &&
+            rasterWebUsbPathEnabled(webusbPrinter.capabilities, true, webusbPrinter.profile_id),
+          );
           const builderOpts: ReceiptOptions = {
             ...opts,
             paperWidth: opts?.paperWidth ?? configuredPaperWidth,
@@ -408,7 +520,9 @@ export const usePrinterStore = create<PrinterState>()(
             isReprint,
             trimDecimals: printerTrimDecimals,
             languages,
-            capabilities: nativeFallbackCapabilities(get().webusbPrinter?.capabilities),
+            capabilities: useElectronRaster
+              ? nativeFallbackCapabilities(webusbCapabilities)
+              : webusbCapabilities,
           };
 
           let bytes: Uint8Array;
@@ -425,21 +539,16 @@ export const usePrinterStore = create<PrinterState>()(
             bytes = buildClassicReceiptBytes(bill, tenant, builderOpts, encoderWarnings);
           }
 
-          const webusbPrinter = get().webusbPrinter;
-          const webusbCapabilities = webusbPrinter?.capabilities;
-          const rasterizePrintDocument = window.electronAPI?.rasterizePrintDocument;
-          if (
-            rasterBillTemplate &&
-            webusbPrinter &&
-            rasterizePrintDocument &&
-            rasterWebUsbPathEnabled(webusbCapabilities, true, webusbPrinter.profile_id)
-          ) {
+          if (useElectronRaster && rasterBillTemplate && webusbPrinter && rasterizePrintDocument) {
             try {
               const currency = resolveTenantCurrency(tenant.currency, tenant.country);
+              const rasterTextSize = normalizePrinterTextSize(
+                webusbCapabilities.textSize ?? activeTextSize,
+              );
               const rasterResult = await rasterizePrintDocument({
                 document: buildFrontendBillDocument(bill, tenant, {
                   ...builderOpts,
-                  columns: billColumns,
+                  columns: layoutColumnsForTextSize(billColumns, rasterTextSize),
                   businessName: tenant.business_name,
                   includeTaxId: billShowTaxId,
                   taxIdLabel: getCountryByCode(tenant.country)?.taxIdLabel ?? 'Tax ID',
@@ -460,6 +569,7 @@ export const usePrinterStore = create<PrinterState>()(
                   trimDecimals: printerTrimDecimals,
                   useUnicode: printerUseUnicode,
                   arabicShaping: printerArabicShaping,
+                  textSize: rasterTextSize,
                   ...(tenant.timezone ? { timezone: tenant.timezone } : {}),
                 },
               });
@@ -495,6 +605,7 @@ export const usePrinterStore = create<PrinterState>()(
             const refusal = makeFinancialPrintRefusalMessage(warnings);
             throw new Error(refusal);
           }
+          throwIfTenantChanged();
 
           set({ lastPrintedBytes: bytes });
           await printerService.print(bytes);
@@ -502,15 +613,31 @@ export const usePrinterStore = create<PrinterState>()(
         } catch (err) {
           if (!windowTransferred && reservedWindow && !reservedWindow.closed)
             reservedWindow.close();
-          set({ lastError: (err as Error).message });
+          if (!isPrintCancelledOnTenantChangeError(err)) {
+            set({ lastError: (err as Error).message });
+          }
           throw err;
         }
       },
 
       printTaxBill: async (bill, tenant, opts) => {
         set({ lastError: null });
+        const authTenantIdAtStart = useAuthStore.getState().currentTenant?.id ?? null;
+        const isSameTenant = () =>
+          (useAuthStore.getState().currentTenant?.id ?? null) === authTenantIdAtStart;
+        const throwIfTenantChanged = (): void => {
+          if (!isSameTenant()) {
+            throw new PrintCancelledOnTenantChangeError();
+          }
+        };
         try {
-          await ensureReceiptSettingsLoaded().catch(() => {});
+          const readyForTenant = await ensureReceiptSettingsLoaded(authTenantIdAtStart).catch(() =>
+            isSameTenant(),
+          );
+          if (!readyForTenant) {
+            throw new PrintCancelledOnTenantChangeError();
+          }
+          throwIfTenantChanged();
           const {
             printerUseUnicode,
             printerArabicShaping,
@@ -538,6 +665,7 @@ export const usePrinterStore = create<PrinterState>()(
             get().webusbPrinter?.paper_width,
             configuredPaperWidth,
           );
+          const activeTextSize = resolveActivePrinterTextSize(get(), opts?.capabilities?.textSize);
           const languages = opts?.language
             ? ([opts.language as Language] as const)
             : resolveBillPrintLanguages();
@@ -545,6 +673,7 @@ export const usePrinterStore = create<PrinterState>()(
           // Fall back to browser print when no WebUSB thermal transport is connected.
           // Await any in-flight startup reconnect before checking connection status.
           await printerService.awaitPendingReconnect();
+          throwIfTenantChanged();
           const noThermalTransport = !printerService.isConnected && get().printMethod === 'escpos';
           if (get().printMethod === 'browser' || noThermalTransport) {
             if (noThermalTransport) {
@@ -552,8 +681,10 @@ export const usePrinterStore = create<PrinterState>()(
             }
             // Render HTML directly for browser printing to preserve Unicode glyphs.
             const { printWebBill } = await import('@/lib/printer/web-print');
+            throwIfTenantChanged();
             const browserWarnings = await printWebBill(bill, tenant, {
               paperSize: printerPaperSize,
+              textSize: activeTextSize,
               columns: taxBillColumns,
               languages,
               includeTaxId: billShowTaxId,
@@ -583,6 +714,7 @@ export const usePrinterStore = create<PrinterState>()(
           }
 
           const failedLanguages = await ensurePrintLanguagesLoaded(languages);
+          throwIfTenantChanged();
           const warnings: PrintWarning[] = failedLanguages.map((language) => ({
             field: 'receipt language',
             text: language,
@@ -614,7 +746,13 @@ export const usePrinterStore = create<PrinterState>()(
               trimDecimals: printerTrimDecimals,
               rawEscPos: true,
               language: languages[0],
-              capabilities: nativeFallbackCapabilities(get().webusbPrinter?.capabilities),
+              capabilities:
+                opts?.capabilities ??
+                resolveWebUsbCapabilities(
+                  get().webusbPrinter,
+                  opts?.paperWidth ?? configuredPaperWidth,
+                  activeTextSize,
+                ),
             },
             warnings,
           );
@@ -627,7 +765,9 @@ export const usePrinterStore = create<PrinterState>()(
           await printerService.print(bytes);
           return warnings;
         } catch (err) {
-          set({ lastError: (err as Error).message });
+          if (!isPrintCancelledOnTenantChangeError(err)) {
+            set({ lastError: (err as Error).message });
+          }
           throw err;
         }
       },
@@ -666,7 +806,7 @@ export const usePrinterStore = create<PrinterState>()(
                 '/printers/print-kot',
                 {
                   orderId: order.id,
-                  items: opts?.items,
+                  items: opts?.items ?? order.items,
                   stationName: opts?.stationName,
                   useUnicode: printerUseUnicode,
                   arabicShaping: printerArabicShaping,
@@ -697,6 +837,7 @@ export const usePrinterStore = create<PrinterState>()(
               console.warn('[Printer] Could not load the KOT table name:', error);
             }
           }
+          const activeTextSize = resolveActivePrinterTextSize(get(), opts?.capabilities?.textSize);
           const { resolveKotTicketLanguage } = await import('@/lib/printer/kot-web-print');
           const kotLanguage = resolveKotTicketLanguage();
           const failedLanguages = await ensurePrintLanguagesLoaded([kotLanguage]);
@@ -711,12 +852,14 @@ export const usePrinterStore = create<PrinterState>()(
             const webusbPrinter = get().webusbPrinter;
             const stationName = webusbPrinter?.name?.trim() || opts?.stationName || 'Kitchen';
             const kotColumns = columnsForConfiguredPrinter(webusbPrinter?.paper_width, paperWidth);
-            const webusbCapabilities = webusbPrinter?.capabilities;
+            const webusbCapabilities =
+              opts?.capabilities ??
+              resolveWebUsbCapabilities(webusbPrinter, paperWidth, activeTextSize);
             const rasterizeKotDocument = window.electronAPI?.rasterizeKotDocument;
             const useRaster = Boolean(
               webusbPrinter &&
               rasterizeKotDocument &&
-              rasterWebUsbPathEnabled(webusbCapabilities, true, webusbPrinter.profile_id),
+              rasterWebUsbPathEnabled(webusbPrinter.capabilities, true, webusbPrinter.profile_id),
             );
             let rasterOrder = orderForPrint;
             let rasterHydrationError: unknown = null;
@@ -740,7 +883,9 @@ export const usePrinterStore = create<PrinterState>()(
                 arabicShaping: printerArabicShaping,
                 language: kotLanguage,
                 timezone: tenantTimezone ?? opts?.timezone,
-                capabilities: nativeFallbackCapabilities(get().webusbPrinter?.capabilities),
+                capabilities: useRaster
+                  ? nativeFallbackCapabilities(webusbCapabilities)
+                  : webusbCapabilities,
               },
               encoderWarnings,
             );
@@ -750,11 +895,14 @@ export const usePrinterStore = create<PrinterState>()(
               warnings.push(...encoderWarnings);
             } else if (useRaster && rasterizeKotDocument && webusbPrinter) {
               try {
+                const rasterKotTextSize = normalizePrinterTextSize(
+                  webusbCapabilities.textSize ?? activeTextSize,
+                );
                 const rasterResult = await rasterizeKotDocument({
                   document: buildFrontendKotDocument(rasterOrder, {
                     items: rasterOrder.items,
                     stationName,
-                    columns: kotColumns,
+                    columns: layoutColumnsForTextSize(kotColumns, rasterKotTextSize),
                     language: kotLanguage,
                     ...((tenantTimezone ?? opts?.timezone)
                       ? { timezone: tenantTimezone ?? opts?.timezone }
@@ -770,6 +918,7 @@ export const usePrinterStore = create<PrinterState>()(
                       : {}),
                     useUnicode: printerUseUnicode,
                     arabicShaping: printerArabicShaping,
+                    textSize: rasterKotTextSize,
                   },
                 });
                 if (!rasterResult.ok || !rasterResult.data) {
@@ -823,6 +972,7 @@ export const usePrinterStore = create<PrinterState>()(
           const { generateKotHtml } = await import('@/lib/printer/kot-web-print');
           const html = generateKotHtml(orderForPrint, {
             paperWidth,
+            textSize: activeTextSize,
             language: kotLanguage,
             stationName:
               get().defaultPrinter?.name?.trim() ||
@@ -934,6 +1084,7 @@ export const usePrinterStore = create<PrinterState>()(
             throw new Error('Please allow popups to print');
           }
           const { paperWidth } = get();
+          const activeTextSize = resolveActivePrinterTextSize(get(), opts?.capabilities?.textSize);
           const paymentResponse = await api.get<{ payment?: DeliverySlipPayment }>(
             `/printers/delivery-slip-payment/${order.id}`,
           );
@@ -955,6 +1106,9 @@ export const usePrinterStore = create<PrinterState>()(
                 columns,
                 arabicShaping: printerArabicShaping,
                 language: slipLanguages[0] as Language,
+                capabilities:
+                  opts?.capabilities ??
+                  resolveWebUsbCapabilities(get().webusbPrinter, paperWidth, activeTextSize),
                 ...(slipPayment ? { payment: slipPayment } : {}),
                 ...(tenantTimezone ? { timezone: tenantTimezone } : {}),
               },
@@ -983,6 +1137,7 @@ export const usePrinterStore = create<PrinterState>()(
             await import('@/lib/printer/delivery-slip-web-print');
           const html = generateDeliverySlipHtml(slipOrder, slipItems, slipContact, {
             paperWidth,
+            textSize: activeTextSize,
             language: resolveBillPrintLanguages()[0] as Language,
             ...(slipPayment ? { payment: slipPayment } : {}),
             ...(tenantTimezone ? { timezone: tenantTimezone } : {}),

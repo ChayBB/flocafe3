@@ -6,7 +6,8 @@
  * resolves and prices the variant from the database; only the id is sent.
  */
 
-import type { CartItem } from '@/lib/types';
+import type { CartItem } from './types';
+import { normalizeOverridePrice } from './cart-price';
 
 export interface OrderItemAddonPayload {
   id: string;
@@ -21,13 +22,14 @@ export interface OrderItemPayload {
   quantity: number;
   addons: OrderItemAddonPayload[] | null;
   special_instructions: string | null;
+  price_override?: { price: number; reason: string };
 }
 
 /** The cart-item fields a payload is built from; callers holding a staged or
  * draft line pass the same shape without a cart identity. */
 export type OrderItemSource = Pick<
   CartItem,
-  'product' | 'quantity' | 'addons' | 'special_instructions' | 'variant'
+  'product' | 'quantity' | 'addons' | 'special_instructions' | 'variant' | 'price_override'
 >;
 
 export function cartItemToOrderItem(item: OrderItemSource): OrderItemPayload {
@@ -35,14 +37,23 @@ export function cartItemToOrderItem(item: OrderItemSource): OrderItemPayload {
     product_id: item.product.id,
     variant_id: item.variant?.id ?? null,
     quantity: item.quantity,
-    addons: item.addons.length > 0
-      ? item.addons.map((addon) => ({
-        id: addon.id,
-        name: addon.name,
-        price: addon.price,
-        quantity: addon.quantity || 1,
-      }))
-      : null,
+    addons:
+      item.addons.length > 0
+        ? item.addons.map((addon) => ({
+            id: addon.id,
+            name: addon.name,
+            price: addon.price,
+            quantity: addon.quantity || 1,
+          }))
+        : null,
     special_instructions: item.special_instructions || null,
+    ...(item.price_override
+      ? {
+          price_override: {
+            price: normalizeOverridePrice(item.price_override.price),
+            reason: item.price_override.reason,
+          },
+        }
+      : {}),
   };
 }

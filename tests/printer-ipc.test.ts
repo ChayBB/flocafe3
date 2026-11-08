@@ -21,12 +21,16 @@ class RecordingWindow {
   options: any;
   destroyed = false;
   loadedUrl: string | null = null;
+  loadedHtml: string | null = null;
   pdfOptions: any = null;
   webContents: any;
 
   constructor(options: any = {}) {
     this.options = options;
     this.webContents = {
+      session: { webRequest: { onBeforeRequest: () => {} } },
+      setWindowOpenHandler: () => {},
+      on: () => {},
       printToPDF: async (printOptions: any) => {
         this.pdfOptions = printOptions;
         if (printToPdfFailure) throw printToPdfFailure;
@@ -36,10 +40,22 @@ class RecordingWindow {
     pdfWindows.push(this);
   }
 
-  async loadURL(url: string): Promise<void> { this.loadedUrl = url; }
-  isDestroyed(): boolean { return this.destroyed; }
-  destroy(): void { this.destroyed = true; }
-  static fromWebContents(): null { return null; }
+  async loadURL(url: string): Promise<void> {
+    this.loadedUrl = url;
+  }
+  async loadFile(filePath: string): Promise<void> {
+    this.loadedUrl = filePath;
+    this.loadedHtml = fs.readFileSync(filePath, 'utf8');
+  }
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  destroy(): void {
+    this.destroyed = true;
+  }
+  static fromWebContents(sender: any): any {
+    return sender?.ownerWindow ?? null;
+  }
 }
 
 Module._load = function (request: string, parent: unknown, isMain: boolean) {
@@ -96,11 +112,20 @@ const { initDatabase, closeDatabase } = require('../main/db');
 const { registerIpcHandlers } = require('../main/ipc');
 
 async function run(): Promise<void> {
-  const trustedSender = { sender: { getURL: () => 'http://localhost:3001/' } };
+  const mainFrame = { frameToken: 'frame-main', detached: false };
+  const mainWin = { isDestroyed: () => false };
+  const trustedSender = {
+    sender: {
+      ownerWindow: mainWin,
+      mainFrame,
+      getURL: () => 'http://localhost:3001/',
+    },
+    senderFrame: mainFrame,
+  };
 
   try {
     initDatabase();
-    registerIpcHandlers();
+    registerIpcHandlers(undefined, () => mainWin as any);
 
     const getPrinters = registered.get('get-printers');
     assert.ok(getPrinters, 'get-printers IPC handler is registered');
@@ -114,36 +139,123 @@ async function run(): Promise<void> {
       'save-printer IPC handler is no longer registered',
     );
 
-    const printDocument = buildBillDocument({
-      isReprint: false,
-      order: { orderNumber: '', createdAt: '', tableName: '', onlinePlatform: '', externalOrderId: '', deliveryAddress: '', items: [] },
-      bill: { billNumber: '', subtotal: 0, discountAmount: 0, taxAmount: 0, total: 0, taxComponents: [], payments: [], pointsEarned: 0, pointsRedeemed: 0, pointsBalance: null },
-      business: { name: '', address: '', phone: '', taxRegistrationNumber: '', taxIdLabel: '', instagramHandle: '', footerNote: '', customerName: '', customerPhone: '', showName: true, showAddress: false, showPhone: false, showTaxId: 'never', showTaxBreakdown: false, showTableNumber: false, showCustomerName: false, showCustomerPhone: false },
-    }, { columns: 42, languages: ['en'], baseDirection: 'ltr', locale: 'en-US', currency: 'USD', currencySymbol: '$', trimDecimals: false, resolveLabel: (conceptId: string) => conceptId });
-    const kotDocument = buildKotDocument({
-      stationName: 'Kitchen',
-      order: { orderNumber: 'K-1', createdAt: '', tableName: '', orderType: '' },
-      items: [],
-    }, { columns: 42, languages: ['en'], baseDirection: 'ltr', locale: 'en-US', currency: '', currencySymbol: '', trimDecimals: false, resolveLabel: (conceptId: string) => conceptId });
+    const printDocument = buildBillDocument(
+      {
+        isReprint: false,
+        order: {
+          orderNumber: '',
+          createdAt: '',
+          tableName: '',
+          onlinePlatform: '',
+          externalOrderId: '',
+          deliveryAddress: '',
+          items: [],
+        },
+        bill: {
+          billNumber: '',
+          subtotal: 0,
+          discountAmount: 0,
+          taxAmount: 0,
+          total: 0,
+          taxComponents: [],
+          payments: [],
+          pointsEarned: 0,
+          pointsRedeemed: 0,
+          pointsBalance: null,
+        },
+        business: {
+          name: '',
+          address: '',
+          phone: '',
+          taxRegistrationNumber: '',
+          taxIdLabel: '',
+          instagramHandle: '',
+          footerNote: '',
+          customerName: '',
+          customerPhone: '',
+          showName: true,
+          showAddress: false,
+          showPhone: false,
+          showTaxId: 'never',
+          showTaxBreakdown: false,
+          showTableNumber: false,
+          showCustomerName: false,
+          showCustomerPhone: false,
+        },
+      },
+      {
+        columns: 42,
+        languages: ['en'],
+        baseDirection: 'ltr',
+        locale: 'en-US',
+        currency: 'USD',
+        currencySymbol: '$',
+        trimDecimals: false,
+        resolveLabel: (conceptId: string) => conceptId,
+      },
+    );
+    const kotDocument = buildKotDocument(
+      {
+        stationName: 'Kitchen',
+        order: { orderNumber: 'K-1', createdAt: '', tableName: '', orderType: '' },
+        items: [],
+      },
+      {
+        columns: 42,
+        languages: ['en'],
+        baseDirection: 'ltr',
+        locale: 'en-US',
+        currency: '',
+        currencySymbol: '',
+        trimDecimals: false,
+        resolveLabel: (conceptId: string) => conceptId,
+      },
+    );
     const rasterPrint = registered.get('rasterize-print-document');
     const rasterKot = registered.get('rasterize-kot-document');
-    assert.deepEqual(await rasterPrint!(trustedSender, {
-      document: printDocument,
-      template: 'classic',
-      profileId: 'profile',
-      options: { columns: 100000000, language: 'en', locale: 'en-US', currency: 'INR', currencySymbol: '₹', trimDecimals: false, useUnicode: false, arabicShaping: false },
-    }), { ok: false, error: 'Invalid raster document options' }, 'print raster IPC rejects oversized column counts');
-    assert.deepEqual(await rasterKot!(trustedSender, {
-      document: kotDocument,
-      profileId: 'profile',
-      options: { columns: 100000000, language: 'en', locale: 'en-US', useUnicode: false, arabicShaping: false },
-    }), { ok: false, error: 'Invalid raster KOT options' }, 'KOT raster IPC rejects oversized column counts');
+    assert.deepEqual(
+      await rasterPrint!(trustedSender, {
+        document: printDocument,
+        template: 'classic',
+        profileId: 'profile',
+        options: {
+          columns: 100000000,
+          language: 'en',
+          locale: 'en-US',
+          currency: 'INR',
+          currencySymbol: '₹',
+          trimDecimals: false,
+          useUnicode: false,
+          arabicShaping: false,
+        },
+      }),
+      { ok: false, error: 'Invalid raster document options' },
+      'print raster IPC rejects oversized column counts',
+    );
+    assert.deepEqual(
+      await rasterKot!(trustedSender, {
+        document: kotDocument,
+        profileId: 'profile',
+        options: {
+          columns: 100000000,
+          language: 'en',
+          locale: 'en-US',
+          useUnicode: false,
+          arabicShaping: false,
+        },
+      }),
+      { ok: false, error: 'Invalid raster KOT options' },
+      'KOT raster IPC rejects oversized column counts',
+    );
     // Saves the renderer-built menu as a PDF without a printer attached.
     const saveHtmlAsPdf = registered.get('save-html-as-pdf');
     assert.ok(saveHtmlAsPdf, 'save-html-as-pdf IPC handler is registered');
 
     assert.deepEqual(
-      await saveHtmlAsPdf!({ sender: { getURL: () => 'https://example.com/' } }, { html: '<html></html>' }),
+      await saveHtmlAsPdf!(
+        { sender: { getURL: () => 'https://example.com/' } },
+        { html: '<html></html>' },
+      ),
       { error: 'Unauthorized sender' },
       'PDF export refuses a sender that is not the local POS renderer',
     );
@@ -157,7 +269,7 @@ async function run(): Promise<void> {
     }
 
     assert.deepEqual(
-      await saveHtmlAsPdf!(trustedSender, { html: `<p>${'x'.repeat(2_000_001)}</p>` }),
+      await saveHtmlAsPdf!(trustedSender, { html: `<p>${'x'.repeat(15 * 1024 * 1024)}</p>` }),
       { success: false, error: 'Document too large to export' },
       'PDF export refuses a document over the size cap',
     );
@@ -173,31 +285,90 @@ async function run(): Promise<void> {
     const pdfPath = path.join(testDir, 'menu.pdf');
     saveDialogResult = { canceled: false, filePath: pdfPath };
     assert.deepEqual(
-      await saveHtmlAsPdf!(trustedSender, { html: '<html><body>Menu</body></html>', defaultFileName: 'menu', pageSize: 'Letter' }),
+      await saveHtmlAsPdf!(trustedSender, {
+        html: '<html><body>Menu</body></html>',
+        defaultFileName: 'menu',
+        pageSize: 'Letter',
+      }),
       { success: true, path: pdfPath },
       'an accepted save reports the written path',
     );
-    assert.equal(fs.readFileSync(pdfPath, 'utf8'), '%PDF-1.4 recorded', 'the rendered PDF bytes land in the chosen file');
+    assert.equal(
+      fs.readFileSync(pdfPath, 'utf8'),
+      '%PDF-1.4 recorded',
+      'the rendered PDF bytes land in the chosen file',
+    );
     assert.equal(pdfWindows.length, 1, 'exactly one offscreen window renders the document');
     const pdfWindow = pdfWindows[0];
     assert.equal(pdfWindow.options.show, false, 'the PDF window is never shown');
     assert.deepEqual(
       pdfWindow.options.webPreferences,
-      { contextIsolation: true, nodeIntegration: false, sandbox: true, javascript: false },
+      {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        javascript: false,
+        partition: pdfWindow.options.webPreferences.partition,
+      },
       'the PDF window is isolated and runs no scripts',
     );
-    assert.ok(String(pdfWindow.loadedUrl).startsWith('data:text/html'), 'the document is loaded as inline HTML rather than a file path');
-    assert.deepEqual(pdfWindow.pdfOptions, { printBackground: true, pageSize: 'Letter' }, 'the requested page size reaches the print call');
+    assert.equal(
+      pdfWindow.loadedHtml,
+      '<html><body>Menu</body></html>',
+      'the secure temporary HTML file contains the requested document',
+    );
+    assert.ok(
+      String(pdfWindow.loadedUrl).endsWith('.html'),
+      'the document is loaded from a temporary HTML file',
+    );
+    assert.equal(
+      fs.existsSync(pdfWindow.loadedUrl),
+      false,
+      'the temporary HTML file is removed after rendering',
+    );
+    assert.deepEqual(
+      pdfWindow.pdfOptions,
+      { printBackground: true, pageSize: 'Letter', preferCSSPageSize: true },
+      'the requested page size reaches the print call',
+    );
     assert.equal(pdfWindow.destroyed, true, 'the offscreen window is destroyed after export');
-    assert.deepEqual(lastSaveDialogOptions.filters, [{ name: 'PDF', extensions: ['pdf'] }], 'the save dialog offers PDF files');
-    assert.equal(path.basename(lastSaveDialogOptions.defaultPath), 'menu.pdf', 'a suggested name without an extension gets one');
-    assert.equal(path.dirname(lastSaveDialogOptions.defaultPath), testDir, 'the save dialog opens in the documents folder');
+    assert.deepEqual(
+      lastSaveDialogOptions.filters,
+      [{ name: 'PDF', extensions: ['pdf'] }],
+      'the save dialog offers PDF files',
+    );
+    assert.equal(
+      path.basename(lastSaveDialogOptions.defaultPath),
+      'menu.pdf',
+      'a suggested name without an extension gets one',
+    );
+    assert.equal(
+      path.dirname(lastSaveDialogOptions.defaultPath),
+      testDir,
+      'the save dialog opens in the documents folder',
+    );
 
     saveDialogResult = { canceled: false, filePath: path.join(testDir, 'menu-a4.pdf') };
-    await saveHtmlAsPdf!(trustedSender, { html: '<html></html>', defaultFileName: '../escape:name', pageSize: 'A5' });
-    assert.equal(pdfWindows[1].pdfOptions.pageSize, 'A4', 'an unsupported page size falls back to A4');
-    assert.equal(path.basename(lastSaveDialogOptions.defaultPath), '..-escape-name.pdf', 'a directory separator in the suggested name is neutralised');
-    assert.equal(path.dirname(lastSaveDialogOptions.defaultPath), testDir, 'the suggested name cannot steer the save outside the documents folder');
+    await saveHtmlAsPdf!(trustedSender, {
+      html: '<html></html>',
+      defaultFileName: '../escape:name',
+      pageSize: 'A5',
+    });
+    assert.equal(
+      pdfWindows[1].pdfOptions.pageSize,
+      'A4',
+      'an unsupported page size falls back to A4',
+    );
+    assert.equal(
+      path.basename(lastSaveDialogOptions.defaultPath),
+      '..-escape-name.pdf',
+      'a directory separator in the suggested name is neutralised',
+    );
+    assert.equal(
+      path.dirname(lastSaveDialogOptions.defaultPath),
+      testDir,
+      'the suggested name cannot steer the save outside the documents folder',
+    );
 
     printToPdfFailure = new Error('render surface crashed');
     saveDialogResult = { canceled: false, filePath: path.join(testDir, 'menu-failed.pdf') };
@@ -206,8 +377,16 @@ async function run(): Promise<void> {
       { success: false, error: 'render surface crashed' },
       'a render failure is reported to the renderer',
     );
-    assert.equal(pdfWindows[2].destroyed, true, 'the offscreen window is destroyed even when rendering fails');
-    assert.equal(fs.existsSync(path.join(testDir, 'menu-failed.pdf')), false, 'a failed render writes no file');
+    assert.equal(
+      pdfWindows[2].destroyed,
+      true,
+      'the offscreen window is destroyed even when rendering fails',
+    );
+    assert.equal(
+      fs.existsSync(path.join(testDir, 'menu-failed.pdf')),
+      false,
+      'a failed render writes no file',
+    );
     printToPdfFailure = null;
 
     console.log('Electron printer IPC surface matches the live SQLite schema.');

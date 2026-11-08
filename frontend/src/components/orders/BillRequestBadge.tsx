@@ -8,6 +8,7 @@ import { useFormatDate } from '@/hooks/useFormatDate';
 import { parseDbTimestamp } from '@/lib/utils';
 import type { Order, OrderItem } from '@/lib/types';
 import { isAwaitingBillPayment } from '@/lib/bill-print-flow';
+import { resolveOrderPaymentStatus } from '@/lib/order-payment-state';
 
 export { isAwaitingBillPayment };
 
@@ -66,7 +67,7 @@ export function allServedConfirmed(
 }
 
 type BadgeOrder = BillRequestFields &
-  Pick<Order, 'status' | 'bill' | 'bills'> & {
+  Pick<Order, 'status' | 'bill' | 'bills' | 'release_status'> & {
     items?: Pick<OrderItem, 'status' | 'served_confirmed_at'>[];
   } & { bill_requested_at?: string | null };
 
@@ -109,6 +110,42 @@ export function OrderStatusBadge({
         className={`${BADGE} ${size} bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300`}
       >
         {t('cancelled')}
+      </span>
+    );
+  }
+
+  const paymentStatus = resolveOrderPaymentStatus(order);
+  if (paymentStatus === 'partially_refunded' || paymentStatus === 'refunded') {
+    const partiallyRefunded = paymentStatus === 'partially_refunded';
+    return (
+      <span
+        data-testid="order-status-badge"
+        className={`${BADGE} ${size} ${
+          partiallyRefunded
+            ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+            : 'bg-muted text-muted-foreground'
+        }`}
+      >
+        {t(partiallyRefunded ? 'partiallyRefunded' : 'refunded')}
+      </span>
+    );
+  }
+
+  if (order.release_status === 'scheduled' || order.release_status === 'blocked') {
+    const blocked = order.release_status === 'blocked';
+    return (
+      <span
+        data-testid="order-status-badge"
+        className={
+          BADGE +
+          ' ' +
+          size +
+          (blocked
+            ? ' bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+            : ' bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300')
+        }
+      >
+        {t(blocked ? 'releaseBlocked' : 'releaseScheduled')}
       </span>
     );
   }

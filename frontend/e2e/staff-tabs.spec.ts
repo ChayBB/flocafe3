@@ -25,6 +25,11 @@ test('the staff page keeps staff, time and wages, and zone responsibility behind
   });
   expect(owner.ok(), await owner.text()).toBeTruthy();
 
+  // Failed printer jobs left by other tests can overlay the staff controls.
+  await page.route('**/api/printers/unprinted-kots', (route) =>
+    route.fulfill({ json: { unprinted: [] } }),
+  );
+
   await page.goto(`${E2E_BASE_URL}/auth/login`);
   await page.getByLabel('Email').fill('owner@flo.local');
   await page.getByLabel('Password').fill(E2E_PASSWORD);

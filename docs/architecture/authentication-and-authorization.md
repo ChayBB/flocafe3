@@ -34,9 +34,10 @@ Almost every protected action — 245 call sites — is gated by `requirePermiss
 list. `requireRole` (in `main/middleware/security.ts`) still exists, but a static audit test
 (`tests/authorization-static-audit.test.ts`) fails the build if a new call site under
 `main/routes/` uses it; the few remaining direct role checks are reviewed context policy, covered
-in their own sections below (KDS station/category scope, refund approver identity, the
-override-PIN holder for order-status, kitchen-delivery, and item cancel/void overrides, and the
-last-active-owner/staff-target rule).
+in their own sections below or in the owning feature documentation (KDS station/category scope,
+refund approver identity, the Staff Approval PIN holder, the last-active-owner/staff-target rule,
+own-shift vs manager/owner cash-shift access, and owner-only `z_report_day_close` configuration in
+[WhatsApp receipt delivery](cloud-integrations.md#whatsapp-receipt-delivery)).
 
 **Resolution.** For every permission id, `resolveEffectivePermissions(userId)` evaluates, in
 order: the protected-owner rule (for `authorization.manage` and `staff.privileged.manage` only,
@@ -137,12 +138,18 @@ permission check inside the `withTxn` callback, after the transaction opens, usi
 `hasPermission(actorId, id)` against state read in the same transaction.
 `PATCH /api/orders/:id/status`, `PATCH /api/orders/:orderId/items/:itemId/cancel`, the matching
 `.../restore` endpoint in `main/routes/orders.ts`, and the bill payment kitchen-delivery override
-in `main/routes/bills.ts` do this, and their override-PIN paths additionally require the presenting
+and charge waiver override in `main/routes/bills.ts` do this, and their override-PIN paths
+(along with paid-bill payment-method correction on `PATCH /api/bills/:id/payments/:index/method`,
+which also requires the authenticated caller itself to satisfy `hasRole(role, ROLE_ACCESS.ownerManager)` and hold `payments.take`)
+additionally require the presenting
 user to satisfy `hasRole(role, ROLE_ACCESS.ownerManager)` - a deliberate context-policy role check,
-not a permission, because the override PIN belongs to a
+not a permission, because the Staff Approval PIN belongs to a
 person acting in an owner/manager capacity regardless of what their individual permission grants
-say. To prevent event loop starvation and transaction lock contention during CPU-intensive bcrypt
-evaluations, manager PINs are verified asynchronously via `verifyPinAsync` outside the transaction,
+say. Even though any staff role (`owner`, `manager`, `cashier`, `server`, `chef`) may hold a 4-6
+digit `pin_hash` for quick user switching, candidate queries and in-transaction re-validations filter
+for active `owner` and `manager` accounts so a `cashier`, `server`, or `chef` PIN can never satisfy
+an approval check. To prevent event loop starvation and transaction lock contention during CPU-intensive bcrypt
+evaluations, Staff Approval PINs are verified asynchronously via `verifyPinAsync` outside the transaction,
 serialized per client IP and action key with `withPinVerificationLock` from
 [`main/middleware/security.ts`](../../main/middleware/security.ts) (re-checking client-IP rate limits
 inside the lock before executing bcrypt). Candidate filtering during pre-verification enforces the
@@ -177,7 +184,7 @@ That divergence is a correctness risk, not a style preference. A change to the o
 to the status codes, or to the role gate has to be made in three places, and the three are free to
 drift apart without any test failing. Treat them as a set. Note also that `:3002` re-checks
 `is_active`, revocation, and staleness a second time inside its status-update transaction
-(`main/kds-server.ts:410`), which is a defence in depth rather than a duplicate bug.
+(`PATCH /api/kds/items/:id/status` in `main/kds-server.ts`), which is a defence in depth rather than a duplicate bug.
 
 ### Shared login attempt rate limiting across servers
 
@@ -187,6 +194,81 @@ All three HTTP listeners (`:3001` Main API, `:3002` Standalone KDS, and `:3003` 
 2. **Shared failed-login lockout (`checkLoginRateLimit` / `incrementFailedLogin`):** Keyed to the canonical client IP (`normalizeIpForRateLimit`, which strips `::ffff:` IPv4-mapped IPv6 prefixes so IPv4 and IPv6 representations share the exact same bucket). Five failed credential attempts across any combination of the three listeners triggers a 15-minute lockout (HTTP `429`). During the lockout, any further login attempt on any listener is rejected before password evaluation.
 3. **Reset on success (`resetSuccessfulLogin`):** A successful login from any listener immediately clears the failed-attempt count for that client IP once role and permission checks pass.
 4. **Role and permission decoupling:** Non-credential rejections (such as HTTP `403` when valid credentials lack `kitchen.use` on `:3002` or `server-app.use` on `:3003`) do not count as credential failures and do not clear previously accumulated failed-login attempts.
+
+### PIN quick user switch and terminal lock
+
+Any staff role (`owner`, `manager`, `cashier`, `server`, `chef`) may configure a 4-6 digit PIN
+(`users.pin_hash`) in Staff management. That PIN serves as the user's sign-in PIN on shared
+terminals, while approval authority stays restricted to active `owner` and `manager` accounts:
+
+1. **Quick-switch tile directory (`GET /api/auth/pin-users`):** Returns active users who have a
+   `pin_hash` set, exposing only `{ id, name, role }`. Users without a PIN are omitted from the
+   picker and sign in with email and password.
+2. **Selected-user PIN sign-in (`POST /api/auth/pin-login`):** Accepts `{ user_id, pin, rememberMe }`
+   and verifies the PIN strictly against the selected `user_id` via `verifyPinAsync` without
+   scanning other users, so two staff members may share the same PIN. Verification and rate-limit
+   checks are serialized per target account (`pin-user:${userId}`) with `withPinVerificationLock`,
+   failed attempts are tracked by the install-wide login rate limiter both per client IP + user
+   (`${normalizedIp}:pin:${userId}`) and per target account across source IPs (`pin-user:${userId}`),
+   and every attempt is recorded in `auth_audit_log` (`event_type = 'pin_login'`, `outcome` in
+   `'success'`, `'failure'`, or `'rate_limited'`).
+3. **Terminal lock and session boundary:** Only one user is signed in on a device at a time. The
+   manual **Lock** action in the POS topbar/sidebar (and the optional `auto_lock_minutes` idle
+   setting in **Settings > POS**, off by default with choices `1`, `5`, `15`, or `30` minutes,
+   readable by all authenticated staff independently of feature permissions) revokes the active token
+   without closing the open cash shift. Unfinished POS cart items remain on the terminal across lock
+   and user switch, while privileged cart adjustments (line price overrides and charge waivers),
+   cached override PINs, and open privileged modals are cleared. Pending asynchronous checkout
+   continuations are guarded by session epoch and originating tokens so a user switch halts downstream
+   billing and payment transitions under the new session, clears any untouched matching cart to
+   prevent duplicate ordering, and preserves committed-order recovery state under the originating
+   user's attempt record.
+4. **Approval boundary:** `GET /api/staff/approvers` and every Staff Approval PIN check (refunds,
+   item voids, order/item/bill discounts, order-status overrides, kitchen-delivery overrides,
+   charge waivers, and paid-bill payment-method corrections) enforce active `owner` or `manager`
+   role eligibility both outside and inside write transactions. A valid `cashier`, `server`, or
+   `chef` PIN is rejected with `403` on every approval path.
+
+## Password policy
+
+A password must be at least 4 characters long. There are no uppercase, lowercase, digit, or symbol
+requirements. The rule lives only in
+[`shared/password-policy.ts`](../../shared/password-policy.ts); the backend (`validatePassword`
+re-exported from `main/middleware/security.ts`) and every frontend form that sets a password
+(first-run setup, staff create and edit, staff password reset, recovery) import it, and the
+`password-policy` test fails if a source file re-implements a password rule. Every route that
+writes a password enforces it: setup, staff create and update, password change, and both recovery
+paths. The 4-digit Master PIN and 4-6 digit staff PINs are separate secrets with their own rules.
+
+## Owner password recovery
+
+A locked-out owner has two recovery paths, both local-only requests (loopback) with no JWT, and
+both ending in the same write (`applyOwnerRecovery` in
+[`main/routes/auth.ts`](../../main/routes/auth.ts)): the new bcrypt hash, a bumped
+`tokens_valid_after`, and the `last_password_recovery_*` audit settings.
+
+- **Master PIN:** `POST /api/auth/recover-password` with the owner email, the Master PIN, and the
+  new password. Works offline.
+- **FloAdmin email approval:** available when cloud account services are on, the cloud server URL
+  is the official FloAdmin endpoint in both SQLite and active runtime state, and an active owner
+  account matches the registered owner email (`cloudSync.isEmailRecoveryAvailable()`, advertised as
+  `cloudRecoveryAvailable` by `GET /api/auth/setup/status`). Updating an active owner's email in
+  staff management keeps `settings.email` in sync. Structured database imports preserve and resync
+  `settings.email` from the active owner account; full backup restore is authoritative and instead
+  applies the backed-up owner and settings state. If FloAdmin has not verified that
+  email, the request first sends the verification email (`step: 'verify_email'`) and the recover
+  page polls `GET /api/auth/recover-password/cloud/verification`; once verified it requests the
+  reset automatically. FloAdmin then emails the registered owner a link, the POS polls the
+  approval status, and after approval the owner chooses the new password on the POS.
+  `POST /api/auth/recover-password/cloud/complete` resolves the active owner whose email matches the
+  registered cloud email, redeems the single-use grant with FloAdmin, and only then writes the
+  password. The password is never sent to FloAdmin. Recovery requests are pinned to the trusted
+  FloAdmin server URL and signed with the install's `api_key` like every other `/api/pos/*` call.
+
+If the owner email matches no active owner, nothing is redeemed. When no active administrator
+remains, the Master PIN path restores owner access to the matched active account; the FloAdmin
+email path always requires an active owner matching the registered email and never promotes a
+non-owner account.
 
 ## Master PIN as a second factor
 

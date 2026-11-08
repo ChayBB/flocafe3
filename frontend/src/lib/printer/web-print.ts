@@ -13,6 +13,7 @@ import {
   formatDateForTenant,
 } from '@/lib/countries';
 import { columnsForReceiptPaperSize } from '@print/width';
+import { normalizePrinterTextSize, type PrinterTextSize } from '@print/text-size';
 import { parseDbTimestamp } from '@/lib/utils';
 import { loadLocaleMessages } from '@/lib/i18n/loader';
 import {
@@ -72,6 +73,8 @@ function directionalValue(value: DirectionalText | null, base: TextDirection): s
 
 export interface WebPrintOptions {
   paperSize?: PaperSize;
+  /** Per-printer text size ('normal' | 'large' | 'extra_large'). Default: 'normal'. */
+  textSize?: PrinterTextSize;
   /** Exact column count the configured printer declares; overrides `paperSize`. */
   columns?: number;
   includeTaxId?: boolean;
@@ -391,7 +394,7 @@ export function generateBillHtml(
 
   const invoiceNumberLabel = L.billNumber;
   const netPaidLabel = netPaidLabelFor(L.netPaid);
-  const styles = getPaperStyles(paperSize);
+  const styles = getPaperStyles(paperSize, opts.textSize);
 
   const items = itemsBlock?.rows ?? [];
   const itemisedCharges = receiptChargeLines(totals?.chargesBreakdown);
@@ -604,58 +607,159 @@ function paymentLineLabel(label: { conceptId?: string; primary: string }): strin
     : label.primary.charAt(0).toUpperCase() + label.primary.slice(1);
 }
 
-function getPaperStyles(size: PaperSize): string {
+export function getPaperStyles(size: PaperSize, textSize?: PrinterTextSize): string {
+  const normalizedTextSize = normalizePrinterTextSize(textSize);
   const baseStyles = `
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, 'Segoe UI', Tahoma, 'Noto Naskh Arabic', 'Noto Sans Bengali', 'Vrinda', 'Bangla Sangam MN', 'Noto Sans Devanagari', 'Nirmala UI', 'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Noto Sans Thai', 'Leelawadee UI', Thonburi, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Hiragino Sans', 'Yu Gothic', 'Meiryo', 'Noto Sans CJK JP', 'Noto Sans JP', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; line-height: 1.4; color: #333; }
+    body { font-family: -apple-system, 'Segoe UI', Tahoma, 'Noto Naskh Arabic', 'Noto Sans Bengali', 'Vrinda', 'Bangla Sangam MN', 'Noto Sans Devanagari', 'Nirmala UI', 'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Noto Sans Thai', 'Leelawadee UI', Thonburi, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Hiragino Sans', 'Yu Gothic', 'Meiryo', 'Noto Sans CJK JP', 'Noto Sans JP', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; font-weight: 600; line-height: 1.4; color: #000; }
     body:lang(zh-TW) { font-family: -apple-system, 'Segoe UI', Tahoma, 'Noto Naskh Arabic', 'PingFang TC', 'Microsoft JhengHei', 'Noto Sans CJK TC', 'Noto Sans TC', 'Helvetica Neue', Arial, sans-serif; }
-    .bill-container { max-width: 100%; margin: 0 auto; }
-    .reprint-banner { text-align: center; font-size: 22px; font-weight: bold; letter-spacing: 2px; color: #c00; border: 3px solid #c00; padding: 6px; margin-bottom: 15px; }
-    .online-order-banner { text-align: center; font-size: 18px; font-weight: bold; letter-spacing: 1px; border: 2px solid #333; padding: 6px; margin-bottom: 15px; }
-    .online-order-banner .online-order-detail { font-size: 13px; font-weight: normal; letter-spacing: normal; margin-top: 2px; }
-    .header { text-align: center; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px dashed #999; }
+    .bill-container { max-width: 100%; margin: 0 auto; color: #000; }
+    .reprint-banner { text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 2px; color: #000; border: 2px solid #000; padding: 6px; margin-bottom: 12px; }
+    .online-order-banner { text-align: center; font-size: 18px; font-weight: 700; letter-spacing: 1px; color: #000; border: 2px solid #000; padding: 6px; margin-bottom: 12px; }
+    .online-order-banner .online-order-detail { font-size: 13px; font-weight: 600; letter-spacing: normal; margin-top: 2px; color: #000; }
+    .header { text-align: center; margin-bottom: 12px; padding-bottom: 8px; color: #000; border-bottom: 1px solid #000; }
     .receipt-logo { max-width: 80%; max-height: 120px; object-fit: contain; margin: 0 auto 8px auto; display: block; }
-    .header h1 { font-size: 24px; margin-bottom: 5px; }
-    .bill-details { margin-bottom: 15px; }
+    .header h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; color: #000; }
+    .bill-details { margin-bottom: 12px; color: #000; }
     .bill-details table { width: 100%; }
-    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
-    .items-table th, .items-table td { padding: 8px; text-align: start; }
-    .items-table th { font-weight: bold; border-top: 1px dashed #000; border-bottom: 1px dashed #000; }
-    .tax-table, .payments-table { width: 50%; margin-inline-start: 50%; border-collapse: collapse; margin-bottom: 15px; }
-    .tax-table th, .tax-table td, .payments-table th, .payments-table td { padding: 6px 8px; }
-    .tax-table th, .payments-table th { text-align: start; }
-    .totals-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
-    .totals-table td { padding: 6px 8px; }
-    .total-row { border-top: 2px dashed #333; font-size: 16px; }
-    .footer { text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px dashed #999; }
+    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; color: #000; }
+    .items-table th, .items-table td { padding: 6px; border-bottom: 1px solid #000; text-align: start; color: #000; }
+    .items-table th { background: transparent; font-weight: 700; color: #000; }
+    .tax-table, .payments-table { width: 50%; margin-inline-start: 50%; border-collapse: collapse; margin-bottom: 12px; color: #000; }
+    .tax-table th, .tax-table td, .payments-table th, .payments-table td { padding: 4px 6px; color: #000; }
+    .tax-table th, .payments-table th { background: transparent; text-align: start; font-weight: 700; color: #000; }
+    .totals-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; color: #000; }
+    .totals-table td { padding: 4px 6px; color: #000; }
+    .total-row { border-top: 2px solid #000; font-size: 16px; font-weight: 700; color: #000; }
+    .footer { text-align: center; margin-top: 16px; padding-top: 10px; border-top: 1px solid #000; color: #000; }
     .payment-qr { display: block; width: 45mm; max-width: 80%; margin: 8px auto 0; }
     .payment-qr-caption { margin: 4px 0 0; text-align: center; font-size: 1.6em; font-weight: 700; }
     .payment-qr-account { margin: 2px 0 0; text-align: center; font-size: 1.4em; font-weight: 700; }
     .text-end { text-align: end !important; }
     .num { unicode-bidi: isolate; white-space: nowrap; }
     .ltr { direction: ltr; unicode-bidi: isolate; }
-    .text-muted { color: #666; }
-    .text-italic { font-style: italic; color: #888; }
+    .text-muted { color: #000; font-weight: 600; }
+    .text-italic { font-style: italic; color: #000; font-weight: 600; }
   `;
 
   switch (size) {
-    case 'thermal58':
+    case 'thermal58': {
+      const bodyFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '17px'
+          : normalizedTextSize === 'large'
+            ? '15px'
+            : '13px';
+      const headingFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '21px'
+          : normalizedTextSize === 'large'
+            ? '19px'
+            : '17px';
+      const totalFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '19px'
+          : normalizedTextSize === 'large'
+            ? '17px'
+            : '15px';
+      const bannerFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '20px'
+          : normalizedTextSize === 'large'
+            ? '18px'
+            : '16px';
+      const poweredByFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '13px'
+          : normalizedTextSize === 'large'
+            ? '12px'
+            : '11px';
+      const bodyWeight = normalizedTextSize === 'extra_large' ? 700 : 600;
+      const extraLargeRowRules =
+        normalizedTextSize === 'extra_large'
+          ? `
+        .bill-container { overflow-wrap: anywhere; word-break: break-word; }
+        .items-table thead, .items-table tbody { display: block; width: 100%; }
+        .items-table thead tr, .items-table tbody tr { display: flex; flex-wrap: wrap; width: 100%; border-bottom: 1px dashed #000; }
+        .items-table thead tr { border-bottom: 1px solid #000; }
+        .items-table th, .items-table td { border-bottom: none; overflow-wrap: anywhere; word-break: break-word; }
+        .items-table th:first-child, .items-table td:first-child { flex: 1 1 100%; width: 100%; max-width: 100%; }
+        .items-table th:not(:first-child), .items-table td:not(:first-child) { flex: 1 1 auto; min-width: 0; }
+        .items-table td.num { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+      `
+          : '';
       return (
         baseStyles +
         `
-        .bill-container { padding: 5px; max-width: 58mm; font-size: 10px; }
-        .header h1 { font-size: 14px; }
+        @page { size: 58mm auto; margin: 0; }
+        body { color: #000; font-size: ${bodyFontSize}; font-weight: ${bodyWeight}; width: 58mm; max-width: 58mm; margin: 0 auto; }
+        .bill-container { padding: 2mm; width: 100%; max-width: 58mm; font-size: ${bodyFontSize}; font-weight: ${bodyWeight}; color: #000; }
+        .reprint-banner, .online-order-banner { color: #000; border: 2px solid #000; font-size: ${bannerFontSize}; font-weight: 700; }
+        .header { color: #000; border-bottom: 1px solid #000; }
+        .header h1 { font-size: ${headingFontSize}; font-weight: 700; color: #000; }
+        .text-muted, .text-italic { color: #000; font-weight: ${bodyWeight}; }
+        .items-table th, .tax-table th, .payments-table th { background: transparent; color: #000; border-bottom: 1px solid #000; font-weight: 700; }
+        .items-table td { color: #000; border-bottom: 1px dashed #000; font-size: ${bodyFontSize}; font-weight: ${bodyWeight}; }
+        .total-row { color: #000; border-top: 2px solid #000; font-size: ${totalFontSize}; font-weight: 700; }
+        .footer { color: #000; border-top: 1px solid #000; }
+        .powered-by { color: #000; font-size: ${poweredByFontSize}; font-weight: 600; }
+        .tax-table, .payments-table { width: 100%; margin-inline-start: 0; }
         .items-table th, .items-table td, .tax-table td, .totals-table td, .payments-table td { padding: 2px 4px; }
-      `
+      ` +
+        extraLargeRowRules
       );
-    case 'thermal80':
+    }
+    case 'thermal80': {
+      const bodyFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '18px'
+          : normalizedTextSize === 'large'
+            ? '16px'
+            : '14px';
+      const headingFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '22px'
+          : normalizedTextSize === 'large'
+            ? '20px'
+            : '18px';
+      const totalFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '20px'
+          : normalizedTextSize === 'large'
+            ? '18px'
+            : '16px';
+      const bannerFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '22px'
+          : normalizedTextSize === 'large'
+            ? '20px'
+            : '18px';
+      const poweredByFontSize =
+        normalizedTextSize === 'extra_large'
+          ? '13px'
+          : normalizedTextSize === 'large'
+            ? '12px'
+            : '11px';
+      const bodyWeight = normalizedTextSize === 'extra_large' ? 700 : 600;
       return (
         baseStyles +
         `
-        .bill-container { padding: 10px; max-width: 80mm; font-size: 11px; }
-        .header h1 { font-size: 16px; }
+        @page { size: 80mm auto; margin: 0; }
+        body { color: #000; font-size: ${bodyFontSize}; font-weight: ${bodyWeight}; width: 80mm; max-width: 80mm; margin: 0 auto; }
+        .bill-container { padding: 3mm; width: 100%; max-width: 80mm; font-size: ${bodyFontSize}; font-weight: ${bodyWeight}; color: #000; }
+        .reprint-banner, .online-order-banner { color: #000; border: 2px solid #000; font-size: ${bannerFontSize}; font-weight: 700; }
+        .header { color: #000; border-bottom: 1px solid #000; }
+        .header h1 { font-size: ${headingFontSize}; font-weight: 700; color: #000; }
+        .text-muted, .text-italic { color: #000; font-weight: ${bodyWeight}; }
+        .items-table th, .tax-table th, .payments-table th { background: transparent; color: #000; border-bottom: 1px solid #000; font-weight: 700; }
+        .items-table td { color: #000; border-bottom: 1px dashed #000; font-size: ${bodyFontSize}; font-weight: ${bodyWeight}; }
+        .total-row { color: #000; border-top: 2px solid #000; font-size: ${totalFontSize}; font-weight: 700; }
+        .footer { color: #000; border-top: 1px solid #000; }
+        .powered-by { color: #000; font-size: ${poweredByFontSize}; font-weight: 600; }
+        .tax-table, .payments-table { width: 100%; margin-inline-start: 0; }
       `
       );
+    }
     default:
       return baseStyles;
   }

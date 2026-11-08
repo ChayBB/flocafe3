@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CreditCard, Plus, Save, Trash2, Merge } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
@@ -45,17 +45,61 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
   const [qrAccountNameSaved, setQrAccountNameSaved] = useState('');
   const [bankAccount, setBankAccount] = useState('');
   const [bankAccountSaved, setBankAccountSaved] = useState('');
+  const [requireOpenShift, setRequireOpenShift] = useState(false);
+  const [oneShiftPerStaff, setOneShiftPerStaff] = useState(false);
+  const [cardTransactionIdRequired, setCardTransactionIdRequired] = useState(false);
+  const [cardTransactionSettingState, setCardTransactionSettingState] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading');
+  const [isSavingCardTransactionIdRequired, setIsSavingCardTransactionIdRequired] = useState(false);
+  const cardTransactionSaveEpochRef = useRef(0);
+  const cardTransactionSaveInFlightRef = useRef(false);
+
+  const loadCardTransactionSetting = async () => {
+    if (cardTransactionSaveInFlightRef.current) return;
+    const epoch = cardTransactionSaveEpochRef.current;
+    setCardTransactionSettingState('loading');
+    try {
+      const cardTransactionRes = await api.get('/settings/card_transaction_id_required');
+      if (cardTransactionSaveInFlightRef.current || epoch !== cardTransactionSaveEpochRef.current) {
+        return;
+      }
+      setCardTransactionIdRequired(cardTransactionRes.data?.setting?.value === 'true');
+      setCardTransactionSettingState('ready');
+    } catch {
+      if (cardTransactionSaveInFlightRef.current || epoch !== cardTransactionSaveEpochRef.current) {
+        return;
+      }
+      setCardTransactionSettingState('error');
+    }
+  };
 
   const load = async () => {
-    const [methodsRes, historyRes, splitRes, qrRes, bankRes, qrNameRes] = await Promise.all([
+    const [
+      methodsRes,
+      historyRes,
+      splitRes,
+      requireShiftRes,
+      perStaffShiftRes,
+      qrRes,
+      bankRes,
+      qrNameRes,
+    ] = await Promise.all([
       api.get('/payment-methods?include_inactive=true'),
       api.get('/payment-methods/merge-history'),
       api
         .get('/settings/split_checks_enabled')
         .catch(() => ({ data: { setting: { value: 'false' } } })),
+      api
+        .get('/settings/require_open_shift')
+        .catch(() => ({ data: { setting: { value: 'false' } } })),
+      api
+        .get('/settings/one_shift_per_staff')
+        .catch(() => ({ data: { setting: { value: 'false' } } })),
       api.get('/payment-methods/qr-account').catch(() => ({ data: { account: '' } })),
       api.get('/payment-methods/bank-qr-account').catch(() => ({ data: { account: '' } })),
       api.get('/payment-methods/qr-account-name').catch(() => ({ data: { name: '' } })),
+      loadCardTransactionSetting(),
     ]);
     setQrAccountName(qrNameRes.data?.name || '');
     setQrAccountNameSaved(qrNameRes.data?.name || '');
@@ -68,6 +112,8 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
     setNames(Object.fromEntries(rows.map((row: CustomPaymentMethod) => [row.id, row.name])));
     setMerges(historyRes.data.merges || []);
     setSplitChecksEnabled(splitRes.data?.setting?.value === 'true');
+    setRequireOpenShift(requireShiftRes.data?.setting?.value === 'true');
+    setOneShiftPerStaff(perStaffShiftRes.data?.setting?.value === 'true');
   };
 
   useEffect(() => {
@@ -356,6 +402,128 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
             } catch {
               setSplitChecksEnabled(!value);
               toast.error(t('saveFailed'));
+            }
+          }}
+        />
+      </div>
+
+      <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+        <div>
+          <h2 id="card-transaction-id-required-label" className="font-semibold text-foreground">
+            {t('cardTransactionIdRequired')}
+          </h2>
+          <p id="card-transaction-id-required-hint" className="text-sm text-muted-foreground mt-1">
+            {t('cardTransactionIdRequiredHint')}
+          </p>
+        </div>
+        {cardTransactionSettingState === 'error' ? (
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-destructive">{t('loadFailed')}</span>
+            <Button variant="outline" size="sm" onClick={() => void loadCardTransactionSetting()}>
+              {t('retry')}
+            </Button>
+          </div>
+        ) : (
+          <input
+            id="card-transaction-id-required"
+            type="checkbox"
+            aria-labelledby="card-transaction-id-required-label"
+            aria-describedby="card-transaction-id-required-hint"
+            className="size-5 shrink-0"
+            disabled={
+              !isAdmin ||
+              cardTransactionSettingState !== 'ready' ||
+              isSavingCardTransactionIdRequired
+            }
+            checked={cardTransactionIdRequired}
+            onChange={async (e) => {
+              if (isSavingCardTransactionIdRequired || cardTransactionSaveInFlightRef.current)
+                return;
+              const previousValue = cardTransactionIdRequired;
+              const value = e.target.checked;
+              cardTransactionSaveEpochRef.current += 1;
+              cardTransactionSaveInFlightRef.current = true;
+              setCardTransactionIdRequired(value);
+              setIsSavingCardTransactionIdRequired(true);
+              try {
+                await api.put('/settings/card_transaction_id_required', { value: String(value) });
+                setCardTransactionIdRequired(value);
+                setCardTransactionSettingState('ready');
+              } catch {
+                setCardTransactionIdRequired(previousValue);
+                toast.error(t('saveFailed'));
+              } finally {
+                cardTransactionSaveInFlightRef.current = false;
+                setIsSavingCardTransactionIdRequired(false);
+              }
+            }}
+          />
+        )}
+      </div>
+
+      <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+        <div>
+          <h2 id="require-open-shift-label" className="font-semibold text-foreground">
+            {t('requireOpenShift')}
+          </h2>
+          <p id="require-open-shift-hint" className="text-sm text-muted-foreground mt-1">
+            {t('requireOpenShiftHint')}
+          </p>
+        </div>
+        <input
+          id="require-open-shift"
+          type="checkbox"
+          aria-labelledby="require-open-shift-label"
+          aria-describedby="require-open-shift-hint"
+          className="size-5 shrink-0"
+          disabled={!isAdmin}
+          checked={requireOpenShift}
+          onChange={async (e) => {
+            const value = e.target.checked;
+            setRequireOpenShift(value);
+            try {
+              await api.put('/settings/require_open_shift', { value: String(value) });
+            } catch {
+              setRequireOpenShift(!value);
+              toast.error(t('saveFailed'));
+            }
+          }}
+        />
+      </div>
+
+      <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+        <div>
+          <h2 id="one-shift-per-staff-label" className="font-semibold text-foreground">
+            {t('oneShiftPerStaff')}
+          </h2>
+          <p id="one-shift-per-staff-hint" className="text-sm text-muted-foreground mt-1">
+            {t('oneShiftPerStaffHint')}
+          </p>
+          <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+            {t('oneShiftPerStaffSharedDrawerWarning')}
+          </p>
+        </div>
+        <input
+          id="one-shift-per-staff"
+          type="checkbox"
+          aria-labelledby="one-shift-per-staff-label"
+          aria-describedby="one-shift-per-staff-hint"
+          className="size-5 shrink-0"
+          disabled={!isAdmin}
+          checked={oneShiftPerStaff}
+          onChange={async (e) => {
+            const value = e.target.checked;
+            setOneShiftPerStaff(value);
+            try {
+              await api.put('/settings/one_shift_per_staff', { value: String(value) });
+            } catch (err: unknown) {
+              setOneShiftPerStaff(!value);
+              const status = (err as { response?: { status?: number } })?.response?.status;
+              if (status === 409) {
+                toast.error(t('oneShiftPerStaffDisableBlocked'));
+              } else {
+                toast.error(t('saveFailed'));
+              }
             }
           }}
         />

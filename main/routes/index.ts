@@ -42,6 +42,7 @@ import { whatsappRoutes } from './whatsapp';
 import { supportTicketRoutes } from './support-ticket';
 import { diagnosticsRoutes } from './diagnostics';
 import { authorizationRoutes } from './authorization';
+import { counterRoutes } from './counters';
 import { getDatabase, getSettingValue, getCachedPairingCode, setCachedPairingCode } from '../db';
 
 import { getActiveCountryPack } from '../services/tax';
@@ -158,6 +159,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/support-ticket', supportTicketRoutes);
   app.use('/api/diagnostics', diagnosticsRoutes);
   app.use('/api/authorization', authorizationRoutes);
+  app.use('/api/counters', counterRoutes);
 
   // Tax preview. Priced on every cart change in the prepaid checkout modal, so it
   // has to admit every role that can run a sale; `tax-packs.view-test` (owner and
@@ -205,6 +207,7 @@ export function registerRoutes(app: Express): void {
           unclassified_category_id: pack.unclassifiedCategoryId,
         });
       } catch (error: any) {
+        res.locals.postHogError = error;
         console.error('[API] Internal error:', error);
         res.status(500).json({ error: 'Internal server error' });
       }
@@ -236,6 +239,7 @@ export function registerRoutes(app: Express): void {
           qr_data_url: await QRCode.toDataURL(code, { errorCorrectionLevel: 'M', width: 256 }),
         });
       } catch (error: any) {
+        res.locals.postHogError = error;
         res
           .status(mobilePairingErrorStatus(error))
           .json({ error: mobilePairingErrorMessage(error) });
@@ -257,6 +261,7 @@ export function registerRoutes(app: Express): void {
           qr_data_url: await QRCode.toDataURL(code, { errorCorrectionLevel: 'M', width: 256 }),
         });
       } catch (error: any) {
+        res.locals.postHogError = error;
         res
           .status(mobilePairingErrorStatus(error))
           .json({ error: mobilePairingErrorMessage(error) });
@@ -273,6 +278,7 @@ export function registerRoutes(app: Express): void {
         const devices = await cloudSync.listPairedDevices();
         res.json({ devices });
       } catch (error: any) {
+        res.locals.postHogError = error;
         console.error('[API] FloAdmin request failed:', error);
         res.status(502).json({ error: 'Could not reach FloAdmin' });
       }
@@ -321,6 +327,7 @@ export function registerRoutes(app: Express): void {
 
         res.json(results);
       } catch (error: any) {
+        res.locals.postHogError = error;
         console.error('[API] Internal error:', error);
         res.status(500).json({ error: 'Internal server error' });
       }
@@ -355,6 +362,7 @@ export function registerRoutes(app: Express): void {
           res.json({ found: false, customer: null });
         }
       } catch (error: any) {
+        res.locals.postHogError = error;
         console.error('[API] Internal error:', error);
         res.status(500).json({ error: 'Internal server error' });
       }

@@ -105,6 +105,13 @@ export const PERMISSION_DEFINITIONS = [
     risk: 'sensitive',
   },
   {
+    id: 'orders.item.price_override',
+    area: 'orders',
+    defaultRoles: OWNER,
+    configurable: false,
+    risk: 'sensitive',
+  },
+  {
     id: 'orders.item.restore',
     area: 'orders',
     defaultRoles: OWNER_MANAGER,
@@ -412,6 +419,13 @@ export const PERMISSION_DEFINITIONS = [
     configurable: true,
     risk: 'sensitive',
   },
+  {
+    id: 'reports.customer-sales.export',
+    area: 'reports',
+    defaultRoles: OWNER,
+    configurable: true,
+    risk: 'sensitive',
+  },
 
   {
     id: 'staff.view',
@@ -543,6 +557,13 @@ export const PERMISSION_DEFINITIONS = [
     risk: 'destructive',
   },
 
+  {
+    id: 'offline-mode.manage',
+    area: 'system',
+    defaultRoles: OWNER,
+    configurable: false,
+    risk: 'sensitive',
+  },
   {
     id: 'database.manage',
     area: 'system',

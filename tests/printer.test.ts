@@ -2440,6 +2440,52 @@ console.log(
     'hasUnsupportedPrinterChars("IRR100,000.00") is false',
     hasUnsupportedPrinterChars('IRR100,000.00') === false,
   );
+
+  // 4. Merchant template native fallback financial refusal (#1350)
+  const merchantNativeWarnings: any[] = [];
+  const merchantNativeData = formatReceipt(
+    {
+      order_number: 'ORD-MERCHANT-1350',
+      created_at: '2026-08-21 18:42:00',
+      items: [{ product_name: 'Burrito de Camarón', quantity: 1, unit_price: 550, total: 550 }],
+    },
+    {
+      bill_number: 'BILL-MERCHANT-1350',
+      subtotal: 550,
+      discount_amount: 0,
+      tax_amount: 0,
+      total: 550,
+      payment_details: '[]',
+    },
+    { name: 'Store', country: 'US', currency: 'USD' },
+    JSON.stringify({ source: 'merchant', id: 'missing-template' }),
+    42,
+    false,
+    false,
+    'full',
+    merchantNativeWarnings,
+    false,
+    'en',
+    undefined,
+    GENERIC_THERMAL_CAPABILITIES,
+  );
+  assert(
+    'merchant receipt native fallback classifies unsupported item rows as financial',
+    hasFinancialPrintWarning(merchantNativeWarnings),
+    JSON.stringify(merchantNativeWarnings),
+  );
+  assert(
+    'merchant receipt native fallback fails closed instead of silently omitting item row',
+    merchantNativeData.length === 0,
+  );
+  const refusalMsg = makeFinancialPrintRefusalMessage(merchantNativeWarnings);
+  assert(
+    'financial refusal message names the affected row and states nothing was printed',
+    refusalMsg.includes('Burrito de Camarón') &&
+      refusalMsg.includes('Nothing was printed, so no amount is missing') &&
+      refusalMsg.includes('system/browser printing'),
+    refusalMsg,
+  );
 }
 
 console.log('\n✅ Test 12: Detect connected printers (hardware discovery)');

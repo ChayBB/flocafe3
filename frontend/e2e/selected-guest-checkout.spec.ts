@@ -9,6 +9,7 @@ import {
   type E2EOrdersLayout,
 } from './helpers/test-auth';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
+import { printBillFirst } from './helpers/bill-print';
 import { FIXTURE_PRODUCT_NAME, ensureUatFixture, orderItem } from './helpers/kitchen-fixture';
 
 /**
@@ -102,12 +103,17 @@ async function login(
 }
 
 /** Opens the order in the detail pane (split layout) and starts its checkout. */
-async function openOrderCheckout(page: Page, orderNumber: string): Promise<void> {
+async function openOrderCheckout(
+  page: Page,
+  order: { id: number; order_number: string },
+): Promise<void> {
+  await printBillFirst(page.request, managerHeaders, order.id);
+  const orderNumber = order.order_number;
   await page.goto(`${BASE}/orders`);
   const masterRow = page.getByRole('button').filter({ hasText: `#${orderNumber}` });
   await expect(masterRow).toBeVisible();
   await masterRow.click();
-  await page.getByRole('button', { name: /Checkout|Take Payment/ }).click();
+  await page.getByRole('button', { name: /Confirm payment|Checkout|Take Payment/i }).click();
 }
 
 /** The unpaid check's Pay action in the detail pane drives the next guest. */
@@ -164,7 +170,10 @@ function amountLabel(value: number): string {
 
 async function settleInCash(page: Page, expectedAmount: string): Promise<void> {
   await page.getByRole('button', { name: 'Cash', exact: true }).click();
-  const payButton = page.getByRole('button', { name: /^Pay / });
+  const paymentModal = page.locator('div.fixed.inset-0').filter({
+    has: page.getByRole('heading', { name: 'Payment', exact: true }),
+  });
+  const payButton = paymentModal.getByRole('button', { name: /^(?:Pay|Confirm payment) /i });
   await expect(payButton).toBeEnabled();
   await expect(payButton).toContainText(expectedAmount);
   const paymentResponse = page.waitForResponse((response) => {
@@ -175,11 +184,10 @@ async function settleInCash(page: Page, expectedAmount: string): Promise<void> {
   });
   await payButton.click();
   expect((await paymentResponse).ok()).toBeTruthy();
-  await expect(page.getByRole('button', { name: 'Done' })).toBeVisible();
 }
 
 async function finishPayment(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByRole('heading', { name: 'Payment', exact: true })).toBeHidden();
 }
 
 test.beforeEach(async ({ page, request }) => {
@@ -226,7 +234,7 @@ test('three guests leave in sequence, each paying only their own selected items'
   await login(page);
 
   // Guest 1 pays one unit and leaves the other two on the unpaid remainder.
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await expect(page.getByRole('button', { name: 'Split check' })).toBeVisible();
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
@@ -313,7 +321,7 @@ test('an empty selection blocks submission and explains why', async ({ page, req
   });
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
 
@@ -348,7 +356,7 @@ test('selecting every remaining item returns to paying the check as it is', asyn
   });
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
 
@@ -380,7 +388,7 @@ test('cancelling the guest payment screen keeps the split unpaid', async ({ page
   });
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   await selectGuestQuantity(page, 'E2E Coffee', 1);
@@ -409,7 +417,7 @@ test('the quantity editor accepts only whole quantities inside the check', async
   const order = await createThreeGuestTable(request, 'Selected guest checkout quantity bounds');
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
 
@@ -450,7 +458,7 @@ test('a double click still creates exactly one split', async ({ page, request })
   });
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   await selectGuestQuantity(page, 'E2E Coffee', 1);
@@ -480,7 +488,7 @@ test('a check settled elsewhere is reported instead of retried', async ({ page, 
   });
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   await selectGuestQuantity(page, 'E2E Coffee', 1);
@@ -507,7 +515,7 @@ test('a paid check is never offered again for selection', async ({ page, request
   const order = await createThreeGuestTable(request, 'Selected guest checkout paid sibling');
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   const [sourceBill] = await readOrderBills(request, order.id);
@@ -560,7 +568,7 @@ test('a persisted discount stays prorated across the split', async ({ page, requ
   const orderTotal = Number((await detail.json()).order.total);
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   const [sourceBill] = await readOrderBills(request, order.id);
@@ -623,7 +631,7 @@ test('a cashier checks guests out while a server is refused the split', async ({
   // session - a cashier may bill guests but not change tenant configuration.
   await setLanguage(page, 'en');
   await login(page, cashierEmail, false, E2E_OPERATIONAL_PASSWORD);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   const [sourceBill] = await readOrderBills(request, order.id);
@@ -681,7 +689,7 @@ test('distinct variant and add-on lines are divided as separate items', async ({
   const order = (await created.json()).order;
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   const [sourceBill] = await readOrderBills(request, order.id);
@@ -720,7 +728,7 @@ test('the selected-items editor stays hidden when split checks are disabled', as
   const order = await createThreeGuestTable(request, 'Selected guest checkout feature off');
 
   await login(page);
-  await openOrderCheckout(page, order.order_number);
+  await openOrderCheckout(page, order);
   await expect(page.getByRole('button', { name: 'Cash', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Split check' })).toHaveCount(0);
 });
@@ -728,6 +736,7 @@ test('the selected-items editor stays hidden when split checks are disabled', as
 test('the card grid drives the same selected-items guest checkout', async ({ page, request }) => {
   await setOrdersLayout(page, 'cards', BASE, ordersLayoutToken);
   const order = await createThreeGuestTable(request, 'Selected guest checkout cards layout');
+  await printBillFirst(request, managerHeaders, order.id);
 
   await login(page);
   await page.goto(`${BASE}/orders`);
@@ -737,7 +746,7 @@ test('the card grid drives the same selected-items guest checkout', async ({ pag
     .fill(order.order_number);
   const card = page.locator('div.bg-card.rounded-xl').filter({ hasText: `#${order.order_number}` });
   await expect(card).toBeVisible();
-  await card.getByRole('button', { name: /Checkout|Take Payment/ }).click();
+  await card.getByRole('button', { name: /Confirm payment|Checkout|Take Payment/i }).click();
   await page.getByRole('button', { name: 'Split check' }).click();
   await page.getByRole('button', { name: 'Selected items' }).click();
   await selectGuestQuantity(page, 'E2E Coffee', 1);
@@ -766,7 +775,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     const order = await createThreeGuestTable(request, 'Split availability visible section');
 
     await login(page);
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     await expect(page.getByRole('button', { name: 'Split check' })).toBeEnabled();
     await expect(page.getByText('Divide items or quantities into separate bills.')).toBeVisible();
   });
@@ -793,7 +802,7 @@ test.describe('split-check availability and eligibility messaging', () => {
       await route.continue();
     });
 
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     await expect(page.getByText('Could not check split-check availability.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Check availability' })).toBeVisible();
 
@@ -820,7 +829,7 @@ test.describe('split-check availability and eligibility messaging', () => {
         body: JSON.stringify({ error: 'forbidden' }),
       }),
     );
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     await expect(
       page.getByText('This account cannot check split-check availability.'),
     ).toBeVisible();
@@ -835,7 +844,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     const order = await createThreeGuestTable(request, 'Split availability partial paid');
     await login(page);
     // Checkout generates the bill, so a payment can be recorded against it.
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     const [sourceBill] = await readOrderBills(request, order.id);
     const payment = await request.post(`${BASE}/api/bills/${sourceBill.id}/payments`, {
       headers: { ...managerHeaders, 'Idempotency-Key': `e2e-split-partial-${Date.now()}` },
@@ -847,7 +856,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     ).toBeTruthy();
 
     // Reopen the payment screen on the now-partial check.
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     await expect(page.getByRole('button', { name: 'Cash', exact: true })).toBeVisible();
     const section = page.getByTestId('split-check-section');
     await expect(section).toBeVisible();
@@ -868,7 +877,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     const order = (await created.json()).order;
 
     await login(page);
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     const section = page.getByTestId('split-check-section');
     await expect(section).toBeVisible();
     await expect(section).toContainText('Only dine-in checks can be split.');
@@ -891,7 +900,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     const order = (await created.json()).order;
 
     await login(page);
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     const section = page.getByTestId('split-check-section');
     await expect(section).toBeVisible();
     await expect(section).toContainText('At least two eligible item units are required.');
@@ -904,7 +913,7 @@ test.describe('split-check availability and eligibility messaging', () => {
   }) => {
     const order = await createThreeGuestTable(request, 'Split fresh fractional projection');
     await login(page);
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     const [sourceBill] = await readOrderBills(request, order.id);
     await page.route(`**/api/bills/${sourceBill.id}`, async (route) => {
       const response = await route.fetch();
@@ -926,7 +935,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     const order = await createThreeGuestTable(request, 'Split fresh bill stale');
 
     await login(page);
-    await openOrderCheckout(page, order.order_number);
+    await openOrderCheckout(page, order);
     await expect(page.getByRole('button', { name: 'Split check' })).toBeEnabled();
 
     // The bill gets a payment between the modal's initial eligibility read and

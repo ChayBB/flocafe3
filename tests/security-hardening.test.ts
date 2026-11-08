@@ -220,7 +220,7 @@ async function main() {
     'owner cannot create staff with weak password (vuln-0006)',
   );
   assert(
-    weakCreateRes.body.error.includes('at least 8 characters'),
+    weakCreateRes.body.error.includes('at least 4 characters'),
     'create staff returns policy error',
   );
 
@@ -411,7 +411,7 @@ async function main() {
   );
 
   // ── mobile_pairing_code protection on generic settings endpoints ─────────
-  const syntheticPairingCode = 'SYNTH-PAIR-9482';
+  const syntheticPairingCode = 'SYNTH-PAIR-ZXQ!';
   const syntheticPairingSuffix = syntheticPairingCode.slice(-4);
   db.prepare(`
     INSERT OR REPLACE INTO settings (key, value, updated_at)

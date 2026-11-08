@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, FileDown, FileText, LoaderCircle, Printer, Receipt } from 'lucide-react';
+import { Check, FileDown, FileText, LoaderCircle, Printer, QrCode, Receipt } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
@@ -21,7 +21,15 @@ import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { formatDateForTenant } from '@/lib/countries';
 import type { Category, Product, ProductVariant } from '@/lib/types';
 import { activeVariants, isVariantSoldOut } from '@/lib/product-variants';
-import { buildMenuWebPrintHtml, MenuPopupBlockedError, printMenuInBrowser, reservePrintGesture, type MenuWebPrintSection } from '@/lib/printer/menu-web-print';
+import {
+  buildHierarchicalMenuWebSections,
+  buildMenuWebPrintHtml,
+  isMenuCategoryVisible,
+  MenuPopupBlockedError,
+  printMenuInBrowser,
+  reservePrintGesture,
+  type MenuTemplate,
+} from '@/lib/printer/menu-web-print';
 
 interface Props {
   open: boolean;
@@ -34,15 +42,21 @@ interface PrintFilters {
   includeHidden: boolean;
   includeDescriptions: boolean;
   includeModifiers: boolean;
+  includePhotos: boolean;
 }
 
 /** Where the rendered menu goes: thermal roll, system print dialog, or a PDF file. */
-type PrintDestination = 'receipt' | 'paper' | 'pdf';
+type PrintDestination = 'receipt' | 'paper' | 'pdf' | 'qr';
 
-const DESTINATIONS: Array<{ id: PrintDestination; labelKey: 'printToReceipt' | 'printToPaper' | 'printToPdf'; Icon: typeof Printer }> = [
+const DESTINATIONS: Array<{
+  id: PrintDestination;
+  labelKey: 'printToReceipt' | 'printToPaper' | 'printToPdf' | null;
+  Icon: typeof Printer;
+}> = [
   { id: 'receipt', labelKey: 'printToReceipt', Icon: Receipt },
   { id: 'paper', labelKey: 'printToPaper', Icon: FileText },
   { id: 'pdf', labelKey: 'printToPdf', Icon: FileDown },
+  { id: 'qr', labelKey: null, Icon: QrCode },
 ];
 
 function isOutOfStock(product: Product): boolean {
@@ -55,6 +69,7 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
   const tPrint = useTranslations('print.menu');
   const tSettings = useTranslations('settings');
   const tPos = useTranslations('pos');
+  const tQr = useTranslations('qrMenu');
   const tenant = useAuthStore((state) => state.currentTenant);
   const formatCurrency = useFormatCurrency();
   const refreshHardwarePrinter = usePrinterStore((state) => state.refreshHardwarePrinter);
@@ -63,8 +78,10 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
   const [includeHidden, setIncludeHidden] = useState(false);
   const [includeDescriptions, setIncludeDescriptions] = useState(false);
   const [includeModifiers, setIncludeModifiers] = useState(false);
+  const [includePhotos, setIncludePhotos] = useState(false);
   const [destination, setDestination] = useState<PrintDestination | null>(null);
   const [pageSize, setPageSize] = useState<'A4' | 'Letter'>('A4');
+  const [template, setTemplate] = useState<MenuTemplate>('standard');
   const [paperWidth, setPaperWidth] = useState<58 | 80>(58);
   const [printers, setPrinters] = useState<HardwarePrinter[]>([]);
   const [selectedPrinterId, setSelectedPrinterId] = useState('');
@@ -76,16 +93,18 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
     if (!open) return;
     let cancelled = false;
     void refreshHardwarePrinter();
-    api.get('/printers')
+    api
+      .get('/printers')
       .then((res) => {
         if (cancelled) return;
         const list = (res.data?.printers || []) as HardwarePrinter[];
         setPrinters(list);
         setSelectedPrinterId((current) => {
           if (current && list.some((printer) => printer.id === current)) return current;
-          const preferred = list.find((printer) => printer.is_default === 1)
-            ?? list.find((printer) => printer.connection_type !== 'webusb')
-            ?? list[0];
+          const preferred =
+            list.find((printer) => printer.is_default === 1) ??
+            list.find((printer) => printer.connection_type !== 'webusb') ??
+            list[0];
           return preferred ? preferred.id : '';
         });
       })
@@ -94,7 +113,9 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
         setPrinters([]);
         setSelectedPrinterId('');
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, refreshHardwarePrinter]);
 
   const setDialogOpen = (nextOpen: boolean) => {
@@ -104,12 +125,20 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
       setIncludeHidden(false);
       setIncludeDescriptions(false);
       setIncludeModifiers(false);
+      setIncludePhotos(false);
       setDestination(null);
     }
     onOpenChange(nextOpen);
   };
 
-  const filters: PrintFilters = { includeInactive, includeOutOfStock, includeHidden, includeDescriptions, includeModifiers };
+  const filters: PrintFilters = {
+    includeInactive,
+    includeOutOfStock,
+    includeHidden,
+    includeDescriptions,
+    includeModifiers,
+    includePhotos,
+  };
 
   /** Renders the selected catalog into the standalone print HTML both paper
    *  printing and PDF export share. */
@@ -120,14 +149,16 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
     ]);
     const products = (productResponse.data.products || []) as Product[];
     const categories = (categoryResponse.data.categories || []) as Category[];
-    const categoryById = new Map(categories.map((category) => [category.id, category]));
+    const categoryById = new Map(categories.map((category) => [String(category.id), category]));
     // A product with active variants prints one row per variant at the
     // variant's own price; the parent's unsellable price never reaches paper.
     // A product without active variants keeps its single parent row.
     const included = products
-      .filter((product) =>
-        (selectedFilters.includeInactive || product.is_active)
-        && (selectedFilters.includeHidden || !product.category_id || categoryById.get(product.category_id)?.is_active === true))
+      .filter(
+        (product) =>
+          (selectedFilters.includeInactive || product.is_active) &&
+          isMenuCategoryVisible(categoryById, product.category_id, selectedFilters.includeHidden),
+      )
       .flatMap((product) => {
         const variants = activeVariants(product.variants);
         if (variants.length === 0) {
@@ -137,27 +168,59 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
           .filter((variant) => selectedFilters.includeOutOfStock || !isVariantSoldOut(variant))
           .map((variant) => ({ product, variant }));
       });
-    const toPrintProduct = ({ product, variant }: { product: Product; variant?: ProductVariant }) => ({
+    const toPrintProduct = ({
+      product,
+      variant,
+    }: {
+      product: Product;
+      variant?: ProductVariant;
+    }) => ({
       name: variant ? `${product.name} (${variant.name})` : product.name,
       price: formatCurrency(Number(variant ? variant.price : product.price)),
       details: [
-        ...(selectedFilters.includeDescriptions && product.description ? [product.description] : []),
-        ...(selectedFilters.includeModifiers ? (product.addon_groups || []).map((group) =>
-          `${group.name}: ${(group.addons || []).filter((addon) => addon.is_active).map((addon) => `${addon.name} (${formatCurrency(Number(addon.price))})`).join(', ')}`) : []),
+        ...(selectedFilters.includeDescriptions && product.description
+          ? [product.description]
+          : []),
+        ...(selectedFilters.includeModifiers
+          ? (product.addon_groups || []).map(
+              (group) =>
+                `${group.name}: ${(group.addons || [])
+                  .filter((addon) => addon.is_active)
+                  .map((addon) => `${addon.name} (${formatCurrency(Number(addon.price))})`)
+                  .join(', ')}`,
+            )
+          : []),
       ],
+      imageUrl: null as string | null,
     });
-    const sections: MenuWebPrintSection[] = categories
-      .map((category) => ({
-        name: category.name,
-        products: included
-          .filter((row) => row.product.category_id === category.id)
-          .map(toPrintProduct),
-      }))
-      .filter((section) => section.products.length > 0);
-    const uncategorized = included
-      .filter((row) => !row.product.category_id || !categoryById.has(row.product.category_id))
-      .map(toPrintProduct);
-    if (uncategorized.length > 0) sections.push({ name: null, products: uncategorized });
+    const photos = new Map<string, string>();
+    if (selectedFilters.includePhotos) {
+      await Promise.all(
+        [
+          ...new Set(
+            included.filter(({ product }) => product.has_image).map(({ product }) => product.id),
+          ),
+        ].map(async (id) => {
+          try {
+            const response = await api.get(`/products/${encodeURIComponent(id)}/image`, {
+              responseType: 'arraybuffer',
+            });
+            const bytes = new Uint8Array(response.data as ArrayBuffer);
+            let binary = '';
+            for (let offset = 0; offset < bytes.length; offset += 8192)
+              binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+            photos.set(
+              id,
+              `data:${String(response.headers['content-type'] || 'image/png')};base64,${btoa(binary)}`,
+            );
+          } catch {}
+        }),
+      );
+    }
+    const sections = buildHierarchicalMenuWebSections(categories, included, (row) => ({
+      ...toPrintProduct(row),
+      imageUrl: photos.get(row.product.id) || null,
+    }));
     const itemCount = sections.reduce((total, section) => total + section.products.length, 0);
     if (itemCount === 0) {
       toast.error(t('noProductsToPrint'));
@@ -183,27 +246,39 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
       menuTitle: tPrint('title'),
       totalItemsLabel: tPrint('totalItems'),
       pageSize,
+      template,
+      customerFacing: destination === 'qr',
     });
   };
 
   /** System print dialog: the browser path used by paper output and by the
    *  browser fallback when no thermal transport is available. */
-  const printOnPaper = async (selectedFilters: PrintFilters, targetWindow?: Window | null): Promise<boolean> => {
+  const printOnPaper = async (
+    selectedFilters: PrintFilters,
+    targetWindow?: Window | null,
+    onPopupHandedOff?: () => void,
+  ): Promise<boolean> => {
     const html = await buildMenuHtml(selectedFilters);
     if (html === null) return false;
-    printMenuInBrowser(html, targetWindow);
+    if (!printMenuInBrowser(html, targetWindow)) return false;
+    onPopupHandedOff?.();
     toast.success(t('menuPrintedSuccess'));
     return true;
   };
 
   /** PDF export. Electron renders the HTML offscreen and asks where to save;
    *  a plain browser falls back to the print dialog's "Save as PDF". */
-  const savePdf = async (selectedFilters: PrintFilters, targetWindow?: Window | null): Promise<boolean> => {
+  const savePdf = async (
+    selectedFilters: PrintFilters,
+    targetWindow?: Window | null,
+    onPopupHandedOff?: () => void,
+  ): Promise<boolean> => {
     const html = await buildMenuHtml(selectedFilters);
     if (html === null) return false;
     const saveHtmlAsPdf = window.electronAPI?.saveHtmlAsPdf;
     if (!saveHtmlAsPdf) {
-      printMenuInBrowser(html, targetWindow);
+      if (!printMenuInBrowser(html, targetWindow)) return false;
+      onPopupHandedOff?.();
       toast.success(tCommon('done'));
       return true;
     }
@@ -220,7 +295,10 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
 
   /** Sends ESC/POS to the chosen receipt printer; WebUSB printers receive the
    *  encoded bytes over the browser transport instead. */
-  const printToReceipt = async (selectedFilters: PrintFilters, targetWindow?: Window | null): Promise<boolean> => {
+  const printToReceipt = async (
+    selectedFilters: PrintFilters,
+    targetWindow?: Window | null,
+  ): Promise<boolean> => {
     const response = await api.post('/printers/print-menu', {
       ...selectedFilters,
       ...(selectedPrinterId ? { printerId: selectedPrinterId } : {}),
@@ -228,7 +306,12 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
     });
     if (response.data.webusb === true) {
       const bytes = response.data.bytes;
-      if (!Array.isArray(bytes) || !bytes.every((byte: unknown) => Number.isInteger(byte) && Number(byte) >= 0 && Number(byte) <= 255)) {
+      if (
+        !Array.isArray(bytes) ||
+        !bytes.every(
+          (byte: unknown) => Number.isInteger(byte) && Number(byte) >= 0 && Number(byte) <= 255,
+        )
+      ) {
         throw new Error('Invalid printer data');
       }
       if (!printerService.isConnected) await printerService.tryReconnect();
@@ -244,22 +327,47 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
     if (printing || !destination) return;
     setPrinting(true);
 
-    if (destination === 'paper' || destination === 'pdf') {
-      const reservedWindow = window.electronAPI ? undefined : reservePrintGesture();
+    if (destination === 'qr') {
       try {
-        const printed = destination === 'paper'
-          ? await printOnPaper(filters, reservedWindow)
-          : await savePdf(filters, reservedWindow);
+        const html = await buildMenuHtml(filters);
+        if (html === null) return;
+        await api.post('/settings/google-drive/qr-menu/generate', {
+          html,
+          pageSize,
+          preferences: { template, pageSize, ...filters },
+        });
+        toast.success(tQr('published'));
+        setDialogOpen(false);
+      } catch {
+        toast.error(tQr('publishFailed'));
+      } finally {
+        setPrinting(false);
+      }
+      return;
+    }
+
+    if (destination === 'paper' || destination === 'pdf') {
+      const reservedWindow = reservePrintGesture() ?? (window.electronAPI ? undefined : null);
+      let handedOffToBrowser = false;
+      const markHandedOff = () => {
+        handedOffToBrowser = true;
+      };
+      try {
+        const printed =
+          destination === 'paper'
+            ? await printOnPaper(filters, reservedWindow, markHandedOff)
+            : await savePdf(filters, reservedWindow, markHandedOff);
         if (printed) {
-          if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
           setDialogOpen(false);
-        } else if (reservedWindow && !reservedWindow.closed) {
-          reservedWindow.close();
         }
       } catch (error) {
-        if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
-        toast.error(error instanceof MenuPopupBlockedError ? t('menuPopupBlocked') : t('menuPrintFailed'));
+        toast.error(
+          error instanceof MenuPopupBlockedError ? t('menuPopupBlocked') : t('menuPrintFailed'),
+        );
       } finally {
+        if (!handedOffToBrowser && reservedWindow && !reservedWindow.closed) {
+          reservedWindow.close();
+        }
         setPrinting(false);
       }
       return;
@@ -267,7 +375,11 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
 
     // Preserve the user gesture for browsers that block asynchronous popups:
     // a failed thermal print falls back to the system print dialog.
-    const reservedWindow = window.electronAPI ? undefined : reservePrintGesture();
+    const reservedWindow = reservePrintGesture() ?? (window.electronAPI ? undefined : null);
+    let handedOffToBrowser = false;
+    const markHandedOff = () => {
+      handedOffToBrowser = true;
+    };
     try {
       await printToReceipt(filters, reservedWindow);
       setDialogOpen(false);
@@ -278,28 +390,33 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
       const status = failure.response?.status;
       const code = failure.response?.data?.code;
       if (code === 'no_products_to_print') {
-        if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
         toast.error(t('noProductsToPrint'));
       } else if (status === 401 || status === 403) {
-        if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
         toast.error(t('menuPrintFailed'));
-      } else if (code === 'printer_not_configured' || status === 502 || (status !== undefined && status >= 500) || status === undefined) {
+      } else if (
+        code === 'printer_not_configured' ||
+        status === 502 ||
+        (status !== undefined && status >= 500) ||
+        status === undefined
+      ) {
         try {
-          if (await printOnPaper(filters, reservedWindow)) {
-            if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
+          if (await printOnPaper(filters, reservedWindow, markHandedOff)) {
             setDialogOpen(false);
-          } else if (reservedWindow && !reservedWindow.closed) {
-            reservedWindow.close();
           }
         } catch (popupError) {
-          if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
-          toast.error(popupError instanceof MenuPopupBlockedError ? t('menuPopupBlocked') : t('menuPrintFailed'));
+          toast.error(
+            popupError instanceof MenuPopupBlockedError
+              ? t('menuPopupBlocked')
+              : t('menuPrintFailed'),
+          );
         }
       } else {
-        if (reservedWindow && !reservedWindow.closed) reservedWindow.close();
         toast.error(t('menuPrintFailed'));
       }
     } finally {
+      if (!handedOffToBrowser && reservedWindow && !reservedWindow.closed) {
+        reservedWindow.close();
+      }
       setPrinting(false);
     }
   };
@@ -315,20 +432,25 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
       className="touch-target flex min-h-12 w-full items-center justify-between gap-6 px-4 text-start text-sm font-medium transition-colors hover:bg-muted disabled:opacity-50"
     >
       <span className="min-w-0 flex-1">{label}</span>
-      <span className={`flex size-6 shrink-0 items-center justify-center rounded border ${checked ? 'border-brand bg-brand text-white' : 'border-input bg-background'}`}>
+      <span
+        className={`flex size-6 shrink-0 items-center justify-center rounded border ${checked ? 'border-brand bg-brand text-white' : 'border-input bg-background'}`}
+      >
         {checked && <Check size={16} aria-hidden="true" />}
       </span>
     </button>
   );
 
-  const usesPaper = destination === 'paper' || destination === 'pdf';
+  const usesPaper = destination === 'paper' || destination === 'pdf' || destination === 'qr';
   // A missing picker is not a dead end: the receipt path still asks the
   // backend, which falls back to the configured default printer and, when
   // there is none, into the system print dialog.
   const noListedPrinter = destination === 'receipt' && printers.length === 0;
-  const primaryIcon = destination === 'pdf'
-    ? <FileDown className="me-2" size={16} aria-hidden="true" />
-    : <Printer className="me-2" size={16} aria-hidden="true" />;
+  const primaryIcon =
+    destination === 'pdf' ? (
+      <FileDown className="me-2" size={16} aria-hidden="true" />
+    ) : (
+      <Printer className="me-2" size={16} aria-hidden="true" />
+    );
 
   return (
     <Dialog open={open} onOpenChange={setDialogOpen}>
@@ -342,8 +464,14 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
 
         <div className="max-h-[60vh] space-y-5 overflow-y-auto pe-1">
           <div className="space-y-3 rounded-lg border border-border p-4">
-            <span className="block text-sm font-medium text-foreground">{t('printDestination')}</span>
-            <div role="radiogroup" aria-label={t('printDestination')} className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <span className="block text-sm font-medium text-foreground">
+              {t('printDestination')}
+            </span>
+            <div
+              role="radiogroup"
+              aria-label={t('printDestination')}
+              className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+            >
               {DESTINATIONS.map(({ id, labelKey, Icon }) => (
                 <button
                   key={id}
@@ -351,7 +479,14 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
                   role="radio"
                   aria-checked={destination === id}
                   disabled={printing}
-                  onClick={() => setDestination(id)}
+                  onClick={() => {
+                    setDestination(id);
+                    if (id === 'qr' && template === 'standard') {
+                      setTemplate('mobile-cafe');
+                      setIncludeDescriptions(true);
+                      setIncludeModifiers(true);
+                    }
+                  }}
                   className={`touch-target flex min-h-16 flex-col items-center justify-center gap-1 rounded-lg border px-3 text-center text-xs font-medium transition-colors disabled:opacity-50 ${
                     destination === id
                       ? 'border-brand bg-brand/10 text-brand'
@@ -359,25 +494,41 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
                   }`}
                 >
                   <Icon size={18} aria-hidden="true" />
-                  {t(labelKey)}
+                  {labelKey ? t(labelKey) : tQr('publishMenu')}
                 </button>
               ))}
             </div>
 
             {usesPaper ? (
-              <label className="flex items-center justify-between gap-4 text-sm">
-                <span>{tSettings('paperSize')}</span>
-                <select
-                  aria-label={tSettings('paperSize')}
-                  value={pageSize}
-                  disabled={printing}
-                  onChange={(event) => setPageSize(event.target.value as 'A4' | 'Letter')}
-                  className="min-h-11 rounded-md border border-input bg-background px-3"
-                >
-                  <option value="A4">A4</option>
-                  <option value="Letter">Letter</option>
-                </select>
-              </label>
+              <div className="space-y-3">
+                <label className="flex items-center justify-between gap-4 text-sm">
+                  <span>{tSettings('paperSize')}</span>
+                  <select
+                    aria-label={tSettings('paperSize')}
+                    value={pageSize}
+                    disabled={printing}
+                    onChange={(event) => setPageSize(event.target.value as 'A4' | 'Letter')}
+                    className="min-h-11 rounded-md border border-input bg-background px-3"
+                  >
+                    <option value="A4">A4</option>
+                    <option value="Letter">Letter</option>
+                  </select>
+                </label>
+                <label className="flex items-center justify-between gap-4 text-sm">
+                  <span>{tQr('template')}</span>
+                  <select
+                    aria-label={tQr('template')}
+                    value={template}
+                    disabled={printing}
+                    onChange={(event) => setTemplate(event.target.value as MenuTemplate)}
+                    className="min-h-11 rounded-md border border-input bg-background px-3"
+                  >
+                    <option value="mobile-cafe">{tQr('mobileCafe')}</option>
+                    <option value="classic-bistro">{tQr('classicBistro')}</option>
+                    <option value="standard">{tQr('standard')}</option>
+                  </select>
+                </label>
+              </div>
             ) : destination === 'receipt' ? (
               <>
                 <label className="flex items-center justify-between gap-4 text-sm">
@@ -390,7 +541,9 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
                     className="min-h-11 max-w-[60%] rounded-md border border-input bg-background px-3"
                   >
                     {printers.map((printer) => (
-                      <option key={printer.id} value={printer.id}>{printer.name}</option>
+                      <option key={printer.id} value={printer.id}>
+                        {printer.name}
+                      </option>
                     ))}
                   </select>
                 </label>
@@ -420,16 +573,30 @@ export default function PrintMenuModal({ open, onOpenChange }: Props) {
             {filterRow(t('includeHiddenItems'), includeHidden, setIncludeHidden)}
             {filterRow(t('includeDescriptions'), includeDescriptions, setIncludeDescriptions)}
             {filterRow(t('includeModifiers'), includeModifiers, setIncludeModifiers)}
+            {usesPaper && filterRow(tQr('includePhotos'), includePhotos, setIncludePhotos)}
           </div>
         </div>
 
         <DialogFooter className="flex-row justify-end">
-          <Button variant="outline" className="min-h-11" disabled={printing} onClick={() => setDialogOpen(false)}>
+          <Button
+            variant="outline"
+            className="min-h-11"
+            disabled={printing}
+            onClick={() => setDialogOpen(false)}
+          >
             {tCommon('cancel')}
           </Button>
           <Button className="min-h-11" disabled={printing || !destination} onClick={handlePrint}>
-            {printing ? <LoaderCircle className="me-2 animate-spin" size={16} aria-hidden="true" /> : primaryIcon}
-            {destination === 'pdf' ? t('printToPdf') : t('printMenu')}
+            {printing ? (
+              <LoaderCircle className="me-2 animate-spin" size={16} aria-hidden="true" />
+            ) : (
+              primaryIcon
+            )}
+            {destination === 'pdf'
+              ? t('printToPdf')
+              : destination === 'qr'
+                ? tQr('publishMenu')
+                : t('printMenu')}
           </Button>
         </DialogFooter>
       </DialogContent>

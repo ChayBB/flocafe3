@@ -8,6 +8,33 @@ inventory, not the rationale.
 All outbound work is either an outbox flush or a best-effort background task. Nothing on this page
 sits on a path between an order and a paid bill.
 
+## Offline mode
+
+The owner can switch every optional outbound connection off with the `offline_mode` setting
+(`PUT /api/settings/offline-mode`, permission `offline-mode.manage`, Settings → Privacy). It is off
+by default and is restore-protected across database restore and import.
+`main/services/offline-mode.ts` exposes `isOfflineMode()`, which is also true when
+`FLO_MATRIX_OFFLINE` is `1`, and `getOfflineModeAbortSignal()`, which aborts when Offline mode turns
+on. While it is on:
+
+- FloAdmin cloud sync starts no timers (including auto-registration retries) and `trackedFetch`
+  refuses or aborts every request; turning the mode off reloads sync and refreshes registration.
+- Google Drive scheduled backups do not run, and connecting, listing, backing up and restoring fail
+  with the `offline` error code, and in-flight Drive work is cancelled. Disconnecting retains the
+  local tokens and records the revoke as unconfirmed, which blocks further Drive access.
+- WhatsApp closes its socket without unpairing, cancels in-flight connection and version-lookup
+  work, refuses to connect and does not start; turning the mode off reconnects it.
+- Update checks report the `offline` update state, an in-flight update check or download is
+  cancelled into the `offline` state, and the startup tax pack check and tax pack catalog and
+  artifact downloads (including in-flight requests) are refused or aborted.
+- Telemetry, diagnostics and PostHog send nothing (stopping the daily ping timer, aborting in-flight
+  telemetry, diagnostics and PostHog requests, and shutting down the PostHog client without flushing
+  queued events; turning the mode off resumes the daily telemetry timer without resending
+  `app_launch`), and web image import returns `503` (aborting in-flight fetches).
+
+The Express API, KDS and Server App stay bound to `0.0.0.0`, so devices on the local network keep
+working.
+
 ## Google Drive backup
 
 Backs up the local database to a folder in the merchant's own Google Drive, and restores from it.
@@ -32,8 +59,39 @@ with `warning_acknowledgement_required`.
 **Revoke on disconnect.** Disconnecting revokes the grant at Google rather than only deleting the
 local token.
 
+**Two-step backup and retention pruning.** Each backup separates snapshot upload from retention
+cleanup: the upload step writes the database snapshot to Google Drive and immediately stamps
+`last_backup_status` as `'success'` (`last_backup_at` and `last_success_at`), while the retention
+step (`applyRetention`) moves older automatic backups beyond `retention_count` to Google Drive
+Trash. If a transient error interrupts retention pruning, the completed snapshot upload remains
+valid (`last_backup_status` stays `'success'`) and the service records `retention_pending`
+(`retention_status = 'pending'`) so automatic background retries finish pruning older backups
+without invalidating the backup.
+
 **Offline behaviour.** Every operation fails with a `driveError` code rather than hanging. The last
 error code is persisted so the settings screen can explain the failure after a restart.
+
+## Google Drive QR menu
+
+Settings → QR Menu publishes a customer-facing PDF from the catalog or replaces it with a merchant
+PDF up to 15 MB. It uses the existing `drive.file` grant. The generated menu defaults to the
+phone-oriented Mobile-First Cafe template; Classic Bistro and Standard layouts are also available.
+
+The menu lives in a dedicated `<store>_flocafe_menu` folder marked with
+`flo_destination_kind=flocafe_menu`. The folder remains private. Only the PDF marked
+`flo_file_kind=public_menu_pdf` receives an `anyone`/`reader` permission. Backup discovery excludes
+the menu folder, and every overwrite or permission change revalidates the PDF marker, MIME type,
+installation marker, trash state, and parents before touching the stored file ID.
+
+The first publish creates a six-character menu ID and one Drive file. Later generated or uploaded
+publishes update that same file ID, including after a store-name change, so the public URL and
+printed QR codes remain stable. Pausing sharing removes the public permission without deleting the
+file; resuming restores it on the same file. Disconnect and database-restore cleanup remove the
+Drive-bound menu IDs while preserving the local generator preferences and short ID.
+
+Publishing and sharing require `catalog.manage` or `google-drive.manage`; connecting and
+disconnecting the account still require `google-drive.manage`. Offline mode fails these operations
+with `offline` and serializes them with backup and restore work.
 
 ## Anonymous telemetry
 
@@ -113,6 +171,11 @@ Every event passes through `scrubPostHogEvent` in `shared/posthog-scrub.ts`, in 
 person property it does not list is dropped. Every event carries `app_version`, `platform`,
 `run_mode`, `install_source`, `environment`, and `release_channel`; `install_ref` is added at the
 `anonymous` and `full` levels, and `store_ref` at `full` only (see **Sharing levels** below).
+`process_type` names the process that failed: `main` for the main-process handlers, `api` for a
+local API 5xx, and `renderer` for the window (`kds` and `server-app` are allowed for later use).
+`$release_id` is kept when the SDK sends one. Release builds use `--release-mode symbol-set`, so
+chunk code carries no release id and PostHog binds an exception to its release through the symbol
+set uploaded for it.
 
 **Sharing levels** (`product_analytics_level`, read by `readProductAnalyticsLevel()` in
 `main/services/posthog-identity.ts`).
@@ -165,7 +228,9 @@ a later opt-in on the same database links to the same device again.
 Only the main process sets the person, on launch and when the level, email or store settings change.
 The renderer does not call `posthog.init` until main returns the id over `get-posthog-bootstrap`;
 init disables persistence and bootstraps that id, so the SDK cannot mint another one. Main checks
-consent and the id on every send; the renderer re-reads both every 30 seconds and on focus and
+consent and the id on every send (cached for up to 30 seconds and invalidated immediately when
+`settings` or `users` rows change via `getSettingsRevision()` or `invalidatePostHogConsentCache()`);
+the renderer re-reads both every 30 seconds and on focus and
 stamps the current id on each event, so a level change takes effect without a reload. When usage
 and diagnostics were both off at load, the same check starts PostHog once either is turned on, and
 the current screen is recorded then. At `off`, renderer events move to the per-launch id and the
@@ -186,7 +251,9 @@ onto another terminal brings its seed, so both terminals share a device id.
   cloud registration also sends, or the email of the earliest `users` row when that setting is
   empty. No name is sent.
 - A usage event keeps only the properties in `POSTHOG_USAGE_PROPERTY_KEYS`; any other property is
-  dropped.
+  dropped. `slowest_query` is the one free-text field: it must be a normalized statement (string,
+  number, and double-quoted literals replaced by `?`, comments removed, white space collapsed, 400
+  characters at most), and a value that still holds a literal or a `"` is dropped.
 - `app_launch` and `feature_used` mirror the collector events. `daily_ping` runs on the
   collector's hourly check but does not depend on the collector: it is sent at most once every 24
   hours (`posthog_last_daily_ping_at`) with counts for the last 24 hours (orders by type, including
@@ -195,7 +262,14 @@ onto another terminal brings its seed, so both terminals share a device id.
   profile, service model, and business type. `first_order_created` and `first_bill_paid` are sent
   once per installation with `hours_since_setup`, read hourly from the database. A milestone older
   than the first check on this installation (`posthog_milestones_since`), such as an upgraded
-  store's first order, carries `backfilled: true`.
+  store's first order, carries `backfilled: true`. `api_slow_request` is sent for a local API
+  request that takes 200 ms or more only when the time spent in SQL (`db_ms`) is 200 ms or more, so
+  a request that is slow for another reason, such as a printer or the network, sends nothing. The
+  same route (method and route pattern) sends one event per hour per process; the requests folded
+  into that event are counted in `occurrences`. The properties are `http_method`, the route pattern
+  (`http_route`), `http_status`, `duration_ms`, `db_ms`, the statement count (`db_queries`),
+  `occurrences`, and the slowest statement (`slowest_query_ms`, `slowest_query`). Every such request
+  writes one `console.warn` line, whether or not telemetry is on.
 - The renderer sends at most one `$pageview` per screen per staff member every 30 minutes
   (`shared/posthog-screen-views.ts`); views inside the window are folded into the next pageview's
   `repeat_views`. A screen is the route path with id-like segments removed, plus `settings_tab` on
@@ -217,17 +291,28 @@ exception stays on the machine. The client itself is disabled only at `off` with
 transmission also off. `sendAnonymousDiagnosticReport` is unchanged and still requires
 both checks.
 
-| Capture point                             | Source                                                                                                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `uncaughtException`, `unhandledRejection` | Main process handlers in `main/index.ts`                                                                                                                |
-| `renderer-autocapture`                    | Unhandled errors and rejections in the main window (bundled `posthog-js` extension, always loaded; the scrubber drops them while diagnostics is off)    |
-| `react-error-boundary`                    | `reportRendererError`, called by the dashboard and global error boundaries                                                                              |
-| `api-5xx`                                 | A local API response with status 500 or higher: method, route pattern (mount prefix included, also for errors from the global handler), and status only |
+| Capture point                             | Source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `uncaughtException`, `unhandledRejection` | Main process handlers in `main/index.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `renderer-autocapture`                    | Unhandled errors and rejections in the main window (bundled `posthog-js` extension, always loaded; the scrubber drops them while diagnostics is off)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `react-error-boundary`                    | `reportRendererError`, called by the dashboard and global error boundaries                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `api-5xx`                                 | A local API response with status 500 or higher: method, route pattern (mount prefix included, also for errors from the global handler, or `<unmatched>` when no route matched), and status. The error a route caught, or the global handler saw, gives its type and its stack frames, and its chained cause gives its type and frames too; the message is always the route pattern, never the error's own text, which can name a customer. A 5xx sent without one keeps the frames of the code that sent it. Requests under `/api/settings/cloud` are never reported, because they fail for every store without a cloud subscription. A 502 or 503 from `/api/products/fetch-url` or `/api/mobile/devices` is not reported either, because those routes answer that way while offline. One exception per method, route, and status is sent per process per hour |
 
 An exception keeps its type, a redacted first line of the message, the mechanism, and stack frames
 with a project-relative file (`_next/static/...` for the packaged renderer), line, column, function
-name, and chunk id. Message redaction replaces emails, URLs, quoted text, and digit runs. Request
-params, query, body, digest, log tail, and any order or customer field are dropped. Release builds upload source maps when PostHog credentials are configured; see
+name, and chunk id. The mechanism keeps `handled`, `synthetic`, `type`, the cause indexes
+`exception_id` and `parent_id`, and a short `source`. Message redaction replaces emails, URLs,
+quoted text, and digit runs. A chained `cause` is kept, scrubbed the same way, and a rejection
+reason that is a plain string becomes the message. Renderer exceptions also carry `$pathname` and
+`$current_url` as a route pattern: no host, no query, and an all-digit segment is `:id`. An error
+captured through `capturePostHogBoundaryError` whose failure came from axios also carries
+`http_method`, `http_route`, and `http_status`, because its frames are all inside
+`node_modules/axios`; `http_route` keeps only the first path segment followed by `/*`, because a
+call can put a customer name, phone number, or search term in the next one. Errors and rejections
+that `posthog-js` autocaptures are sent without those three fields; in the renderer only that
+boundary path adds them. Request
+params, query, body, digest, log tail, and any order or customer field are dropped. Release builds
+upload source maps when PostHog credentials are configured; see
 [PostHog release builds](../maintainers/releases.md#posthog-release-builds).
 
 **Offline behaviour.** Sends are best-effort. A failed send is dropped; there is no PostHog outbox,
@@ -279,7 +364,8 @@ channel and their outbox is unaffected by diagnostics preferences.
 
 ## WhatsApp receipt delivery
 
-Sends a receipt to the customer's phone number over WhatsApp.
+Sends receipts, owner reports, and automated customer follow-ups over WhatsApp ([`main/services/whatsapp.ts`](../../main/services/whatsapp.ts),
+[`shared/whatsapp-automation.ts`](../../shared/whatsapp-automation.ts)).
 
 **Enabled by** the merchant through the WhatsApp settings route, which calls `enable()`. The module
 starts with `state.enabled` false, so nothing is connected until a merchant turns it on.
@@ -287,13 +373,109 @@ starts with `state.enabled` false, so nothing is connected until a merchant turn
 Receipt outcome is summarised on the order as `whatsapp_receipt_status`, which `GET /api/orders`
 returns per order.
 
-**Offline behaviour.** No work is started when the module is disabled, when it is in a terminal
-shutdown state, or when the request signal is aborted. Work already in flight is cancelled during
-shutdown rather than left to fail late.
+**Templates and automated rules.** `whatsapp_automation_config` in `settings` stores customizable
+templates (`receipt`, `feedback`, `loyalty_milestone`, `visit_milestone`, `winback`), six trigger
+rules, and safety settings. `renderWhatsAppTemplate()` performs single-pass `{...}` placeholder
+substitution across customer, order, loyalty, and store fields (formatting monetary amounts and
+rounding loyalty points to the tenant currency's `currencyFractionDigits`) so substituted values are
+never re-parsed as tokens. All six automated rules ship disabled (`enabled: false`):
 
-**Credential handling.** The session directory is created with mode `0o700`. The session credential
-is not encrypted at rest, which is a deliberate consequence of the library FloCafe uses for the
-WhatsApp protocol and is a reason the containing filesystem matters.
+- When a bill transitions to `paid` (through `POST /api/bills/:id/payment`,
+  `POST /api/bills/:id/payments`, or committed exact-balance auto-settlement via
+  `completeExactBalanceSettlement()`), `triggerBillPaidAutomation()` runs asynchronously in the
+  background to evaluate `after_payment`, `points_threshold`, and `nth_visit` (`nth_visit` is
+  deduplicated per order and customer across concurrent and sequential split-bill settlements).
+- While WhatsApp is enabled and connected, a 5-minute background timer (`runScheduledAutomationSweep()`,
+  also callable on demand via `POST /api/whatsapp/automation/run-sweep`) evaluates `feedback_delay`
+  (bills settled at least `delayHours` ago and within 7 days of becoming due) and `winback` (active
+  customers whose last paid visit was at least `inactiveDays` ago).
+- When a store-level day close commits (`POST /api/cash-closures` with `scope = 'day'`; never on a
+  per-staff shift close), `claimDayCloseZReportAttempt()` claims the `queued` row inside a SQLite
+  savepoint in the close transaction and `triggerDayCloseZReport()` dispatches it after commit,
+  formatting the stored day-close Z-report snapshot via `formatStoredZReportWhatsAppMessage()` (using
+  the store `language`, regional formatting, and `timezone`, bounded to 4096 characters while preserving
+  financial and drawer-reconciliation totals) rather than rendering a customer template. Configuring
+  `z_report_day_close` requires role `owner` with `reports.view` and an explicit E.164 `recipientPhone`
+  (never inferred from `business_phone`). Each day close claims at most one row in `whatsapp_messages`
+  keyed by `cash_closure_id` (`idx_whatsapp_messages_auto_z_closure`) so repeated close requests or
+  restarts cannot send duplicates, and claim/send errors are isolated so closing never rolls back. When
+  WhatsApp is disabled or explicit Offline mode is on, automatic day-close dispatch is suppressed
+  without queuing a row or triggering a delayed send on reconnection. When WhatsApp is disconnected or
+  delivery fails, the single row is recorded as `failed` without automatic retry or opening a manual
+  share window, leaving manual retry available through `POST /api/whatsapp/messages/:messageId/retry`.
+- `POST /api/whatsapp/automation/broadcast` sends a selected template to up to 50 active customers
+  matching visit, inactivity, and loyalty-point filters.
+- Automated sends record `created_by_user_id` as `rule:<trigger>` (or `rule:broadcast`), which
+  `GET /api/whatsapp/messages` exposes as `trigger_rule`. Report message kinds require
+  `reports.view` for `z_report` and both `reports.view` and `reports.daily-sales.export` for
+  `daily_sales_report` across history visibility, sending, and retry.
+
+**Safety and anti-ban controls.** Inbound non-group DMs matching opt-out keywords (`STOP`,
+`UNSUBSCRIBE`, `OPT OUT`, `OPTOUT`) automatically add the sender to `whatsapp_blocklist` when
+`autoOptOutEnabled` is on. Customer-campaign automated sends check store-timezone quiet hours
+(`quietHoursEnabled`, `quietHoursStart` to `quietHoursEnd`) and a per-customer 7-day automated message
+cap (`maxPerCustomerPerWeek`), returning `quiet_hours` or `weekly_cap` when blocked; owner report sends
+(`z_report` and `daily_sales_report`, manual or `z_report_day_close`) bypass quiet hours and weekly
+customer caps and do not consume customer caps. Outbound sends to the
+same recipient are serialized through `sendLocks` (`sendMessageWithLock()`), keeping the lock tail
+chained onto the active send even when a waiting request cancels or aborts. All outbound sends enforce
+disabled WhatsApp (`whatsapp_enabled`), Offline mode, `MAX_BODY_CHARS` (4096 characters on report
+kinds `z_report` and `daily_sales_report`), transport
+cooldown (`isInCooldown()`), the blocklist, a per-recipient hourly cap (`RATE_LIMIT_MAX_PER_HOUR`,
+plus `RATE_LIMIT_MIN_GAP_MS` spacing on manual and report sends), a 10-minute duplicate-body filter,
+simulated typing delay, and a content filter that rejects non-HTTPS URLs and URL shorteners.
+
+**ACK timeout, late ACKs, and retry.** Outbound messages remain in `typing` (refreshing `typing_at` when
+`socket.sendMessage` completes) until a Baileys `messages.update` server ACK (`status = 2/3/4`) arrives,
+and every submitted attempt's external ID is persisted in `whatsapp_message_attempts`
+(`recordMessageAttemptExternalId()`). `sweepAckTimeouts()` runs every 60 seconds
+(`ACK_SWEEP_INTERVAL_MS`) while connected, on socket open, during scheduled automation sweeps, and on
+startup (`initFromDb()`) to mark non-in-flight outbound rows still in `queued`, `seen`, or `typing` past
+`ACK_TIMEOUT_MS` (5 minutes, or any unfinished pre-restart or unsubmitted rows on startup) as `failed`
+with `error = 'ack_timeout'`. If a late ACK arrives after a row was marked `failed`, `advanceStatus()`
+resolves the row by `external_message_id` or `whatsapp_message_attempts` (across retries and service
+restarts), promotes it to `sent`, `delivered`, or `read`, clears `error` and `failed_at`, backfills
+earlier timestamps via `COALESCE`, and ignores out-of-order lower-rank updates.
+`POST /api/whatsapp/messages/:messageId/retry` (`retryMessage()`) coalesces concurrent retry requests and
+atomically re-queues a `failed` row in place without creating duplicate rows, enforcing Offline mode
+(`offline_mode`), `RATE_LIMIT_MIN_GAP_MS`, and all safety controls while excluding the retried row from
+self-blocking in the 1-hour message count (`RATE_LIMIT_MAX_PER_HOUR`), weekly-cap, and duplicate-body
+checks.
+
+**Offline behaviour.** No work is started when the module is disabled, when Offline mode is on, when
+it is in a terminal shutdown state, or when the request signal is aborted. Work already in flight is
+cancelled when Offline mode turns on or during shutdown rather than left to fail late.
+
+**Credential handling and session lifecycle.** Session files live under
+`path.join(app.getPath('userData'), 'whatsapp-auth')`, created with mode `0o700`. On macOS DMG and ZIP
+builds this resolves to `~/Library/Application Support/Flo Cafe/whatsapp-auth`; on Mac App Store
+sandbox builds (`com.flo.desktop`) it resolves inside the app container at
+`~/Library/Containers/com.flo.desktop/Data/Library/Application Support/Flo Cafe/whatsapp-auth`. The
+session credential is not encrypted at rest, which is a consequence of the protocol library FloCafe
+uses and a reason the containing filesystem matters:
+
+- **Pairing and restart sequence (`515`).** Credential writes queued from an active socket's
+  `creds.update` are serialized through `credentialWriteTail` (surviving a same-tick `515` socket
+  replacement or shutdown unless disabled or invalidated by an auth wipe), and `startSocket()` awaits
+  both `authCleanupPromise` and `credentialWriteTail` before calling `useMultiFileAuthState()`. When
+  WhatsApp completes pairing with status `515` (`restartRequired`), the service reconnects immediately
+  without surfacing a disconnect error banner.
+- **Unpaired timeout (`408`), pairing-code fallback, and non-destructive cancel.** If an unpaired QR
+  or pairing-code attempt closes with `408` (`timedOut`), the service returns to `disconnected` so
+  the merchant can request a fresh code on demand. `connectWithPairingCode()` validates socket
+  identity and cancellation before publishing a pairing code and restores QR mode if code generation
+  fails while the socket remains open. Cancelling an in-progress pairing attempt via
+  `cancelPairing()` (`POST /api/whatsapp/cancel-pairing`) closes the pairing socket without calling
+  `logout()` or wiping `whatsapp-auth/`.
+- **Transient disconnect and sleep/wake recovery.** When a paired session drops for a non-`401`
+  reason, the service enters `connecting` with `lastErrorReason: 'reconnecting'` and retries after
+  `RECONNECT_DELAY_MS`. On system resume (`powerMonitor.on('resume')` -> `handleSystemResume()`), the
+  service reconnects immediately if the socket is absent or stale, and runs a bounded presence probe
+  on an open socket to replace half-open connections left behind by macOS sleep.
+- **Remote device unlink (`401`).** When WhatsApp closes the session with `401` (`loggedOut`), the
+  service clears timers, sets `state: 'disconnected'` and `lastErrorReason: 'logged_out'`, clears
+  `whatsapp_connected_phone`, and wipes `whatsapp-auth/` via `scheduleAuthWipe()` so the next
+  connection attempt starts a clean pairing flow.
 
 ## FloAdmin cloud sync
 
@@ -509,6 +691,7 @@ For support-ticket correlation, see
 ## Verification
 
 ```sh
+npm run test:offline-mode
 npm run test:google-drive
 npm run test:telemetry
 npm run test:support-ticket

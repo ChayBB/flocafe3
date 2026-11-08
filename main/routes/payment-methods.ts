@@ -149,20 +149,17 @@ router.post('/', requirePermission('payment-methods.manage'), (req: Request, res
       )
       .run(name, Number(max.n) + 10, now(), now());
     void sendEvent('feature_used', { feature: 'custom_payment_methods', action: 'added' });
-    res
-      .status(201)
-      .json({
-        payment_method: list(true).find((row) => row.id === Number(result.lastInsertRowid)),
-      });
+    res.status(201).json({
+      payment_method: list(true).find((row) => row.id === Number(result.lastInsertRowid)),
+    });
   } catch (error: any) {
+    res.locals.postHogError = error;
     const duplicate = String(error.message || '').includes('UNIQUE constraint');
-    res
-      .status(duplicate ? 409 : error.statusCode || 500)
-      .json({
-        error: duplicate
-          ? 'A payment method with this name already exists'
-          : error.message || 'Unable to add payment method',
-      });
+    res.status(duplicate ? 409 : error.statusCode || 500).json({
+      error: duplicate
+        ? 'A payment method with this name already exists'
+        : error.message || 'Unable to add payment method',
+    });
   }
 });
 
@@ -189,14 +186,13 @@ router.put('/:id', requirePermission('payment-methods.manage'), (req: Request, r
       });
     res.json({ payment_method: list(true).find((row) => row.id === id) });
   } catch (error: any) {
+    res.locals.postHogError = error;
     const duplicate = String(error.message || '').includes('UNIQUE constraint');
-    res
-      .status(duplicate ? 409 : error.statusCode || 500)
-      .json({
-        error: duplicate
-          ? 'A payment method with this name already exists'
-          : error.message || 'Unable to update payment method',
-      });
+    res.status(duplicate ? 409 : error.statusCode || 500).json({
+      error: duplicate
+        ? 'A payment method with this name already exists'
+        : error.message || 'Unable to update payment method',
+    });
   }
 });
 
@@ -210,11 +206,9 @@ router.delete(
       return res.status(404).json({ error: 'Payment method not found' });
     const used = countUsage(id);
     if (used)
-      return res
-        .status(409)
-        .json({
-          error: `This method has ${used} recorded payment${used === 1 ? '' : 's'}. Disable or merge it instead.`,
-        });
+      return res.status(409).json({
+        error: `This method has ${used} recorded payment${used === 1 ? '' : 's'}. Disable or merge it instead.`,
+      });
     db.prepare('DELETE FROM payment_methods WHERE id = ?').run(id);
     res.json({ success: true });
   },
@@ -300,6 +294,112 @@ router.post(
       res.json({ merge: result, payment_methods: list(true) });
       void sendEvent('feature_used', { feature: 'custom_payment_methods', action: 'merged' });
     } catch (error: any) {
+      res
+        .status(error.statusCode || 500)
+        .json({ error: error.message || 'Unable to merge payment methods' });
+    }
+  },
+);
+
+router.delete(
+  '/:id',
+  requirePermission('payment-methods.manage'),
+  (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    const db = getDatabase();
+    if (!db.prepare('SELECT 1 FROM payment_methods WHERE id = ?').get(id))
+      return res.status(404).json({ error: 'Payment method not found' });
+    const used = countUsage(id);
+    if (used)
+      return res.status(409).json({
+        error: `This method has ${used} recorded payment${used === 1 ? '' : 's'}. Disable or merge it instead.`,
+      });
+    db.prepare('DELETE FROM payment_methods WHERE id = ?').run(id);
+    res.json({ success: true });
+  },
+);
+
+router.post(
+  '/:id/merge',
+  requirePermission('payment-methods.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const sourceId = Number(req.params.id);
+      const targetType = req.body?.target_type === 'card' ? 'card' : 'custom';
+      const targetId = targetType === 'custom' ? Number(req.body?.target_id) : null;
+      if (
+        !Number.isSafeInteger(sourceId) ||
+        (targetType === 'custom' && (!Number.isSafeInteger(targetId) || sourceId === targetId))
+      ) {
+        return res.status(400).json({ error: 'Choose a different merge target' });
+      }
+      const result = withTxn(() => {
+        const db = getDatabase();
+        const source = db
+          .prepare('SELECT * FROM payment_methods WHERE id = ?')
+          .get(sourceId) as any;
+        const target =
+          targetType === 'card'
+            ? null
+            : (db.prepare('SELECT * FROM payment_methods WHERE id = ?').get(targetId) as any);
+        if (!source || (targetType === 'custom' && !target))
+          throw Object.assign(new Error('Payment method not found'), { statusCode: 404 });
+        const targetName = targetType === 'card' ? 'Card' : target.name;
+        const rows = db
+          .prepare('SELECT id, payment_details FROM bills WHERE payment_details IS NOT NULL')
+          .all() as any[];
+        const update = db.prepare(
+          'UPDATE bills SET payment_details = ?, updated_at = ? WHERE id = ?',
+        );
+        let affected = 0;
+        for (const row of rows) {
+          let parsed: any;
+          try {
+            parsed = JSON.parse(row.payment_details);
+          } catch {
+            continue;
+          }
+          const lines = Array.isArray(parsed) ? parsed : [parsed];
+          let changed = false;
+          for (const line of lines) {
+            if (Number(line?.payment_method_id) !== sourceId) continue;
+            line.method = targetName;
+            if (targetType === 'card') delete line.payment_method_id;
+            else line.payment_method_id = targetId;
+            affected++;
+            changed = true;
+          }
+          if (changed)
+            update.run(JSON.stringify(Array.isArray(parsed) ? lines : lines[0]), now(), row.id);
+        }
+        const sourceKey = `custom:${sourceId}`;
+        const targetKey = targetType === 'card' ? 'card' : `custom:${targetId}`;
+        const collision = db
+          .prepare(
+            `SELECT 1 FROM payment_transaction_refs s JOIN payment_transaction_refs t ON t.method = ? AND t.transaction_id = s.transaction_id WHERE s.method = ? LIMIT 1`,
+          )
+          .get(targetKey, sourceKey);
+        if (collision)
+          throw Object.assign(
+            new Error(
+              'The methods contain the same transaction reference and cannot be merged automatically',
+            ),
+            { statusCode: 409 },
+          );
+        db.prepare('UPDATE payment_transaction_refs SET method = ? WHERE method = ?').run(
+          targetKey,
+          sourceKey,
+        );
+        db.prepare(
+          'INSERT INTO payment_method_merges (source_name, target_name, affected_payments, merged_at) VALUES (?, ?, ?, ?)',
+        ).run(source.name, targetName, affected, now());
+        db.prepare('DELETE FROM payment_methods WHERE id = ?').run(sourceId);
+        return { source_name: source.name, target_name: targetName, affected_payments: affected };
+      });
+      res.json({ merge: result, payment_methods: list(true) });
+      void sendEvent('feature_used', { feature: 'custom_payment_methods', action: 'merged' });
+    } catch (error: any) {
+      res.locals.postHogError = error;
       res
         .status(error.statusCode || 500)
         .json({ error: error.message || 'Unable to merge payment methods' });

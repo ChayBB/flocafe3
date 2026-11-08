@@ -1194,8 +1194,8 @@ function requireExpectedCurrency(value: unknown, expected: string): void {
 }
 
 /** Cash entries move real drawer money, so they need a real open session. */
-function requireOpenSessionForCashEntry(db: ExpenseDb): CashSessionRow {
-  const session = getOpenSession(db);
+function requireOpenSessionForCashEntry(db: ExpenseDb, actorUserId?: string): CashSessionRow {
+  const session = getOpenSession(db, actorUserId);
   if (!session) {
     throw conflict(
       'No open cash session: open a shift before moving drawer money for an expense',
@@ -1280,7 +1280,7 @@ export function recordExpensePayment(
         const businessDate = currentBusinessDate();
         let cashMovementId: number | null = null;
         if (method === 'cash') {
-          const session = requireOpenSessionForCashEntry(db);
+          const session = requireOpenSessionForCashEntry(db, input.actorUserId);
           cashMovementId = insertCashDrawerMovement(db, {
             businessDate,
             movementType: 'pay_out',
@@ -1354,7 +1354,7 @@ export function reverseExpensePayment(
         const businessDate = currentBusinessDate();
         let cashMovementId: number | null = null;
         if (payment.method === 'cash') {
-          const session = requireOpenSessionForCashEntry(db);
+          const session = requireOpenSessionForCashEntry(db, input.actorUserId);
           cashMovementId = insertCashDrawerMovement(db, {
             businessDate,
             movementType: 'pay_in',
@@ -1402,10 +1402,10 @@ export interface ExpenseContext {
 }
 
 /** Entry defaults for the expense surfaces: store currency, store business date, drawer state. */
-export function getExpenseContext(db: ExpenseDb): ExpenseContext {
+export function getExpenseContext(db: ExpenseDb, actorUserId?: string): ExpenseContext {
   return {
     currency_code: tenantRegionalSnapshot().currency,
     business_date: currentBusinessDate(),
-    cash_session_open: getOpenSession(db) !== undefined,
+    cash_session_open: getOpenSession(db, actorUserId) !== undefined,
   };
 }

@@ -54,6 +54,10 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
   // List is the default view — switch to the floor plan second view first.
   await page.getByRole('button', { name: 'Floor plan' }).click();
+  await page
+    .getByTestId('floorplan-floor-tabs')
+    .getByRole('button', { name: /^Ground(?:\s|$)/ })
+    .click();
 }
 
 test('floorplan service actions open from an unplaced table by keyboard', async ({ page }) => {
@@ -254,7 +258,7 @@ test('floorplan editor: quick-add suggests the next number and active floor', as
   const form = page.getByTestId('floorplan-table-form');
   await expect(form).toBeVisible();
 
-  const name = await page.getByLabel('Name').inputValue();
+  const name = await form.getByRole('textbox', { name: 'Name', exact: true }).inputValue();
   expect(name).toMatch(/^\d+$/);
   await expect(form.getByLabel('Floor')).toHaveValue('Ground');
 
@@ -400,5 +404,5 @@ test('list view: Add Table keeps the selected floor', async ({ page }) => {
   await page.getByRole('button', { name: 'Add Table', exact: true }).click();
 
   const form = page.locator('form').filter({ hasText: 'Floor' });
-  await expect(form.locator('input').nth(2)).toHaveValue('First');
+  await expect(form.getByLabel('Floor')).toHaveValue('First');
 });

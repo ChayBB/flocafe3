@@ -20,6 +20,7 @@ import {
 export interface MenuCategoryInput {
   id: string;
   name: string;
+  parentId?: string | null;
   isActive: boolean;
   sortOrder: number;
 }
@@ -48,7 +49,9 @@ export interface MenuDocument {
   businessName: DirectionalText;
   printedAt: string;
   sections: Array<{
+    rootCategoryId?: string | null;
     name: DirectionalText | null;
+    parentName?: DirectionalText | null;
     products: Array<{ name: DirectionalText; price: string; details: DirectionalText[] }>;
   }>;
   itemCount: number;
@@ -72,8 +75,16 @@ export function buildMenuDocument(
         options.includeOutOfStock === true || !product.trackInventory || product.stockQuantity > 0,
     )
     .filter((product) => {
-      const category = product.categoryId ? categoryById.get(product.categoryId) : undefined;
-      return options.includeHidden === true || !product.categoryId || category?.isActive === true;
+      if (options.includeHidden === true || !product.categoryId) return true;
+      let currentId: string | null | undefined = product.categoryId;
+      const seen = new Set<string>();
+      while (currentId && !seen.has(currentId)) {
+        seen.add(currentId);
+        const category = categoryById.get(currentId);
+        if (!category || !category.isActive) return false;
+        currentId = category.parentId;
+      }
+      return true;
     })
     .slice()
     .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name));
@@ -98,18 +109,92 @@ export function buildMenuDocument(
       ],
     }));
 
-  const sections: MenuDocument['sections'] = categories
-    .slice()
-    .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name))
-    .map((category) => ({
-      name: toDirectionalText(category.name),
-      products: toRows(visibleProducts.filter((product) => product.categoryId === category.id)),
-    }))
-    .filter((section) => section.products.length > 0);
+  const sortBySiblingOrder = (list: readonly MenuCategoryInput[]) =>
+    list
+      .slice()
+      .sort(
+        (left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name),
+      );
+
+  const childrenByParent = new Map<string, MenuCategoryInput[]>();
+  const rootCategories: MenuCategoryInput[] = [];
+  for (const category of categories) {
+    const parentId = category.parentId || null;
+    if (parentId && categoryById.has(parentId) && parentId !== category.id) {
+      const list = childrenByParent.get(parentId) || [];
+      list.push(category);
+      childrenByParent.set(parentId, list);
+    } else {
+      rootCategories.push(category);
+    }
+  }
+
+  const sections: MenuDocument['sections'] = [];
+  const visitedCategoryIds = new Set<string>();
+  const visitSubtree = (root: MenuCategoryInput) => {
+    if (visitedCategoryIds.has(root.id)) return;
+    visitedCategoryIds.add(root.id);
+    const rootProducts = toRows(
+      visibleProducts.filter((product) => product.categoryId === root.id),
+    );
+    if (rootProducts.length > 0) {
+      sections.push({
+        rootCategoryId: root.id,
+        name: toDirectionalText(root.name),
+        parentName: null,
+        products: rootProducts,
+      });
+    }
+    const visitDescendants = (parentId: string) => {
+      const children = sortBySiblingOrder(childrenByParent.get(parentId) || []);
+      for (const child of children) {
+        if (visitedCategoryIds.has(child.id)) continue;
+        visitedCategoryIds.add(child.id);
+        const childProducts = toRows(
+          visibleProducts.filter((product) => product.categoryId === child.id),
+        );
+        if (childProducts.length > 0) {
+          sections.push({
+            rootCategoryId: root.id,
+            name: toDirectionalText(child.name),
+            parentName: toDirectionalText(root.name),
+            products: childProducts,
+          });
+        }
+        visitDescendants(child.id);
+      }
+    };
+    visitDescendants(root.id);
+  };
+
+  for (const root of sortBySiblingOrder(rootCategories)) {
+    visitSubtree(root);
+  }
+  for (const category of sortBySiblingOrder(categories)) {
+    if (visitedCategoryIds.has(category.id)) continue;
+    let entry = category;
+    const chain = new Set<string>([entry.id]);
+    while (
+      entry.parentId &&
+      categoryById.has(entry.parentId) &&
+      !chain.has(entry.parentId) &&
+      !visitedCategoryIds.has(entry.parentId)
+    ) {
+      entry = categoryById.get(entry.parentId)!;
+      chain.add(entry.id);
+    }
+    visitSubtree(entry);
+  }
   const uncategorized = visibleProducts.filter(
     (product) => !product.categoryId || !categoryById.has(product.categoryId),
   );
-  if (uncategorized.length > 0) sections.push({ name: null, products: toRows(uncategorized) });
+  if (uncategorized.length > 0)
+    sections.push({
+      rootCategoryId: null,
+      name: null,
+      parentName: null,
+      products: toRows(uncategorized),
+    });
 
   return {
     businessName: toDirectionalText(options.businessName),
@@ -148,16 +233,49 @@ export function renderMenuViaDocument(
     '',
   );
 
+  let activeRootKey: string | null = null;
   for (const section of document.sections) {
-    if (section.name) {
-      const title = truncateShapedLine(
-        `--- ${section.name.text} ---`,
-        options.columns,
-        options.arabicShaping === true,
-        options.language,
-        capabilities,
-      );
-      lines.push(`{BOLD}${title}{/BOLD}`);
+    if (section.parentName) {
+      const rootKey = section.rootCategoryId
+        ? `id:${section.rootCategoryId}`
+        : `name:${section.parentName.text}`;
+      if (activeRootKey !== rootKey) {
+        const parentTitle = truncateShapedLine(
+          `--- ${section.parentName.text} ---`,
+          options.columns,
+          options.arabicShaping === true,
+          options.language,
+          capabilities,
+        );
+        lines.push(`{BOLD}${parentTitle}{/BOLD}`);
+        activeRootKey = rootKey;
+      }
+      if (section.name) {
+        const subTitle = truncateShapedLine(
+          `  ${section.name.text}`,
+          options.columns,
+          options.arabicShaping === true,
+          options.language,
+          capabilities,
+        );
+        lines.push(`{BOLD}${subTitle}{/BOLD}`);
+      }
+    } else {
+      activeRootKey = section.name
+        ? section.rootCategoryId
+          ? `id:${section.rootCategoryId}`
+          : `name:${section.name.text}`
+        : null;
+      if (section.name) {
+        const title = truncateShapedLine(
+          `--- ${section.name.text} ---`,
+          options.columns,
+          options.arabicShaping === true,
+          options.language,
+          capabilities,
+        );
+        lines.push(`{BOLD}${title}{/BOLD}`);
+      }
     }
     for (const product of section.products) {
       const price = truncateShapedLine(

@@ -77,6 +77,7 @@ export const PERMISSION_LABEL_KEYS = {
   'orders.item.void': 'orderItemVoid',
   'orders.item.restore': 'orderItemRestore',
   'orders.item.edit': 'orderItemEdit',
+  'orders.item.price_override': 'orderItemPriceOverride',
   'held-orders.manage': 'heldOrders',
 
   'tables.view': 'tablesView',
@@ -128,6 +129,7 @@ export const PERMISSION_LABEL_KEYS = {
   'reports.view': 'reports',
   'reports.financial.view': 'reports',
   'reports.daily-sales.export': 'reportsDailySalesExport',
+  'reports.customer-sales.export': 'reportsCustomerSalesExport',
 
   'staff.view': 'staffViewManage',
   'staff.operational.manage': 'operationalStaff',
@@ -152,6 +154,7 @@ export const PERMISSION_LABEL_KEYS = {
   'cloud.manage': 'cloudDrive',
   'cloud.account.manage': 'cloudAccountData',
   'google-drive.manage': 'googleDrive',
+  'offline-mode.manage': 'offlineMode',
 
   'database.manage': 'databaseTools',
   'mobile-access.manage': 'mobileAccessManage',

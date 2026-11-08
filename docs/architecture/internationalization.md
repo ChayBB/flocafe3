@@ -1,6 +1,6 @@
 # Internationalization
 
-FloCafe supports 23 UI languages. This page describes how a language is declared, loaded, and
+FloCafe supports 26 UI languages. This page describes how a language is declared, loaded, and
 validated, and how the UI language stays separate from a store's regional settings.
 
 ## Source of truth and the parity rule
@@ -17,8 +17,8 @@ for `th`, no orphans anywhere), ICU validity, placeholder and tag parity, per-la
 of the keys a catalogue does carry, and frontend key safety. The set of complete locales is
 `FULLY_MAINTAINED_LOCALES` in that test.
 
-The 23 committed catalogues are: `ar`, `bn`, `de`, `en`, `es`, `fa`, `fil`, `fr`, `hi`, `id`, `it`,
-`ja`, `ko`, `nl`, `pt`, `ru`, `sq`, `th`, `tr`, `ur`, `vi`, `zh`, `zh-tw`.
+The 26 committed catalogues are: `ar`, `bn`, `de`, `en`, `es`, `fa`, `fil`, `fr`, `ha`, `hi`, `id`,
+`it`, `ja`, `jv`, `ko`, `ne`, `nl`, `pt`, `ru`, `sq`, `th`, `tr`, `ur`, `vi`, `zh`, `zh-tw`.
 
 ## The registry
 
@@ -135,8 +135,10 @@ Print output has its own language settings, separate from both; see
 ## Derived print labels
 
 The main process cannot import the frontend's message loaders, but it needs the same label text for
-thermal printing. `main/print/print-labels.generated.ts` is a committed, generated TypeScript view of
-the canonical catalogues for exactly that purpose. It is produced by
+thermal printing and backend plain-text WhatsApp reports (`formatDailySalesWhatsAppMessage` in
+`main/services/daily-sales-export.ts` and `formatStoredZReportWhatsAppMessage` in
+`main/services/whatsapp.ts`). `main/print/print-labels.generated.ts` is a committed, generated
+TypeScript view of the canonical catalogues for those main-process consumers. It is produced by
 `scripts/generate-print-labels.cjs`, which extracts the `print.*` namespace plus an explicit manifest
 of borrowed keys from other namespaces, for every committed language, in registry order.
 

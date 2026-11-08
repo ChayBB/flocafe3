@@ -67,6 +67,41 @@ authenticated user is subject to the same review as a change to this entry.
 
 ---
 
+## A selected backup is authoritative during restore
+
+**Rule:** Restoring a valid, supported backup replaces the store state with that backup. FloCafe
+does not merge users, staff activation, kitchen stations, station assignments, settings, inventory
+history, or other operational records from the database being replaced. Older backups migrate
+forward after replacement. Restore invalidates sessions and temporary pairing credentials, clears
+the Google Drive device binding, and retains an automatic pre-restore recovery copy.
+
+**Reason:** Backup restore is a deliberate disaster-recovery action. The operator expects the café
+to return to the selected snapshot after a machine failure. Merging the failed installation with
+the backup creates conflicts, makes valid backups unrestorable, and leaves the final state difficult
+to predict. Easily reconfigured local state does not justify blocking recovery.
+
+**Enforced by:** `restoreBackup` in [`main/db.ts`](../../main/db.ts), the file-selection and
+authorization boundary in `main/routes/database.ts`, and the production restore tests in
+`tests/backup-restore-production.test.ts`. See
+[data and migrations](../architecture/data-and-migrations.md#backup-and-restore) for the replacement
+journal, validation, migration, and rollback sequence.
+
+**How to verify:**
+
+```sh
+npm run test:backup
+```
+
+The suite verifies that current-only users and kitchen stations do not override the backup, that
+backup staff and settings remain authoritative, that supported older backups migrate forward, and
+that integrity failures leave the replaced database recoverable.
+
+**Change policy:** adding any cross-database merge or refusal rule to restore requires a demonstrated
+material risk and explicit product approval. Authorization, confirmation, validation, transient
+credential invalidation, migrations, and the pre-restore recovery copy remain mandatory safeguards.
+
+---
+
 ## Role templates and user permissions are owner-configurable
 
 **Rule:** FloCafe keeps its five fixed staff identities (owner, manager, cashier, server, chef),
@@ -150,7 +185,7 @@ explicit product decision.
 **Rule:** The initial owner creates and confirms a separate 4 to 6 digit Staff Approval PIN during
 first-run setup. It is stored as a bcrypt hash on the owner user record, independent of the device
 Master PIN. Owners, and within the in-progress window also managers, can refund a bill that has
-already been paid: in full, partially, or for a single item, without restocking inventory. The
+already been paid: in full, partially, or for a single item. The
 refund can be paid back in a different method than the customer used, or issued as store credit.
 
 1. **Selected approver.** Every refund identifies one approver through `approver_id`. `manager_id`
@@ -161,15 +196,18 @@ refund can be paid back in a different method than the customer used, or issued 
 2. **Ceiling.** A refund can never exceed `paid_amount` minus the sum of prior refunds for that
    bill, not the order's gross total, so a partly refunded bill cannot be refunded past what is
    outstanding. Enforced by `getRefundableBalance()` in `main/services/refund.ts`.
-3. **Approval tiers**, keyed off the order's `created_at` and the store's business day. The
-   in-progress window is `REFUND_WINDOW_MS`, one hour.
-   - Within the window: the selected active owner's or manager's Staff Approval PIN.
-   - After the window but inside the same business day, computed by `dayBoundsInTimezone()` in
-     `main/db.ts` from the tenant's configured timezone and `business_day_start_time`: the selected
-     active owner's PIN only. A manager PIN is rejected outright. Once an order is effectively
-     closed there is no kitchen or service context left to sanity-check the request, so the bar is
-     raised rather than reused.
-   - After the business day ends: refused with HTTP 409, regardless of who approves. Reversing an
+3. **Approval tiers**, keyed off `released_at || created_at` for released orders and the store's
+   business day (while an unreleased scheduled order in `release_status` `scheduled` or `blocked` is
+   exempt from the late-refund cutoffs so multi-day prepaid scheduled orders can be refunded before
+   cancellation). The in-progress window is `REFUND_WINDOW_MS`, one hour.
+   - Unreleased scheduled order, or within the window of `released_at || created_at`: the selected
+     active owner's or manager's Staff Approval PIN.
+   - After the window but inside the anchor timestamp's business day, computed by
+     `dayBoundsInTimezone()` in `main/db.ts` from the tenant's configured timezone and
+     `business_day_start_time`: the selected active owner's PIN only. A manager PIN is rejected
+     outright. Once an order is effectively closed there is no kitchen or service context left to
+     sanity-check the request, so the bar is raised rather than reused.
+   - After that business day ends: refused with HTTP 409, regardless of who approves. Reversing an
      older transaction happens outside the system.
 4. **Item eligibility** for a single-item refund is `REFUND_ITEM_ELIGIBLE_STATUSES`: `preparing`,
    `ready`, `served`, `completed`.
@@ -193,8 +231,12 @@ refund can be paid back in a different method than the customer used, or issued 
    see [role templates and user permissions](#role-templates-and-user-permissions-are-owner-configurable).
    The selected approver must still independently satisfy the owner/manager and time-tier rules
    above — those are fixed context policy, not a permission, regardless of the initiator's grant.
-9. **Inventory is never restored by a refund**, item-level or whole-bill, matching how item voids
-   and cancellations behave.
+9. **Product and supply inventory are never restored by a refund; single-item refunds restore
+   tracked add-on stock.** Whole-bill and partial-amount refunds never restore stock. A single-item
+   refund (`order_item_id`) leaves product stock and recipe supplies untouched, matching how
+   in-progress item voids behave, while restoring the item's recorded add-on stock deductions
+   (`order_item_addons.inventory_deducted_quantity > 0`) to `addons.stock_quantity` via a
+   `cancel_restore` movement in `inventory_movements` when the catalog add-on still exists.
 
 **Amount storage.** `refunds.amount_cents` stores integer minor units for every currency, using
 the factor returned by `getCurrencyMinorUnitFactor()` in `main/countries.ts`, which is ten to the
@@ -212,15 +254,16 @@ surface, while keeping the two things most exposed to misuse deliberately tight:
 refund reaches, and who can approve one.
 
 **Enforced by:** `main/services/refund.ts` (`createRefund`, `resolveRefundApprover`,
-`getRefundableBalance`, `REFUND_ITEM_ELIGIBLE_STATUSES`), `main/routes/refunds.ts`, and the
-first-run setup path in `main/routes/auth.ts`. Every refund also writes a `refund_issued` row to
-`order_audit_log`.
+`getRefundableBalance`, `REFUND_ITEM_ELIGIBLE_STATUSES`), `main/services/inventory.ts`
+(`adjustProductStock`), `main/routes/refunds.ts`, and the first-run setup path in
+`main/routes/auth.ts`. Every refund also writes a `refund_issued` row to `order_audit_log`.
 
 **How to verify:**
 
 ```sh
-npm run test:refunds               # in-progress refund behaviour
+npm run test:refunds                   # in-progress refund behaviour and product-stock non-restoration
 npm run test:refund-completed-orders   # business-day tiers, item eligibility, store credit, audit row
+npm run test:addon-inventory-orders    # post-settlement single-item refund add-on stock restoration
 ```
 
 **Change policy:** the tier boundaries, the approver model, and the accepted cashback limitation are
@@ -352,16 +395,39 @@ tables (`supplies`, `supply_movements`) with a signed ledger, separate from prod
    to later sales after a recipe becomes active. Portions must be positive finite numbers; catalog
    writes and database imports reject invalid supplied values, and recipe snapshot creation rejects
    an invalid portion before depletion.
+8. **Supply purchase costs use Weighted Average Cost (WAC) per base unit and stay separate from the
+   expenses ledger.** A supply's `unit_cost` is stored in major currency units per `base_unit`
+   (rounded to 10 decimal places so sub-minor-unit gram and millilitre costs never collapse to zero,
+   including 0-decimal currencies such as JPY). When a `receive` movement includes a batch cost
+   (`unit_cost` per movement unit or `total_cost` for the batch), it is normalized to `base_unit`.
+   If `stock_before <= 0` or `supplies.unit_cost IS NULL`, `unit_cost` resets to the new batch cost;
+   otherwise it blends by WAC (`(stock_before * old_cost + delta * batch_cost) / stock_after`).
+   Unpriced `receive` movements leave `supplies.unit_cost` unchanged. Recording a supply receive cost
+   updates inventory valuation only and never creates an `expenses` row.
+9. **Order-item ingredient cost is recipe-derived, frozen at sale time, and never understated.**
+   When an order line is created, `buildRecipeSnapshot()` computes the line's ingredient cost from
+   its active recipe and variant `recipe_multiplier`, rounds the line total to the tenant currency's
+   fraction digits (`0`, `2`, or `3`), and freezes `ingredient_cost` and `ingredient_cost_known` on
+   `order_items` alongside `recipe_snapshot`. If a product has no active recipe or **any** recipe
+   component supply has `unit_cost IS NULL`, `ingredient_cost` is `NULL` and `ingredient_cost_known`
+   is `0` ("cost unknown" - never a partial cost and never 100% margin); legacy `products.cost` is
+   not used. Subsequent supply cost or recipe edits never alter existing `order_items`, and pending
+   or started quantity reductions scale the frozen cost from the line's held `recipe_snapshot`. In
+   sales reports and daily sales exports (gated by `reports.financial.view` and
+   `reports.daily-sales.export`), profit and margin are computed strictly over ex-tax net item sales
+   of known-cost lines (`known_cost_revenue`).
 
 **Reason:** POS availability during a stockout matters more than ledger neatness. A store that
 cannot sell because flour has not been counted in yet is worse than a negative row to reconcile
-later. Snapshots keep historical cancellations correct under recipe edits, mirroring the existing
-`tax_snapshot` pattern.
+later. Snapshots keep historical cancellations and historical profitability reports accurate under
+recipe or supply cost edits, mirroring the existing `tax_snapshot` pattern.
 
 **Enforced by:** `applySupplyStockChange()` in `main/services/supplies.ts`, which does not clamp;
-`buildRecipeSnapshot()` and `applyRecipeSnapshot()` in `main/services/recipes.ts`; the order
+`buildRecipeSnapshot()`, `scaleRecipeSnapshot()`, and `applyRecipeSnapshot()` in
+`main/services/recipes.ts`; the order
 creation, item append, order and item cancel, item edit, and item restore paths in
-`main/routes/orders.ts`. Restore acts only on a non-superseded `cancelled` item, re-deducts its
+`main/routes/orders.ts`; and profitability aggregation in `main/routes/reports.ts` and
+`main/services/daily-sales-export.ts`. Restore acts only on a non-superseded `cancelled` item, re-deducts its
 inventory and recipe components, and returns it to `pending`; a `voided` or superseded item is
 never restored. The
 portion comes from
@@ -374,6 +440,7 @@ before depletion. The migration gives existing variants a default portion of 1 i
 
 ```sh
 npm run test:recipe-order-lifecycle   # deplete, restore, void-no-restore, snapshot immutability
+npm run test:ingredient-cost          # WAC, negative-stock reset, frozen cost, profitability reports
 npm run test:order-item-edit          # pending vs started item edits, waste, superseded restore rejection
 npm run test:supplies-service         # negative stock, ledger, pagination
 npm run test:product-variants-orders  # half / whole / double portions across create, append, void
@@ -497,3 +564,48 @@ npm run test:issue-248-csv
 **Change policy:** changing the `quote-v1` encoding rules or stripping unmarked apostrophes without
 existing-record proof requires an explicit product decision, because either change can silently
 rename catalog items or create duplicate categories and add-ons during CSV imports.
+
+---
+
+## Multi-counter ordering and prepayment lifecycle
+
+**Rule:** Multi-counter ordering separates order capture ("Send to payment") from cashier settlement:
+
+1. **Prepayment never prematurely marks kitchen work complete or frees dine-in tables:** Completing
+   payment across all applicable bills for an `on_payment` order transitions its `checkout_stage` to
+   `'paid'` and triggers release to the kitchen (if unscheduled or scheduled instant is reached), but
+   leaves its kitchen `status = 'pending'` while kitchen items remain to be prepared. The order
+   completes only when kitchen preparation concludes (or immediately upon release for takeaway orders
+   when KDS is disabled) and dine-in tables remain occupied (`occupied = 1`) until table service
+   concludes.
+2. **Orders and bills are real database entities, never held-order JSON:** An order sent to payment is
+   stored immediately in `orders`, `order_items`, and `bills` with quoted pricing snapshots.
+3. **Multi-counter orders are never ownership-gated:** Any staff member at any payment or combined
+   counter can view, search, and settle any awaiting-payment order.
+4. **Committed payment survives release failures:** If inventory deduction or catalog validation
+   fails during kitchen release after payment, the collected payment is never rolled back or
+   discarded; the order transitions to `release_status = 'blocked'` (`paid-but-blocked`) and remains
+   clearly visible in the queue for staff resolution (manual release retry or refund/cancellation).
+5. **Prepayment edits are locked after initial payment:** Item additions, item edits, discounts, and
+   customer adjustments are permitted on an `awaiting_payment` order only while no payments have
+   been collected.
+
+**Reason:** In busy multi-counter environments (cafes, food courts, quick-service diners), prepaying
+customers must not trigger kitchen completion notifications before food is prepared, and table
+tracking for dine-in guests must not drop off POS maps while guests are dining. Payment transactions
+cannot be rolled back due to kitchen inventory errors; staff need visibility into prepaid orders
+needing stock resolution.
+
+**Enforced by:** `main/routes/bills.ts` (`completeExactBalanceSettlement`, `applyPaymentBatch`,
+`handlePostPaymentRelease`), `main/services/scheduled-orders.ts` (`releaseScheduledOrder`,
+`assertScheduledOrderUnpaidForEdit`), `main/routes/orders.ts` (`POST /api/orders`,
+`GET /api/orders/awaiting-payment`, `GET /api/orders/by-ticket/:ticket`).
+
+**How to verify:**
+
+```sh
+npm run test:multi-counter-ordering
+```
+
+**Change policy:** Altering the prepayment lifecycle to auto-complete orders or bypass inventory
+release gates requires an explicit product architecture review.

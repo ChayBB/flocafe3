@@ -59,6 +59,7 @@ const SCREEN_FILES = [
   'frontend/src/app/(dashboard)/customers/page.tsx',
   'frontend/src/app/(dashboard)/tables/page.tsx',
   'frontend/src/components/pos/CartPanel.tsx',
+  'frontend/src/components/pos/OrderDetailsDrawer.tsx',
   'frontend/src/components/pos/ProductGrid.tsx',
   'frontend/src/components/pos/PosTopbar.tsx',
   'frontend/src/components/pos/TaxBreakdown.tsx',
@@ -365,6 +366,8 @@ function run(): void {
     'vi',
     'th',
     'ne',
+    'ha',
+    'jv',
   ] as const) {
     usePosSettingsStore.getState().setLanguage(ltrLang);
     const renderedLtr = renderDirectionalToaster(getLanguageLocale(ltrLang));
@@ -471,6 +474,8 @@ function run(): void {
     'vi',
     'th',
     'ne',
+    'ha',
+    'jv',
   ] as const) {
     assert(getLanguageDirection(ltrLang) === 'ltr', `${ltrLang} must resolve to ltr`);
   }

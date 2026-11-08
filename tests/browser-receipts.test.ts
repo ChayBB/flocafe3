@@ -41,7 +41,10 @@ function loadFrontendModules() {
   try {
     return {
       webPrint: require('../frontend/src/lib/printer/web-print'),
+      kotWebPrint: require('../frontend/src/lib/printer/kot-web-print'),
       orderSlipWebPrint: require('../frontend/src/lib/printer/order-slip-web-print'),
+      deliverySlipWebPrint: require('../frontend/src/lib/printer/delivery-slip-web-print'),
+      usePrinter: require('../frontend/src/hooks/usePrinter'),
       i18n: require('../frontend/src/lib/i18n'),
       countries: require('../frontend/src/lib/countries'),
     };
@@ -50,9 +53,21 @@ function loadFrontendModules() {
   }
 }
 
-const { webPrint, orderSlipWebPrint, i18n, countries } = loadFrontendModules();
-const { generateBillHtml } = webPrint;
+const {
+  webPrint,
+  kotWebPrint,
+  orderSlipWebPrint,
+  deliverySlipWebPrint,
+  usePrinter,
+  i18n,
+  countries,
+} = loadFrontendModules();
+const { generateBillHtml, getPaperStyles } = webPrint;
+const { generateKotHtml } = kotWebPrint;
 const { generateOrderSlipHtml } = orderSlipWebPrint;
+const { generateDeliverySlipHtml } = deliverySlipWebPrint;
+const { defaultWebUsbCapabilities, resolveWebUsbCapabilities, resolveActivePrinterTextSize } =
+  usePrinter;
 
 let passed = 0;
 let failed = 0;
@@ -101,6 +116,8 @@ async function run() {
     'vi',
     'th',
     'ne',
+    'ha',
+    'jv',
   ] as const) {
     await i18n.loadLocaleMessages(lang);
   }
@@ -377,7 +394,10 @@ async function run() {
       }).includes('payment-qr-account">'),
       'no account holder line without a QR',
     );
-    assert('bill table headers have no grey background', !/th[^{]*\{[^}]*background/.test(html));
+    assert(
+      'bill table headers have transparent backgrounds',
+      html.includes('.items-table th { background: transparent;'),
+    );
     assert(
       'Tax Details header shows Persian "جزئیات مالیات"',
       html.includes('<th colspan="2">جزئیات مالیات</th>'),
@@ -407,9 +427,11 @@ async function run() {
     assert('split payments keep each method beside net paid', splitHtml.includes('(کارت)</td>'));
     assert('special instructions stay off the bill', !html.includes('کم شیرین'));
     assert(
-      'item rows have no divider lines and the column headings are ruled above and below',
-      html.includes('.items-table th, .items-table td { padding: 8px; text-align: start; }') &&
-        html.includes('border-top: 1px solid #000; border-bottom: 1px solid #000;'),
+      'thermal item rows use a dashed divider and their column headings use a solid divider',
+      html.includes('.items-table td { color: #000; border-bottom: 1px dashed #000;') &&
+        html.includes(
+          '.items-table th, .tax-table th, .payments-table th { background: transparent; color: #000; border-bottom: 1px solid #000;',
+        ),
     );
     assert('Footer preserves Persian thank you text', html.includes('از بازدید شما سپاسگزاریم!'));
     assert('Footer shows Persian tax notice', html.includes('مالیات در صورت اعمال، شامل شده است'));
@@ -681,6 +703,25 @@ async function run() {
         neHtml.includes('बिल #') &&
         neHtml.includes('कुल जम्मा') &&
         neHtml.includes('तपाईंको भ्रमणको लागि धन्यवाद!'),
+    );
+
+    const jvTenant = {
+      business_name: 'FloCafe Yogyakarta',
+      currency: 'IDR',
+      country: 'ID',
+      timezone: 'Asia/Jakarta',
+    };
+    const jvHtml = generateBillHtml(sampleEnBill, jvTenant, { language: 'jv', isReprint: true });
+    assert(
+      'JV receipt has lang="jv-ID" and dir="ltr"',
+      jvHtml.includes('<html lang="jv-ID" dir="ltr">'),
+    );
+    assert(
+      'JV labels are Javanese',
+      jvHtml.includes('CETAK MANEH') &&
+        jvHtml.includes('Tagihan #') &&
+        jvHtml.includes('Gunggung Akhir') &&
+        jvHtml.includes('Matur nuwun rawuhipun!'),
     );
 
     // The browser receipt is the primary print path, and its body stack was
@@ -995,6 +1036,359 @@ async function run() {
         vietnameseSlip.includes('Tạm tính') &&
         vietnameseSlip.includes('Tổng cộng'),
     );
+
+    const hausaSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'Takardar Oda',
+        subtotal: 'Jimillar ƙasa',
+        discount: 'Rangwame',
+        serviceCharge: 'Cajin sabis',
+        deliveryCharge: 'Cajin isarwa',
+        packagingCharge: 'Cajin marufi',
+        tax: 'Haraji',
+        total: 'Jimilla',
+      },
+      {
+        country: 'NG',
+        currency: 'NGN',
+        locale: 'ha-NG',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Hausa order slip carries ha-NG LTR metadata and Boko hooked letters',
+      hausaSlip.includes('lang="ha-NG" dir="ltr"') &&
+        hausaSlip.includes('direction:ltr;text-align:left;') &&
+        hausaSlip.includes('Takardar Oda') &&
+        hausaSlip.includes('Jimillar ƙasa') &&
+        hausaSlip.includes('Jimilla'),
+    );
+
+    const javaneseSlip = generateOrderSlipHtml(
+      testIranOrder,
+      {
+        title: 'Slip Pesenan',
+        subtotal: 'Sub-gunggung',
+        discount: 'Diskon',
+        serviceCharge: 'Ragad Layanan',
+        deliveryCharge: 'Ragad Kiriman',
+        packagingCharge: 'Ragad Bungkus',
+        tax: 'Pajeg',
+        total: 'Gunggung',
+      },
+      {
+        country: 'ID',
+        currency: 'IDR',
+        locale: 'jv-ID',
+        direction: 'ltr',
+      },
+    );
+    assert(
+      'Javanese order slip carries jv-ID LTR metadata and localized labels',
+      javaneseSlip.includes('lang="jv-ID" dir="ltr"') &&
+        javaneseSlip.includes('direction:ltr;text-align:left;') &&
+        javaneseSlip.includes('Slip Pesenan') &&
+        javaneseSlip.includes('Sub-gunggung') &&
+        javaneseSlip.includes('Gunggung'),
+    );
+  }
+
+  console.log(
+    '\nTest Suite 8: Thermal 58mm/80mm Legibility, Pure #000 Colors, and Text Size Scaling (#1482)',
+  );
+  {
+    for (const paperSize of ['thermal58', 'thermal80'] as const) {
+      const normalHtml = generateBillHtml(testIranBill, baseIranTenant, {
+        language: 'en',
+        paperSize,
+        textSize: 'normal',
+        isReprint: true,
+      });
+      const largeHtml = generateBillHtml(testIranBill, baseIranTenant, {
+        language: 'en',
+        paperSize,
+        textSize: 'large',
+        isReprint: true,
+      });
+      const xlHtml = generateBillHtml(testIranBill, baseIranTenant, {
+        language: 'en',
+        paperSize,
+        textSize: 'extra_large',
+        isReprint: true,
+      });
+
+      assert(
+        `${paperSize} styles use pure #000 with no gray/red halftone-dithering hex colors`,
+        normalHtml.includes('color: #000;') &&
+          !/#(?:c00|ccc|eee|333|555|666|888)/i.test(normalHtml) &&
+          !/#(?:c00|ccc|eee|333|555|666|888)/i.test(getPaperStyles(paperSize, 'extra_large')),
+      );
+      const expectedPageWidth = paperSize === 'thermal58' ? '58mm' : '80mm';
+      assert(
+        `${paperSize} declares @page { size: ${expectedPageWidth} auto; margin: 0; }`,
+        normalHtml.includes(`@page { size: ${expectedPageWidth} auto; margin: 0; }`),
+      );
+      const expectedNormalFont = paperSize === 'thermal58' ? '13px' : '14px';
+      const expectedLargeFont = paperSize === 'thermal58' ? '15px' : '16px';
+      const expectedXlFont = paperSize === 'thermal58' ? '17px' : '18px';
+      assert(
+        `${paperSize} scales body/item font size across normal (${expectedNormalFont}), large (${expectedLargeFont}), and extra_large (${expectedXlFont})`,
+        normalHtml.includes(
+          `.items-table td { color: #000; border-bottom: 1px dashed #000; font-size: ${expectedNormalFont}; font-weight: 600; }`,
+        ) &&
+          largeHtml.includes(
+            `.items-table td { color: #000; border-bottom: 1px dashed #000; font-size: ${expectedLargeFont}; font-weight: 600; }`,
+          ) &&
+          xlHtml.includes(
+            `.items-table td { color: #000; border-bottom: 1px dashed #000; font-size: ${expectedXlFont}; font-weight: 700; }`,
+          ),
+      );
+    }
+
+    const kotNormal = generateKotHtml(testIranOrder, {
+      paperWidth: 58,
+      textSize: 'normal',
+      language: 'en',
+    });
+    const kotLarge = generateKotHtml(testIranOrder, {
+      paperWidth: 58,
+      textSize: 'large',
+      language: 'en',
+    });
+    const kotXl = generateKotHtml(testIranOrder, {
+      paperWidth: 58,
+      textSize: 'extra_large',
+      language: 'en',
+    });
+    assert(
+      'KOT browser HTML scales font-size for normal (12px), large (14px), and extra_large (16px) with #000 weight 600',
+      kotNormal.includes('font-size:12px;') &&
+        kotNormal.includes('color:#000;font-weight:600;') &&
+        kotLarge.includes('font-size:14px;') &&
+        kotXl.includes('font-size:16px;'),
+    );
+
+    const slipLabels = {
+      title: 'Order Slip',
+      subtotal: 'Subtotal',
+      discount: 'Discount',
+      serviceCharge: 'Service Charge',
+      deliveryCharge: 'Delivery Charge',
+      packagingCharge: 'Packaging Charge',
+      tax: 'Tax',
+      total: 'Total',
+    };
+    const slipNormal = generateOrderSlipHtml(testIranOrder, slipLabels, {
+      paperWidth: 58,
+      textSize: 'normal',
+    });
+    const slipLarge = generateOrderSlipHtml(testIranOrder, slipLabels, {
+      paperWidth: 58,
+      textSize: 'large',
+    });
+    const slipXl = generateOrderSlipHtml(testIranOrder, slipLabels, {
+      paperWidth: 58,
+      textSize: 'extra_large',
+    });
+    assert(
+      'Order slip browser HTML scales font-size for normal (13px), large (15px), and extra_large (17px) with #000 weight 600',
+      slipNormal.includes('font-size:13px;font-weight:600;color:#000;') &&
+        slipLarge.includes('font-size:15px;font-weight:600;color:#000;') &&
+        slipXl.includes('font-size:17px;font-weight:600;color:#000;'),
+    );
+
+    const kot80Normal = generateKotHtml(testIranOrder, {
+      paperWidth: 80,
+      textSize: 'normal',
+      language: 'en',
+    });
+    const kot80Large = generateKotHtml(testIranOrder, {
+      paperWidth: 80,
+      textSize: 'large',
+      language: 'en',
+    });
+    const kot80Xl = generateKotHtml(testIranOrder, {
+      paperWidth: 80,
+      textSize: 'extra_large',
+      language: 'en',
+    });
+    assert(
+      '80mm KOT browser HTML scales font-size for normal (13px), large (15px), and extra_large (17px)',
+      kot80Normal.includes('font-size:13px;') &&
+        kot80Large.includes('font-size:15px;') &&
+        kot80Xl.includes('font-size:17px;'),
+    );
+
+    const slip80Normal = generateOrderSlipHtml(testIranOrder, slipLabels, {
+      paperWidth: 80,
+      textSize: 'normal',
+    });
+    const slip80Large = generateOrderSlipHtml(testIranOrder, slipLabels, {
+      paperWidth: 80,
+      textSize: 'large',
+    });
+    const slip80Xl = generateOrderSlipHtml(testIranOrder, slipLabels, {
+      paperWidth: 80,
+      textSize: 'extra_large',
+    });
+    assert(
+      '80mm order slip browser HTML scales font-size for normal (14px), large (16px), and extra_large (18px)',
+      slip80Normal.includes('font-size:14px;font-weight:600;color:#000;') &&
+        slip80Large.includes('font-size:16px;font-weight:600;color:#000;') &&
+        slip80Xl.includes('font-size:18px;font-weight:600;color:#000;'),
+    );
+
+    assert(
+      'WebUSB capabilities and active printer text size inherit configured text_size',
+      defaultWebUsbCapabilities(58, 'cols-32', 'extra_large').textSize === 'extra_large' &&
+        resolveWebUsbCapabilities(
+          { id: 'w1', name: 'XP-58', connection_type: 'webusb', is_default: 1, text_size: 'large' },
+          58,
+        ).textSize === 'large' &&
+        resolveActivePrinterTextSize({
+          defaultPrinter: {
+            id: 'p1',
+            name: 'XP-58',
+            connection_type: 'usb',
+            is_default: 1,
+            text_size: 'extra_large',
+          },
+          hardwarePrinter: null,
+          webusbPrinter: null,
+        }) === 'extra_large',
+    );
+
+    assert(
+      'resolveActivePrinterTextSize prioritizes a connected webusbPrinter over defaultPrinter while honoring explicit overrides',
+      resolveActivePrinterTextSize({
+        status: 'connected',
+        defaultPrinter: {
+          id: 'p1',
+          name: 'Default 80',
+          connection_type: 'usb',
+          is_default: 1,
+          text_size: 'normal',
+        },
+        hardwarePrinter: null,
+        webusbPrinter: {
+          id: 'w1',
+          name: 'XP-58 WebUSB',
+          connection_type: 'webusb',
+          is_default: 0,
+          text_size: 'extra_large',
+        },
+      }) === 'extra_large' &&
+        resolveActivePrinterTextSize(
+          {
+            status: 'connected',
+            defaultPrinter: {
+              id: 'p1',
+              name: 'Default 80',
+              connection_type: 'usb',
+              is_default: 1,
+              text_size: 'normal',
+            },
+            hardwarePrinter: null,
+            webusbPrinter: {
+              id: 'w1',
+              name: 'XP-58 WebUSB',
+              connection_type: 'webusb',
+              is_default: 0,
+              text_size: 'extra_large',
+            },
+          },
+          'large',
+        ) === 'large',
+    );
+
+    const deliveryContact = {
+      recipientName: 'Ali Reza',
+      phone: '+989123456789',
+      address: 'Tehran, Valiasr St, No. 42',
+    };
+    const delivery58Normal = generateDeliverySlipHtml(
+      testIranOrder,
+      testIranOrder.items || [],
+      deliveryContact,
+      { paperWidth: 58, textSize: 'normal', language: 'en' },
+    );
+    const delivery58Large = generateDeliverySlipHtml(
+      testIranOrder,
+      testIranOrder.items || [],
+      deliveryContact,
+      { paperWidth: 58, textSize: 'large', language: 'en' },
+    );
+    const delivery58Xl = generateDeliverySlipHtml(
+      testIranOrder,
+      testIranOrder.items || [],
+      deliveryContact,
+      { paperWidth: 58, textSize: 'extra_large', language: 'en' },
+    );
+    const delivery80Normal = generateDeliverySlipHtml(
+      testIranOrder,
+      testIranOrder.items || [],
+      deliveryContact,
+      { paperWidth: 80, textSize: 'normal', language: 'en' },
+    );
+    const delivery80Large = generateDeliverySlipHtml(
+      testIranOrder,
+      testIranOrder.items || [],
+      deliveryContact,
+      { paperWidth: 80, textSize: 'large', language: 'en' },
+    );
+    const delivery80Xl = generateDeliverySlipHtml(
+      testIranOrder,
+      testIranOrder.items || [],
+      deliveryContact,
+      { paperWidth: 80, textSize: 'extra_large', language: 'en' },
+    );
+    assert(
+      'Delivery slip browser HTML scales font-size for normal, large, and extra_large across 58mm and 80mm and uses pure #000 borders/text',
+      delivery58Normal.includes('font-size:12px;font-weight:600;color:#000;') &&
+        delivery58Large.includes('font-size:14px;font-weight:700;color:#000;') &&
+        delivery58Xl.includes('font-size:16px;font-weight:700;color:#000;') &&
+        delivery80Normal.includes('font-size:13px;font-weight:600;color:#000;') &&
+        delivery80Large.includes('font-size:16px;font-weight:700;color:#000;') &&
+        delivery80Xl.includes('font-size:18px;font-weight:700;color:#000;') &&
+        !/#(15803d|ecfdf5|d97706|fffbeb|9ca3af|f9fafb|374151)\b/i.test(delivery58Xl),
+    );
+
+    assert(
+      '58mm extra_large receipt CSS wraps items-table rows with flex-wrap so numeric columns cannot horizontally overflow 46mm width',
+      getPaperStyles('thermal58', 'extra_large').includes(
+        '.items-table thead tr, .items-table tbody tr { display: flex; flex-wrap: wrap;',
+      ) &&
+        getPaperStyles('thermal58', 'extra_large').includes(
+          '.items-table th:first-child, .items-table td:first-child { flex: 1 1 100%;',
+        ),
+    );
+
+    assert(
+      'Unrecognized or adversarial text_size values normalize safely to normal across all browser print surfaces',
+      defaultWebUsbCapabilities(58, 'cols-32', 'gigantic').textSize === 'normal' &&
+        resolveActivePrinterTextSize({
+          defaultPrinter: {
+            id: 'p1',
+            name: 'XP-58',
+            connection_type: 'usb',
+            is_default: 1,
+            text_size: 'huge' as any,
+          },
+          hardwarePrinter: null,
+          webusbPrinter: null,
+        }) === 'normal' &&
+        getPaperStyles('thermal58', 'invalid_size' as any).includes('font-size: 13px;') &&
+        generateKotHtml(testIranOrder, {
+          paperWidth: 58,
+          textSize: 'invalid_size' as any,
+          language: 'en',
+        }).includes('font-size:12px;') &&
+        generateOrderSlipHtml(testIranOrder, slipLabels, {
+          paperWidth: 58,
+          textSize: 'invalid_size' as any,
+        }).includes('font-size:13px;'),
+    );
   }
 
   // Generate Reviewer-Visible Artifacts (HTML & Screenshots via Playwright)
@@ -1259,6 +1653,132 @@ async function run() {
         },
       ),
     },
+    {
+      name: '08_thermal58_receipt_normal',
+      html: generateBillHtml(
+        testIranBill,
+        {
+          business_name: 'FloCafe XP-58 Store',
+          currency: 'USD',
+          country: 'US',
+          timezone: 'America/New_York',
+        },
+        {
+          language: 'en',
+          paperSize: 'thermal58',
+          textSize: 'normal',
+          isReprint: true,
+          address: '350 5th Ave, New York',
+          phone: '+1 212 736 3100',
+          includeTaxId: true,
+          taxRegistrationNumber: 'US-99-1234567',
+          showTaxBreakdown: true,
+        },
+      ),
+    },
+    {
+      name: '09_thermal58_receipt_large',
+      html: generateBillHtml(
+        testIranBill,
+        {
+          business_name: 'FloCafe XP-58 Store',
+          currency: 'USD',
+          country: 'US',
+          timezone: 'America/New_York',
+        },
+        {
+          language: 'en',
+          paperSize: 'thermal58',
+          textSize: 'large',
+          isReprint: true,
+          address: '350 5th Ave, New York',
+          phone: '+1 212 736 3100',
+          includeTaxId: true,
+          taxRegistrationNumber: 'US-99-1234567',
+          showTaxBreakdown: true,
+        },
+      ),
+    },
+    {
+      name: '10_thermal58_receipt_extra_large',
+      html: generateBillHtml(
+        testIranBill,
+        {
+          business_name: 'FloCafe XP-58 Store',
+          currency: 'USD',
+          country: 'US',
+          timezone: 'America/New_York',
+        },
+        {
+          language: 'en',
+          paperSize: 'thermal58',
+          textSize: 'extra_large',
+          isReprint: true,
+          address: '350 5th Ave, New York',
+          phone: '+1 212 736 3100',
+          includeTaxId: true,
+          taxRegistrationNumber: 'US-99-1234567',
+          showTaxBreakdown: true,
+        },
+      ),
+    },
+    {
+      name: '11_thermal80_receipt_extra_large',
+      html: generateBillHtml(
+        testIranBill,
+        {
+          business_name: 'FloCafe 80mm Store',
+          currency: 'USD',
+          country: 'US',
+          timezone: 'America/New_York',
+        },
+        {
+          language: 'en',
+          paperSize: 'thermal80',
+          textSize: 'extra_large',
+          isReprint: true,
+          address: '350 5th Ave, New York',
+          phone: '+1 212 736 3100',
+          includeTaxId: true,
+          taxRegistrationNumber: 'US-99-1234567',
+          showTaxBreakdown: true,
+        },
+      ),
+    },
+    {
+      name: '12_thermal58_kot_extra_large',
+      html: `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${generateKotHtml(
+        testIranOrder,
+        {
+          paperWidth: 58,
+          textSize: 'extra_large',
+          language: 'en',
+          stationName: 'Hot Kitchen',
+        },
+      )}</body></html>`,
+    },
+    {
+      name: '13_thermal58_order_slip_extra_large',
+      html: `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${generateOrderSlipHtml(
+        testIranOrder,
+        {
+          title: 'Order Slip',
+          subtotal: 'Subtotal',
+          discount: 'Discount',
+          serviceCharge: 'Service Charge',
+          deliveryCharge: 'Delivery Charge',
+          packagingCharge: 'Packaging Charge',
+          tax: 'Tax',
+          total: 'Total',
+        },
+        {
+          paperWidth: 58,
+          textSize: 'extra_large',
+          country: 'US',
+          currency: 'USD',
+        },
+      )}</body></html>`,
+    },
   ];
 
   // Write HTML files
@@ -1285,14 +1805,59 @@ async function run() {
       const htmlPath = path.join(EVIDENCE_DIR, `${item.name}.html`);
       const pngPath = path.join(EVIDENCE_DIR, `${item.name}.png`);
       await page.goto(`file://${htmlPath}`);
-      // Find the bill container
-      const container = await page.$('.bill-container');
+      const container = await page.$('.bill-container, .kot-container, .order-slip');
       if (container) {
         await container.screenshot({ path: pngPath });
       } else {
         await page.screenshot({ path: pngPath, fullPage: true });
       }
       console.log(`   Captured screenshot artifact: ${pngPath}`);
+
+      if (item.name === '10_thermal58_receipt_extra_large') {
+        const computed = await page.evaluate(() => {
+          const bill = document.querySelector('.bill-container') as HTMLElement;
+          const td = document.querySelector('.items-table td')!;
+          const h1 = document.querySelector('.header h1')!;
+          const banner = document.querySelector('.reprint-banner')!;
+          const total = document.querySelector('.total-row')!;
+          const tdStyle = window.getComputedStyle(td);
+          const h1Style = window.getComputedStyle(h1);
+          const bannerStyle = window.getComputedStyle(banner);
+          const totalStyle = window.getComputedStyle(total);
+          return {
+            tdFontSize: tdStyle.fontSize,
+            tdFontWeight: tdStyle.fontWeight,
+            tdColor: tdStyle.color,
+            tdBorderBottomColor: tdStyle.borderBottomColor,
+            h1FontSize: h1Style.fontSize,
+            h1FontWeight: h1Style.fontWeight,
+            h1Color: h1Style.color,
+            bannerColor: bannerStyle.color,
+            bannerBorderColor: bannerStyle.borderTopColor,
+            totalFontSize: totalStyle.fontSize,
+            totalColor: totalStyle.color,
+            billScrollWidth: bill ? bill.scrollWidth : 0,
+            billClientWidth: bill ? bill.clientWidth : 0,
+          };
+        });
+        assert(
+          'Chromium computed styles for 58mm extra_large receipt enforce 17px/700 items, 21px/700 h1, pure rgb(0, 0, 0) colors, and zero horizontal overflow',
+          computed.tdFontSize === '17px' &&
+            computed.tdFontWeight === '700' &&
+            computed.tdColor === 'rgb(0, 0, 0)' &&
+            computed.tdBorderBottomColor === 'rgb(0, 0, 0)' &&
+            computed.h1FontSize === '21px' &&
+            computed.h1FontWeight === '700' &&
+            computed.h1Color === 'rgb(0, 0, 0)' &&
+            computed.bannerColor === 'rgb(0, 0, 0)' &&
+            computed.bannerBorderColor === 'rgb(0, 0, 0)' &&
+            computed.totalFontSize === '19px' &&
+            computed.totalColor === 'rgb(0, 0, 0)' &&
+            computed.billClientWidth > 0 &&
+            computed.billScrollWidth <= computed.billClientWidth,
+          `scrollWidth=${computed.billScrollWidth} clientWidth=${computed.billClientWidth}`,
+        );
+      }
     }
   } catch (err: any) {
     if (process.env.REQUIRE_VISUAL_EVIDENCE === '1') throw err;

@@ -1,4 +1,9 @@
 import type { AppendAttemptStorage } from './append-attempt';
+import {
+  cartItemToOrderItem,
+  type OrderItemPayload,
+  type OrderItemSource,
+} from './cart-order-item';
 
 /** Global key used by builds before prepaid attempts became user scoped. */
 export const PREPAID_ATTEMPT_STORAGE_KEY = 'flo.prepaid.checkout.attempt';
@@ -15,6 +20,7 @@ export class OrderAttemptStorageError extends Error {
 
 export interface StoredOrderAttempt {
   userId: string;
+  storeId?: string | number;
 }
 
 interface CompletedOrderAttempt {
@@ -28,6 +34,168 @@ interface CompletedOrderAttempt {
  * request a fresh idempotency key. */
 export function getPrepaidOrderAttemptStorageKey(userId: string): string {
   return `${PREPAID_ATTEMPT_STORAGE_KEY}${ORDER_ATTEMPT_USER_SUFFIX}${encodeURIComponent(userId)}`;
+}
+
+export interface CartStateForFingerprint {
+  tableId: string | null;
+  customerId: number | string | null;
+  orderType: string;
+  guestCount: number;
+  orderNotes?: string | null;
+  scheduledFor?: string | null;
+  onlinePlatform?: string | null;
+  externalOrderId?: string | null;
+  deliveryAddress?: string | null;
+  expectedPaymentMethod?: string | null;
+  expectedPaymentMethodId?: number | string | null;
+  deliveryNote?: string | null;
+  items: OrderItemSource[];
+  waivedChargeIds: Set<string>;
+  optedInChargeIds: Set<string>;
+}
+
+export function buildCartFingerprintFromState(
+  cartState: CartStateForFingerprint,
+  orderItems: OrderItemPayload[] = cartState.items.map(cartItemToOrderItem),
+): string {
+  return JSON.stringify({
+    table_id: cartState.tableId,
+    customer_id: cartState.customerId,
+    type: cartState.orderType,
+    guest_count: cartState.guestCount,
+    special_instructions: cartState.orderNotes,
+    scheduled_for:
+      cartState.orderType === 'takeaway' || cartState.orderType === 'delivery'
+        ? cartState.scheduledFor?.trim() || undefined
+        : undefined,
+    online_platform: cartState.orderType === 'online' ? cartState.onlinePlatform : undefined,
+    external_order_id: cartState.orderType === 'online' ? cartState.externalOrderId : undefined,
+    delivery_address:
+      cartState.orderType === 'delivery' ? cartState.deliveryAddress || undefined : undefined,
+    expected_payment_method:
+      cartState.orderType === 'delivery' ? cartState.expectedPaymentMethod || undefined : undefined,
+    expected_payment_method_id:
+      cartState.orderType === 'delivery'
+        ? (cartState.expectedPaymentMethodId ?? undefined)
+        : undefined,
+    delivery_note:
+      cartState.orderType === 'delivery' ? cartState.deliveryNote || undefined : undefined,
+    items: orderItems,
+    waived_charge_ids: Array.from(cartState.waivedChargeIds),
+    opted_in_charge_ids: Array.from(cartState.optedInChargeIds),
+  });
+}
+
+export function parseStoredAttemptScheduledFor(
+  fingerprint: string | undefined,
+): string | undefined {
+  if (!fingerprint) return undefined;
+  try {
+    const parsed = JSON.parse(fingerprint) as { scheduled_for?: unknown };
+    return typeof parsed?.scheduled_for === 'string' && parsed.scheduled_for.trim()
+      ? parsed.scheduled_for.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function stripScheduledForFromFingerprint(fingerprint: string): string {
+  try {
+    const parsed = JSON.parse(fingerprint) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fingerprint;
+    const { scheduled_for: _ignored, ...rest } = parsed;
+    return JSON.stringify(rest);
+  } catch {
+    return fingerprint;
+  }
+}
+
+export function normalizeAttemptStoreId(
+  storeId: string | number | null | undefined,
+): string | undefined {
+  if (storeId === null || storeId === undefined) return undefined;
+  const trimmed = String(storeId).trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function doesAttemptMatchStore(
+  attempt: { storeId?: string | number | null } | null | undefined,
+  currentStoreId: string | number | null | undefined,
+  legacyOriginStoreId?: string | number | null,
+): boolean {
+  if (!attempt) return false;
+  const normalizedCurrent = normalizeAttemptStoreId(currentStoreId) || 'default';
+  const normalizedAttemptStore = normalizeAttemptStoreId(attempt.storeId);
+  if (normalizedAttemptStore) {
+    return normalizedAttemptStore === normalizedCurrent;
+  }
+  const normalizedLegacyOrigin = normalizeAttemptStoreId(legacyOriginStoreId);
+  if (normalizedLegacyOrigin) {
+    return normalizedLegacyOrigin === normalizedCurrent;
+  }
+  return true;
+}
+
+export function fingerprintsMatchAcrossScheduleToggle(
+  storedFingerprint: string | undefined,
+  currentFingerprint: string,
+): boolean {
+  if (!storedFingerprint) return false;
+  if (storedFingerprint === currentFingerprint) return true;
+  if (
+    parseStoredAttemptScheduledFor(storedFingerprint) &&
+    !parseStoredAttemptScheduledFor(currentFingerprint)
+  ) {
+    return (
+      stripScheduledForFromFingerprint(storedFingerprint) ===
+      stripScheduledForFromFingerprint(currentFingerprint)
+    );
+  }
+  return false;
+}
+
+export function resolveRetryScheduledFor(params: {
+  orderType: string;
+  scheduledOrdersEnabled: boolean;
+  cartScheduledFor?: string | null;
+  preservedScheduledFor?: string;
+}): string | undefined {
+  if (params.orderType !== 'takeaway' && params.orderType !== 'delivery') {
+    return undefined;
+  }
+  const currentScheduledFor = params.scheduledOrdersEnabled
+    ? params.cartScheduledFor?.trim() || undefined
+    : undefined;
+  return currentScheduledFor || params.preservedScheduledFor?.trim() || undefined;
+}
+
+export function resolveCartScheduledForAfterSettingRead(params: {
+  settingReadSucceeded: boolean;
+  scheduledOrdersEnabled: boolean;
+  cartScheduledFor?: string | null;
+  preservedScheduledFor?: string;
+  attemptStoreId?: string | number | null;
+  currentStoreId?: string | number | null;
+  legacyOriginStoreId?: string | number | null;
+}): string {
+  const current = params.cartScheduledFor?.trim() || '';
+  const storeMatches =
+    params.attemptStoreId === undefined && params.currentStoreId === undefined
+      ? true
+      : doesAttemptMatchStore(
+          { storeId: params.attemptStoreId },
+          params.currentStoreId,
+          params.legacyOriginStoreId,
+        );
+  const preserved = storeMatches ? params.preservedScheduledFor?.trim() || '' : '';
+  if (params.scheduledOrdersEnabled || preserved) {
+    return current || preserved;
+  }
+  if (!params.settingReadSucceeded) {
+    return '';
+  }
+  return '';
 }
 
 function isCompletedAttempt(value: unknown): value is CompletedOrderAttempt {
@@ -432,6 +600,7 @@ const PAYMENT_DISPLAY_CODES = [
   'payment_method_unavailable',
   'payment_input_invalid',
   'cash_session_required',
+  'card_transaction_id_required',
 ] as const;
 const CHARGE_DISPLAY_CODES = [
   'charge_required',
@@ -612,5 +781,94 @@ export function classifyOrderRequestFailure(
     serverError,
     detail,
     trusted: true,
+  };
+}
+
+export const SCHEDULE_REJECTION_CODES = [
+  'SCHEDULED_ORDERS_DISABLED',
+  'PAST_SCHEDULED_TIME',
+  'INVALID_FORMAT',
+  'INVALID_TIMEZONE',
+  'INVALID_CALENDAR_DATE',
+  'DST_NONEXISTENT_TIME',
+  'DST_AMBIGUOUS_TIME',
+  'UNSUPPORTED_ORDER_TYPE',
+] as const;
+
+export type ScheduleRejectionCode = (typeof SCHEDULE_REJECTION_CODES)[number];
+
+export function getScheduleRejectionCode(error: unknown): ScheduleRejectionCode | null {
+  const data = (error as { response?: { data?: unknown } } | null)?.response?.data;
+  if (!plainRecord(data) || typeof data.code !== 'string') return null;
+  return (SCHEDULE_REJECTION_CODES as readonly string[]).includes(data.code)
+    ? (data.code as ScheduleRejectionCode)
+    : null;
+}
+
+export function isDefinitiveScheduleRejection(
+  error: unknown,
+  correlationId?: string | null,
+): boolean {
+  const response = (error as { response?: { status?: unknown; data?: unknown } } | null)?.response;
+  if (!plainRecord(response?.data)) return false;
+  const payload = response.data;
+  const scheduleCode = getScheduleRejectionCode(error);
+  const status = Number(response?.status);
+  const isExpectedRejectionStatus = status === 400 || status === 409;
+
+  if (correlationId && UUID_V4.test(correlationId)) {
+    const classified = classifyOrderRequestFailure(error, {
+      operation: 'order.create',
+      correlationId,
+    });
+    if (classified.trusted) {
+      return (
+        classified.outcome === 'not_applied' &&
+        (scheduleCode !== null || classified.reasonCode === 'validation.rejected')
+      );
+    }
+    if (
+      payload.correlation_id === undefined &&
+      payload.operation === undefined &&
+      payload.outcome === undefined &&
+      scheduleCode !== null &&
+      isExpectedRejectionStatus
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  return (
+    scheduleCode !== null &&
+    isExpectedRejectionStatus &&
+    payload.outcome !== 'applied' &&
+    payload.outcome !== 'unknown'
+  );
+}
+
+export function reconcileRejectedScheduledOrderAttempt(params: {
+  storage: AppendAttemptStorage;
+  key: string;
+  attempt: StoredOrderAttempt | null | undefined;
+  attemptedScheduledFor?: string | null;
+  error: unknown;
+  correlationId?: string | null;
+}): {
+  reconciledNotApplied: boolean;
+  rejectionCode: ScheduleRejectionCode | null;
+} {
+  if (
+    !params.attemptedScheduledFor?.trim() ||
+    !isDefinitiveScheduleRejection(params.error, params.correlationId)
+  ) {
+    return { reconciledNotApplied: false, rejectionCode: null };
+  }
+  if (params.attempt) {
+    clearOrderAttempt(params.storage, params.key, params.attempt);
+  }
+  return {
+    reconciledNotApplied: true,
+    rejectionCode: getScheduleRejectionCode(params.error),
   };
 }

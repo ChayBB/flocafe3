@@ -24,6 +24,7 @@ export const LANDING_PAGE_CANDIDATES = [
   ['staff.view', '/staff'],
   ['settings.view', '/settings'],
   ['support.use', '/support'],
+  ['printers.manage', '/print-test'],
 ] as const;
 
 export function getLandingPage(tenant?: Tenant | null): string {
@@ -47,6 +48,7 @@ const PUBLIC_PATHS = [
 export const PAGE_PERMISSIONS = [
   ['/pos', 'pos.use'],
   ['/dashboard', 'dashboard.view'],
+  ['/order-history-demo', 'dashboard.view'],
   ['/orders', 'orders.read'],
   ['/products', 'catalog.manage'],
   ['/addon-groups', 'catalog.manage'],
@@ -56,7 +58,11 @@ export const PAGE_PERMISSIONS = [
   ['/customers', 'customers.view'],
   ['/whatsapp', 'whatsapp.use'],
   ['/support', 'support.use'],
+  ['/print-test', 'printers.manage'],
 ] as const;
+
+const SETUP_STATUS_MAX_RETRIES = 2;
+const SETUP_STATUS_RETRY_DELAY_MS = 400;
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const t = useTranslations('common');
@@ -111,23 +117,36 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     if (!isStandalonePath && needsSetup === null) {
       const controller = new AbortController();
       let active = true;
-      api
-        .get('/auth/setup/status', { signal: controller.signal })
-        .then(({ data }) => {
-          if (active) setNeedsSetup(data.needsSetup);
-        })
-        .catch((err) => {
-          if (
-            !active ||
-            (err instanceof Error && (err.name === 'CanceledError' || err.name === 'AbortError'))
-          )
-            return;
-          console.error('[AuthGuard] Failed to check setup status:', err);
-          // Fail closed: do not allow normal app routes when setup state is unknown.
-          setNeedsSetup(true);
-        });
+      let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const checkSetupStatus = (attempt: number) => {
+        api
+          .get('/auth/setup/status', { signal: controller.signal })
+          .then(({ data }) => {
+            if (active) setNeedsSetup(Boolean(data?.needsSetup));
+          })
+          .catch((err) => {
+            if (
+              !active ||
+              (err instanceof Error && (err.name === 'CanceledError' || err.name === 'AbortError'))
+            )
+              return;
+            if (attempt < SETUP_STATUS_MAX_RETRIES) {
+              retryTimer = setTimeout(() => {
+                if (active) checkSetupStatus(attempt + 1);
+              }, SETUP_STATUS_RETRY_DELAY_MS);
+              return;
+            }
+            console.error('[AuthGuard] Failed to check setup status:', err);
+            // Fall back to normal auth routing rather than sending an initialized store to /setup.
+            setNeedsSetup(false);
+          });
+      };
+
+      checkSetupStatus(0);
       return () => {
         active = false;
+        if (retryTimer !== null) clearTimeout(retryTimer);
         controller.abort();
       }; // wait for the result before redirecting
     }

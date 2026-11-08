@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -27,6 +27,10 @@ import {
   Copy,
   KeyRound,
   Info,
+  Sparkles,
+  ShieldCheck,
+  Radio,
+  RotateCcw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
@@ -38,6 +42,16 @@ import { useFormatDate } from '@/hooks/useFormatDate';
 import { dialCodeFor, parsePhone } from '@/lib/phone';
 import { Ltr } from '@/components/layout/Ltr';
 import { tenantCan } from '@/lib/permissions';
+import {
+  WHATSAPP_PLACEHOLDERS,
+  DEFAULT_WHATSAPP_TEMPLATES,
+  DEFAULT_WHATSAPP_AUTOMATION_CONFIG,
+  renderWhatsAppTemplate,
+  buildSampleWhatsAppContext,
+  extractTriggerRule,
+  insertPlaceholderAtSelection,
+  type WhatsAppAutomationConfig,
+} from '../../../../../shared/whatsapp-automation';
 
 interface WhatsAppStatus {
   enabled: boolean;
@@ -52,6 +66,7 @@ interface WhatsAppStatus {
   lastError: string | null;
   lastErrorReason: string | null;
   cooldownUntil: string | null;
+  offlineMode?: boolean;
 }
 
 type WhatsAppApiErrorKey = keyof AppConfig['Messages']['whatsapp']['apiError'];
@@ -61,8 +76,10 @@ const WHATSAPP_API_ERROR_KEYS: readonly WhatsAppApiErrorKey[] = [
   'bad_connect_method',
   'body_required',
   'inbound_not_found',
+  'invalid_phone',
   'no_pairing_code',
   'no_qr',
+  'owner_required',
   'phone_not_in_blocklist',
   'phone_required',
   'phone_required_pairing',
@@ -90,7 +107,7 @@ interface SentMessage {
   bill_id: number | null;
   customer_id: number | null;
   direction: 'inbound' | 'outbound';
-  kind: 'bill_receipt' | 'manual_reply' | 'auto_followup' | 'z_report';
+  kind: 'bill_receipt' | 'manual_reply' | 'auto_followup' | 'z_report' | 'daily_sales_report';
   status: string;
   body: string;
   error: string | null;
@@ -102,7 +119,20 @@ interface SentMessage {
   read_at: string | null;
   failed_at: string | null;
   created_by_user_id: string | null;
+  trigger_rule?: string | null;
 }
+
+type WhatsAppRuleKey = keyof AppConfig['Messages']['whatsapp']['rule'];
+
+const WHATSAPP_RULE_KEYS: Record<string, WhatsAppRuleKey | undefined> = {
+  after_payment: 'after_payment',
+  feedback_delay: 'feedback_delay',
+  winback: 'winback',
+  points_threshold: 'points_threshold',
+  nth_visit: 'nth_visit',
+  broadcast: 'broadcast',
+  z_report_day_close: 'z_report_day_close',
+};
 
 interface InboxMessage {
   id: number;
@@ -131,7 +161,12 @@ const WHATSAPP_STATUS_KEYS = {
   failed: 'failed',
 } as const satisfies Record<WhatsAppMessageStatus, WhatsAppStatusKey>;
 
-type WhatsAppMessageKind = 'bill_receipt' | 'manual_reply' | 'auto_followup' | 'z_report';
+type WhatsAppMessageKind =
+  | 'bill_receipt'
+  | 'manual_reply'
+  | 'auto_followup'
+  | 'z_report'
+  | 'daily_sales_report';
 type WhatsAppKindKey = keyof AppConfig['Messages']['whatsapp']['kind'];
 
 const WHATSAPP_KIND_KEYS = {
@@ -139,6 +174,7 @@ const WHATSAPP_KIND_KEYS = {
   manual_reply: 'manual_reply',
   auto_followup: 'auto_followup',
   z_report: 'z_report',
+  daily_sales_report: 'daily_sales_report',
 } as const satisfies Record<WhatsAppMessageKind, WhatsAppKindKey>;
 
 type WhatsAppState =
@@ -159,7 +195,12 @@ const STATE_KEYS = {
   cooldown: 'cooldown',
 } as const satisfies Record<WhatsAppState, WhatsAppStateKey>;
 
-type WhatsAppLastErrorReason = 'reconnecting' | 'rate_limited' | 'logged_out' | 'cooldown';
+type WhatsAppLastErrorReason =
+  | 'reconnecting'
+  | 'rate_limited'
+  | 'logged_out'
+  | 'cooldown'
+  | 'startup_failed';
 type WhatsAppLastErrorKey = keyof AppConfig['Messages']['whatsapp']['lastError'];
 
 const WHATSAPP_LAST_ERROR_KEYS = {
@@ -167,6 +208,7 @@ const WHATSAPP_LAST_ERROR_KEYS = {
   rate_limited: 'rate_limited',
   logged_out: 'logged_out',
   cooldown: 'cooldown',
+  startup_failed: 'startup_failed',
 } as const satisfies Record<WhatsAppLastErrorReason, WhatsAppLastErrorKey>;
 
 const STATUS_STEPS = ['queued', 'typing', 'sent', 'delivered', 'read'] as const;
@@ -235,12 +277,20 @@ export default function WhatsAppPage() {
   const tCommon = useTranslations('common');
   const tState = useTranslations('whatsapp.state');
   const tKind = useTranslations('whatsapp.kind');
+  const tRule = useTranslations('whatsapp.rule');
+  const tAutomation = useTranslations('whatsapp.automation');
   const tLastError = useTranslations('whatsapp.lastError');
   const tApiError = useTranslations('whatsapp.apiError');
+  const tSend = useTranslations('whatsapp.send');
+  const tStatus = useTranslations('whatsapp.status');
+  const tSettings = useTranslations('settings');
   const { confirm, ConfirmDialog } = useConfirm();
   const setWhatsappEnabled = usePosSettingsStore((s) => s.setWhatsappEnabled);
   const { currentTenant } = useAuthStore();
   const isAdmin = tenantCan(currentTenant, 'whatsapp.manage');
+  const isOwnerRole = currentTenant?.role === 'owner';
+  const canViewReports = tenantCan(currentTenant, 'reports.view');
+  const canExportDailySales = tenantCan(currentTenant, 'reports.daily-sales.export');
   const { formatDateTime: fmt, formatTime: fmtClock } = useFormatDate();
 
   const tenantCountry = currentTenant?.country || '';
@@ -261,10 +311,27 @@ export default function WhatsAppPage() {
   const [pairingPhone, setPairingPhone] = useState(dialCode);
 
   const [sentMessages, setSentMessages] = useState<SentMessage[]>([]);
+  const [retryingIds, setRetryingIds] = useState<Set<number>>(() => new Set());
   const [inbox, setInbox] = useState<InboxMessage[]>([]);
   const [blocklist, setBlocklist] = useState<BlocklistRow[]>([]);
   const [blockPhone, setBlockPhone] = useState('');
   const [blockReason, setBlockReason] = useState('');
+
+  const [automationConfig, setAutomationConfig] = useState<WhatsAppAutomationConfig>(
+    DEFAULT_WHATSAPP_AUTOMATION_CONFIG,
+  );
+  const [automationLoaded, setAutomationLoaded] = useState(false);
+  const [automationLoadError, setAutomationLoadError] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('receipt');
+  const templateBodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const templateSelectionEstablishedRef = useRef(false);
+  const [savingAutomation, setSavingAutomation] = useState(false);
+  const [runningSweep, setRunningSweep] = useState(false);
+  const [broadcasting, setBroadcasting] = useState(false);
+  const [broadcastTemplateId, setBroadcastTemplateId] = useState<string>('winback');
+  const [broadcastMinVisits, setBroadcastMinVisits] = useState<string>('');
+  const [broadcastInactiveDays, setBroadcastInactiveDays] = useState<string>('30');
+  const [broadcastMinPoints, setBroadcastMinPoints] = useState<string>('');
 
   // Selected tab persisted in localStorage; null falls back to connection-state default.
   const [userTab, setUserTab] = useState<string | null>(() => {
@@ -284,7 +351,10 @@ export default function WhatsAppPage() {
   }, []);
 
   const defaultTab = status?.state === 'connected' ? 'sent' : 'connection';
-  const effectiveTab = userTab === 'inbox' && !isAdmin ? defaultTab : (userTab ?? defaultTab);
+  const effectiveTab =
+    (userTab === 'inbox' || userTab === 'automation') && !isAdmin
+      ? defaultTab
+      : (userTab ?? defaultTab);
   const onTabChange = (v: string) => {
     setUserTab(v);
     if (typeof window !== 'undefined') window.localStorage.setItem('whatsapp.activeTab', v);
@@ -341,6 +411,22 @@ export default function WhatsAppPage() {
     }
   }, [isAdmin]);
 
+  const refreshAutomation = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const { data } = await api.get('/whatsapp/automation');
+      if (data?.config) {
+        setAutomationConfig(data.config);
+        setAutomationLoaded(true);
+        setAutomationLoadError(false);
+      } else {
+        setAutomationLoadError(true);
+      }
+    } catch {
+      setAutomationLoadError(true);
+    }
+  }, [isAdmin]);
+
   useEffect(() => {
     // oxlint-disable-next-line react-hooks/set-state-in-effect
     void refreshStatus();
@@ -349,9 +435,10 @@ export default function WhatsAppPage() {
   useEffect(() => {
     const id = setInterval(() => {
       void refreshStatus();
+      void refreshSent();
     }, 5000);
     return () => clearInterval(id);
-  }, [refreshStatus]);
+  }, [refreshStatus, refreshSent]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -389,6 +476,141 @@ export default function WhatsAppPage() {
     // oxlint-disable-next-line react-hooks/set-state-in-effect
     void refreshBlocklist();
   }, [refreshBlocklist]);
+  useEffect(() => {
+    // oxlint-disable-next-line react-hooks/set-state-in-effect
+    void refreshAutomation();
+  }, [refreshAutomation]);
+
+  useEffect(() => {
+    templateSelectionEstablishedRef.current = false;
+    const el = templateBodyRef.current;
+    if (!el) return;
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }, [selectedTemplateId, effectiveTab]);
+
+  const saveAutomation = async () => {
+    if (!automationLoaded || automationLoadError) {
+      toast.error(tCommon('somethingWrong'));
+      return;
+    }
+    let payload: WhatsAppAutomationConfig = automationConfig;
+    const zRule = automationConfig.rules.find((r) => r.trigger === 'z_report_day_close');
+    if (zRule && isOwnerRole) {
+      const rawRecipient = (zRule.recipientPhone ?? '').trim();
+      if (zRule.enabled && !rawRecipient) {
+        toast.error(tApiError('phone_required'));
+        return;
+      }
+      let normalizedRecipient = '';
+      if (rawRecipient) {
+        const parsed = parsePhone(rawRecipient, tenantCountry);
+        if (!parsed) {
+          toast.error(tApiError('invalid_phone'));
+          return;
+        }
+        normalizedRecipient = parsed.e164;
+      }
+      payload = {
+        ...automationConfig,
+        rules: automationConfig.rules.map((r) =>
+          r.trigger === 'z_report_day_close' ? { ...r, recipientPhone: normalizedRecipient } : r,
+        ),
+      };
+    }
+    setSavingAutomation(true);
+    try {
+      const { data } = await api.put('/whatsapp/automation', payload);
+      if (data?.config) {
+        setAutomationConfig(data.config);
+        setAutomationLoaded(true);
+        setAutomationLoadError(false);
+      }
+      toast.success(tAutomation('savedSuccess'));
+    } catch (err) {
+      toastApiError(err, tCommon('saveFailed'), tApiError);
+    } finally {
+      setSavingAutomation(false);
+    }
+  };
+
+  const runSweepNow = async () => {
+    setRunningSweep(true);
+    try {
+      const { data } = await api.post('/whatsapp/automation/run-sweep');
+      const sentCount = Number(data?.feedbackSent || 0) + Number(data?.winbackSent || 0);
+      toast.success(tAutomation('sweepResult', { sent: sentCount }));
+      void refreshSent();
+    } catch {
+      toast.error(tCommon('saveFailed'));
+    } finally {
+      setRunningSweep(false);
+    }
+  };
+
+  const retrySentMessage = async (messageId: number) => {
+    if (retryingIds.has(messageId)) return;
+    if (status?.offlineMode) {
+      toast.error(tSettings('offlineModeTitle'));
+      return;
+    }
+    setRetryingIds((prev) => {
+      const next = new Set(prev);
+      next.add(messageId);
+      return next;
+    });
+    try {
+      await api.post(`/whatsapp/messages/${messageId}/retry`);
+      toast.success(tStatus('queued'));
+      await refreshSent();
+    } catch (err) {
+      const reason = (err as { response?: { data?: { reason?: string } } })?.response?.data?.reason;
+      if (reason === 'offline_mode') {
+        toast.error(tSettings('offlineModeTitle'));
+      } else if (reason === 'not_connected' || reason === 'cooldown') {
+        toast.error(tSend('error.notConnected'));
+      } else if (reason === 'blocked') {
+        toast.error(tSend('error.blocked'));
+      } else if (reason === 'not_on_whatsapp') {
+        toast.error(tSend('error.notOnWhatsapp'));
+      } else if (reason === 'rate_limited' || reason === 'weekly_cap') {
+        toast.error(tSend('error.rateLimited'));
+      } else {
+        toastApiError(err, tSend('failed'), tApiError);
+      }
+      await refreshSent();
+    } finally {
+      setRetryingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  };
+
+  const sendBroadcastNow = async () => {
+    setBroadcasting(true);
+    try {
+      const { data } = await api.post('/whatsapp/automation/broadcast', {
+        template_id: broadcastTemplateId,
+        min_visits: broadcastMinVisits ? Number(broadcastMinVisits) : undefined,
+        inactive_days: broadcastInactiveDays ? Number(broadcastInactiveDays) : undefined,
+        min_points: broadcastMinPoints ? Number(broadcastMinPoints) : undefined,
+      });
+      toast.success(
+        tAutomation('broadcastSuccess', {
+          sent: Number(data?.sent || 0),
+          skipped: Number(data?.skipped || 0),
+          matched: Number(data?.matched || 0),
+        }),
+      );
+      void refreshSent();
+    } catch (err) {
+      toastApiError(err, tCommon('saveFailed'), tApiError);
+    } finally {
+      setBroadcasting(false);
+    }
+  };
 
   const disableFeature = async () => {
     if (
@@ -453,6 +675,17 @@ export default function WhatsAppPage() {
     }
   };
 
+  const cancelPairing = async () => {
+    try {
+      await api.post('/whatsapp/cancel-pairing');
+      setQrDataUrl(null);
+      setPairingCode(null);
+      void refreshStatus();
+    } catch (err) {
+      toastApiError(err, tConnect('disconnectFailed'), tApiError);
+    }
+  };
+
   const addBlock = async () => {
     const tenantCountry = currentTenant?.country ?? '';
     const parsed = parsePhone(blockPhone.trim(), tenantCountry);
@@ -505,9 +738,15 @@ export default function WhatsAppPage() {
     }
   };
 
-  const stateLabel = (state: string) => {
-    const key = (STATE_KEYS as Record<string, WhatsAppStateKey | undefined>)[state];
-    return key ? tState(key) : state;
+  const stateLabel = (currentStatus: WhatsAppStatus) => {
+    if (currentStatus.state === 'disconnected' && currentStatus.lastErrorReason === 'logged_out') {
+      return tState('repair_needed');
+    }
+    if (currentStatus.state === 'connecting' && currentStatus.lastErrorReason === 'reconnecting') {
+      return tState('reconnecting');
+    }
+    const key = (STATE_KEYS as Record<string, WhatsAppStateKey | undefined>)[currentStatus.state];
+    return key ? tState(key) : currentStatus.state;
   };
 
   return (
@@ -521,12 +760,18 @@ export default function WhatsAppPage() {
               variant={
                 status.state === 'connected'
                   ? 'default'
-                  : status.state === 'cooldown'
+                  : status.state === 'cooldown' ||
+                      (status.state === 'disconnected' && status.lastErrorReason === 'logged_out')
                     ? 'destructive'
                     : 'secondary'
               }
+              className={
+                status.state === 'connecting' && status.lastErrorReason === 'reconnecting'
+                  ? 'border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                  : undefined
+              }
             >
-              {stateLabel(status.state)}
+              {stateLabel(status)}
               {status.connectedPhone ? (
                 <>
                   {' '}
@@ -537,6 +782,33 @@ export default function WhatsAppPage() {
           )}
         </div>
 
+        {status?.lastError && status.state !== 'cooldown' && (
+          <div
+            role="alert"
+            className={`rounded-md border px-3 py-2 text-sm flex items-center justify-between gap-2 ${
+              status.lastErrorReason === 'logged_out'
+                ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                : 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {status.lastErrorReason === 'logged_out' ? (
+                <XCircle className="size-4 shrink-0" />
+              ) : (
+                <AlertTriangle className="size-4 shrink-0" />
+              )}
+              <span>
+                {translateLastError(status.lastErrorReason, status.lastError, tLastError)}
+              </span>
+            </div>
+            {effectiveTab !== 'connection' && (
+              <Button variant="outline" size="sm" onClick={() => onTabChange('connection')}>
+                {tTabs('connection')}
+              </Button>
+            )}
+          </div>
+        )}
+
         <Tabs value={effectiveTab} onValueChange={onTabChange}>
           <TabsList>
             <TabsTrigger value="sent">
@@ -545,6 +817,11 @@ export default function WhatsAppPage() {
             {isAdmin && (
               <TabsTrigger value="inbox">
                 <Inbox className="size-4" /> {tTabs('inbox')}
+              </TabsTrigger>
+            )}
+            {isAdmin && (
+              <TabsTrigger value="automation">
+                <Sparkles className="size-4" /> {tTabs('automation')}
               </TabsTrigger>
             )}
             <TabsTrigger value="connection">
@@ -574,63 +851,80 @@ export default function WhatsAppPage() {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       {status.state === 'disconnected' && (
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div className="rounded-lg border bg-card p-4 flex flex-col gap-3">
-                            <div className="flex items-center gap-2">
-                              <div className="flex items-center justify-center size-9 rounded-md bg-brand-light dark:bg-[var(--color-brand-light)] text-brand dark:text-orange-300">
-                                <QrCode className="size-5" />
-                              </div>
-                              <h3 className="font-semibold text-sm">{tConnect('qrMethodTitle')}</h3>
+                        <div className="space-y-4">
+                          {status.lastErrorReason === 'logged_out' && (
+                            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive flex items-center gap-2">
+                              <AlertTriangle className="size-4 shrink-0" />
+                              <span className="font-medium">{tState('repair_needed')}:</span>
+                              <span>
+                                {translateLastError(
+                                  status.lastErrorReason,
+                                  status.lastError,
+                                  tLastError,
+                                )}
+                              </span>
                             </div>
-                            <p className="text-sm text-muted-foreground">
-                              {tConnect('qrMethodDescription')}
-                            </p>
-                            <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-                              <div className="flex items-start gap-1.5">
-                                <Info className="size-3.5 mt-0.5 shrink-0" />
-                                <span>{tConnect('qrMethodWhere')}</span>
+                          )}
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-lg border bg-card p-4 flex flex-col gap-3">
+                              <div className="flex items-center gap-2">
+                                <div className="flex items-center justify-center size-9 rounded-md bg-brand-light dark:bg-[var(--color-brand-light)] text-brand dark:text-orange-300">
+                                  <QrCode className="size-5" />
+                                </div>
+                                <h3 className="font-semibold text-sm">
+                                  {tConnect('qrMethodTitle')}
+                                </h3>
                               </div>
+                              <p className="text-sm text-muted-foreground">
+                                {tConnect('qrMethodDescription')}
+                              </p>
+                              <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                                <div className="flex items-start gap-1.5">
+                                  <Info className="size-3.5 mt-0.5 shrink-0" />
+                                  <span>{tConnect('qrMethodWhere')}</span>
+                                </div>
+                              </div>
+                              <Button onClick={connectQr} className="mt-auto w-full">
+                                <QrCode className="size-4" /> {tConnect('startQr')}
+                              </Button>
                             </div>
-                            <Button onClick={connectQr} className="mt-auto w-full">
-                              <QrCode className="size-4" /> {tConnect('startQr')}
-                            </Button>
-                          </div>
 
-                          <div className="rounded-lg border bg-card p-4 flex flex-col gap-3">
-                            <div className="flex items-center gap-2">
-                              <div className="flex items-center justify-center size-9 rounded-md bg-brand-light dark:bg-[var(--color-brand-light)] text-brand dark:text-orange-300">
-                                <KeyRound className="size-5" />
+                            <div className="rounded-lg border bg-card p-4 flex flex-col gap-3">
+                              <div className="flex items-center gap-2">
+                                <div className="flex items-center justify-center size-9 rounded-md bg-brand-light dark:bg-[var(--color-brand-light)] text-brand dark:text-orange-300">
+                                  <KeyRound className="size-5" />
+                                </div>
+                                <h3 className="font-semibold text-sm">
+                                  {tConnect('pairingMethodTitle')}
+                                </h3>
                               </div>
-                              <h3 className="font-semibold text-sm">
-                                {tConnect('pairingMethodTitle')}
-                              </h3>
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              {tConnect('pairingMethodDescription')}
-                            </p>
-                            <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-                              <div className="flex items-start gap-1.5">
-                                <Info className="size-3.5 mt-0.5 shrink-0" />
-                                <span>{tConnect('pairingMethodWhere')}</span>
+                              <p className="text-sm text-muted-foreground">
+                                {tConnect('pairingMethodDescription')}
+                              </p>
+                              <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                                <div className="flex items-start gap-1.5">
+                                  <Info className="size-3.5 mt-0.5 shrink-0" />
+                                  <span>{tConnect('pairingMethodWhere')}</span>
+                                </div>
                               </div>
+                              <div className="space-y-1.5">
+                                <label className="text-xs text-muted-foreground">
+                                  {tConnect('pairingPhoneLabel')}
+                                </label>
+                                <Input
+                                  value={pairingPhone}
+                                  onChange={(e) => setPairingPhone(e.target.value)}
+                                  placeholder={tConnect('pairingPhonePlaceholder', {
+                                    dialCode: dialCode || '+CC',
+                                  })}
+                                  inputMode="tel"
+                                  dir="ltr"
+                                />
+                              </div>
+                              <Button onClick={connectPairing} variant="outline" className="w-full">
+                                <KeyRound className="size-4" /> {tConnect('usePairing')}
+                              </Button>
                             </div>
-                            <div className="space-y-1.5">
-                              <label className="text-xs text-muted-foreground">
-                                {tConnect('pairingPhoneLabel')}
-                              </label>
-                              <Input
-                                value={pairingPhone}
-                                onChange={(e) => setPairingPhone(e.target.value)}
-                                placeholder={tConnect('pairingPhonePlaceholder', {
-                                  dialCode: dialCode || '+CC',
-                                })}
-                                inputMode="tel"
-                                dir="ltr"
-                              />
-                            </div>
-                            <Button onClick={connectPairing} variant="outline" className="w-full">
-                              <KeyRound className="size-4" /> {tConnect('usePairing')}
-                            </Button>
                           </div>
                         </div>
                       )}
@@ -656,6 +950,11 @@ export default function WhatsAppPage() {
                           <p className="text-xs text-muted-foreground">
                             {tConnect('qrRefreshHint')}
                           </p>
+                          <div className="pt-1">
+                            <Button variant="outline" size="sm" onClick={cancelPairing}>
+                              {tCommon('cancel')}
+                            </Button>
+                          </div>
                         </div>
                       )}
 
@@ -677,6 +976,11 @@ export default function WhatsAppPage() {
                               {tConnect('pairingWaiting')}
                             </div>
                           )}
+                          <div className="pt-1">
+                            <Button variant="outline" size="sm" onClick={cancelPairing}>
+                              {tCommon('cancel')}
+                            </Button>
+                          </div>
                         </div>
                       )}
 
@@ -751,8 +1055,28 @@ export default function WhatsAppPage() {
                       )}
 
                       {status.state === 'connecting' && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Loader2 className="size-4 animate-spin" /> {tConnect('connecting')}
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Loader2 className="size-4 animate-spin" />
+                            <span>
+                              {status.lastErrorReason === 'reconnecting'
+                                ? tState('reconnecting')
+                                : tConnect('connecting')}
+                            </span>
+                            {status.connectedPhone ? (
+                              <>
+                                {' '}
+                                · <Ltr>{status.connectedPhone}</Ltr>
+                              </>
+                            ) : null}
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={status.connectedPhone ? disconnect : cancelPairing}
+                          >
+                            {status.connectedPhone ? tConnect('disconnectCta') : tCommon('cancel')}
+                          </Button>
                         </div>
                       )}
 
@@ -904,12 +1228,51 @@ export default function WhatsAppPage() {
                             </button>
                           </TableCell>
                           <TableCell className="text-xs">
-                            {tKind(WHATSAPP_KIND_KEYS[m.kind])}
+                            <div className="flex flex-col items-start gap-1">
+                              <span>{tKind(WHATSAPP_KIND_KEYS[m.kind])}</span>
+                              {(() => {
+                                const ruleId =
+                                  m.trigger_rule ?? extractTriggerRule(m.created_by_user_id);
+                                const ruleKey = ruleId ? WHATSAPP_RULE_KEYS[ruleId] : undefined;
+                                if (!ruleKey) return null;
+                                return (
+                                  <Badge variant="secondary" className="text-[11px] font-normal">
+                                    {tRule(ruleKey)}
+                                  </Badge>
+                                );
+                              })()}
+                            </div>
                           </TableCell>
                           <TableCell>
-                            <div className="flex flex-col gap-1">
+                            <div className="flex flex-col items-start gap-1">
                               <StatusStepper status={m.status} />
                               {m.error && <div className="text-xs text-destructive">{m.error}</div>}
+                              {m.status === 'failed' &&
+                                (m.kind === 'daily_sales_report'
+                                  ? canViewReports && canExportDailySales
+                                  : m.kind === 'z_report'
+                                    ? canViewReports
+                                    : true) && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-2 text-xs"
+                                    disabled={
+                                      retryingIds.has(m.id) ||
+                                      Boolean(status?.offlineMode) ||
+                                      status?.state !== 'connected'
+                                    }
+                                    onClick={() => void retrySentMessage(m.id)}
+                                  >
+                                    {retryingIds.has(m.id) ? (
+                                      <Loader2 className="h-3 w-3 me-1 animate-spin" />
+                                    ) : (
+                                      <RotateCcw className="h-3 w-3 me-1" />
+                                    )}
+                                    {tSettings('retry')}
+                                  </Button>
+                                )}
                             </div>
                           </TableCell>
                           <TableCell className="text-sm max-w-md">
@@ -1016,14 +1379,656 @@ export default function WhatsAppPage() {
               </Card>
             </TabsContent>
           )}
-        </Tabs>
 
-        {status?.lastError && status.state !== 'cooldown' && (
-          <div className="text-sm text-red-600 flex items-center gap-1">
-            <XCircle className="size-4" />{' '}
-            {translateLastError(status.lastErrorReason, status.lastError, tLastError)}
-          </div>
-        )}
+          {isAdmin && (
+            <TabsContent value="automation" className="space-y-4">
+              {automationLoadError && (
+                <div className="rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/30 p-3 text-sm text-red-700 dark:text-red-300 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="size-4 shrink-0" />
+                    <span>{tCommon('somethingWrong')}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void refreshAutomation()}
+                  >
+                    <RotateCcw className="size-3.5" />
+                  </Button>
+                </div>
+              )}
+
+              {/* 1. Message Template Builder with Placeholders & Live Preview */}
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <Sparkles className="size-5" /> {tAutomation('templatesTitle')}
+                      </CardTitle>
+                      <CardDescription>{tAutomation('templatesDescription')}</CardDescription>
+                    </div>
+                    <Button
+                      onClick={saveAutomation}
+                      disabled={savingAutomation || !automationLoaded || automationLoadError}
+                    >
+                      {savingAutomation && <Loader2 className="size-4 animate-spin" />}{' '}
+                      {tAutomation('saveCta')}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    {automationConfig.templates.map((tpl) => (
+                      <Button
+                        key={tpl.id}
+                        type="button"
+                        size="sm"
+                        variant={selectedTemplateId === tpl.id ? 'default' : 'outline'}
+                        onClick={() => setSelectedTemplateId(tpl.id)}
+                      >
+                        {tpl.name}
+                      </Button>
+                    ))}
+                  </div>
+
+                  {(() => {
+                    const activeTpl =
+                      automationConfig.templates.find((tpl) => tpl.id === selectedTemplateId) ??
+                      automationConfig.templates[0];
+                    if (!activeTpl) return null;
+                    const sampleContext = buildSampleWhatsAppContext({
+                      store_name: currentTenant?.business_name || undefined,
+                      feedback_link: automationConfig.safety.feedbackLink || undefined,
+                    });
+                    const renderedPreview = renderWhatsAppTemplate(activeTpl.body, sampleContext);
+
+                    const updateTemplateField = (field: 'name' | 'body', value: string) => {
+                      setAutomationConfig((prev) => ({
+                        ...prev,
+                        templates: prev.templates.map((t) =>
+                          t.id === activeTpl.id ? { ...t, [field]: value } : t,
+                        ),
+                      }));
+                    };
+
+                    const markTemplateSelectionEstablished = () => {
+                      templateSelectionEstablishedRef.current = true;
+                    };
+
+                    const resetTemplateToDefault = () => {
+                      const def = DEFAULT_WHATSAPP_TEMPLATES.find((d) => d.id === activeTpl.id);
+                      if (!def) return;
+                      templateSelectionEstablishedRef.current = false;
+                      setAutomationConfig((prev) => ({
+                        ...prev,
+                        templates: prev.templates.map((t) =>
+                          t.id === activeTpl.id ? { ...def } : t,
+                        ),
+                      }));
+                      requestAnimationFrame(() => {
+                        const el = templateBodyRef.current;
+                        if (!el) return;
+                        el.setSelectionRange(def.body.length, def.body.length);
+                      });
+                    };
+
+                    const insertTemplatePlaceholder = (token: string) => {
+                      const el = templateBodyRef.current;
+                      const selectionEstablished =
+                        templateSelectionEstablishedRef.current ||
+                        (typeof document !== 'undefined' && document.activeElement === el) ||
+                        (typeof el?.selectionStart === 'number' &&
+                          (el.selectionStart !== 0 || (el.selectionEnd ?? 0) !== 0));
+                      const { body: nextBody, cursor: nextCursor } = insertPlaceholderAtSelection(
+                        activeTpl.body,
+                        token,
+                        el?.selectionStart,
+                        el?.selectionEnd,
+                        selectionEstablished,
+                      );
+                      templateSelectionEstablishedRef.current = true;
+                      updateTemplateField('body', nextBody);
+                      requestAnimationFrame(() => {
+                        const target = templateBodyRef.current;
+                        if (!target) return;
+                        target.focus();
+                        target.setSelectionRange(nextCursor, nextCursor);
+                      });
+                    };
+
+                    return (
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="space-y-3">
+                          <div className="flex items-end justify-between gap-2">
+                            <div className="flex-1 space-y-1">
+                              <label
+                                htmlFor="wa-template-name"
+                                className="text-xs font-medium text-muted-foreground"
+                              >
+                                {tAutomation('templateNameLabel')}
+                              </label>
+                              <Input
+                                id="wa-template-name"
+                                value={activeTpl.name}
+                                onChange={(e) => updateTemplateField('name', e.target.value)}
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={resetTemplateToDefault}
+                            >
+                              <RotateCcw className="size-3.5" /> {tAutomation('resetDefault')}
+                            </Button>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label
+                              htmlFor="wa-template-body"
+                              className="text-xs font-medium text-muted-foreground"
+                            >
+                              {tAutomation('templateBodyLabel')}
+                            </label>
+                            <textarea
+                              id="wa-template-body"
+                              ref={templateBodyRef}
+                              rows={8}
+                              value={activeTpl.body}
+                              onFocus={markTemplateSelectionEstablished}
+                              onClick={markTemplateSelectionEstablished}
+                              onKeyUp={markTemplateSelectionEstablished}
+                              onSelect={markTemplateSelectionEstablished}
+                              onChange={(e) => {
+                                markTemplateSelectionEstablished();
+                                updateTemplateField('body', e.target.value);
+                              }}
+                              className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <div className="text-xs font-medium text-muted-foreground">
+                              {tAutomation('placeholdersLabel')}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {WHATSAPP_PLACEHOLDERS.map((ph) => (
+                                <button
+                                  key={ph.token}
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => insertTemplatePlaceholder(ph.token)}
+                                  className="rounded border bg-muted/60 hover:bg-muted px-2 py-0.5 text-xs font-mono transition-colors cursor-pointer"
+                                  title={`${ph.label}: ${ph.sample}`}
+                                >
+                                  <Ltr>{ph.token}</Ltr>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5 flex flex-col">
+                          <div className="text-xs font-medium text-muted-foreground">
+                            {tAutomation('previewTitle')}
+                          </div>
+                          <div className="flex-1 rounded-lg border bg-[#efeae2] dark:bg-muted/40 p-4 flex items-start">
+                            <div className="rounded-lg bg-white dark:bg-card shadow-sm border px-3.5 py-2.5 text-sm whitespace-pre-line break-words max-w-md w-full">
+                              {renderedPreview}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+
+              {/* 2. Automated Sending Rules */}
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <CardTitle>{tAutomation('rulesTitle')}</CardTitle>
+                      <CardDescription>{tAutomation('rulesDescription')}</CardDescription>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={runSweepNow}
+                      disabled={runningSweep}
+                    >
+                      {runningSweep && <Loader2 className="size-3.5 animate-spin" />}{' '}
+                      {tAutomation('runSweepCta')}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {automationConfig.rules.map((rule) => {
+                    const ruleKey = WHATSAPP_RULE_KEYS[rule.trigger];
+                    const isZDayCloseRule = rule.trigger === 'z_report_day_close';
+                    const ruleDisabled = isZDayCloseRule && !isOwnerRole;
+                    const hint =
+                      rule.trigger === 'after_payment'
+                        ? tAutomation('ruleAfterPaymentHint')
+                        : rule.trigger === 'feedback_delay'
+                          ? tAutomation('ruleFeedbackDelayHint')
+                          : rule.trigger === 'winback'
+                            ? tAutomation('ruleWinbackHint')
+                            : rule.trigger === 'points_threshold'
+                              ? tAutomation('rulePointsThresholdHint')
+                              : isZDayCloseRule
+                                ? tAutomation('ruleZReportDayCloseHint')
+                                : tAutomation('ruleNthVisitHint');
+
+                    const updateRule = (patch: Partial<typeof rule>) => {
+                      setAutomationConfig((prev) => ({
+                        ...prev,
+                        rules: prev.rules.map((r) =>
+                          r.trigger === rule.trigger ? { ...r, ...patch } : r,
+                        ),
+                      }));
+                    };
+
+                    return (
+                      <div
+                        key={rule.trigger}
+                        className="rounded-lg border p-3 flex flex-col md:flex-row md:items-center justify-between gap-3"
+                      >
+                        <label
+                          className={`flex items-start gap-3 flex-1 ${ruleDisabled ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-1 size-4 accent-primary"
+                            checked={rule.enabled}
+                            disabled={ruleDisabled}
+                            onChange={(e) => updateRule({ enabled: e.target.checked })}
+                          />
+                          <div>
+                            <div className="font-medium text-sm">
+                              {ruleKey ? tRule(ruleKey) : rule.trigger}
+                            </div>
+                            <div className="text-xs text-muted-foreground">{hint}</div>
+                            {ruleDisabled && (
+                              <div className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                                {tAutomation('zReportOwnerOnlyHint')}
+                              </div>
+                            )}
+                          </div>
+                        </label>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {rule.trigger === 'feedback_delay' && (
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor={`wa-rule-threshold-${rule.trigger}`}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {tAutomation('thresholdHours')}
+                              </label>
+                              <Input
+                                id={`wa-rule-threshold-${rule.trigger}`}
+                                type="number"
+                                min={1}
+                                max={168}
+                                className="w-20 h-8 text-xs"
+                                value={rule.delayHours ?? 2}
+                                onChange={(e) =>
+                                  updateRule({
+                                    delayHours: Math.max(1, Number(e.target.value) || 1),
+                                  })
+                                }
+                              />
+                            </div>
+                          )}
+
+                          {rule.trigger === 'winback' && (
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor={`wa-rule-threshold-${rule.trigger}`}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {tAutomation('thresholdDays')}
+                              </label>
+                              <Input
+                                id={`wa-rule-threshold-${rule.trigger}`}
+                                type="number"
+                                min={1}
+                                max={365}
+                                className="w-20 h-8 text-xs"
+                                value={rule.inactiveDays ?? 30}
+                                onChange={(e) =>
+                                  updateRule({
+                                    inactiveDays: Math.max(1, Number(e.target.value) || 1),
+                                  })
+                                }
+                              />
+                            </div>
+                          )}
+
+                          {rule.trigger === 'points_threshold' && (
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor={`wa-rule-threshold-${rule.trigger}`}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {tAutomation('thresholdPoints')}
+                              </label>
+                              <Input
+                                id={`wa-rule-threshold-${rule.trigger}`}
+                                type="number"
+                                min={1}
+                                className="w-24 h-8 text-xs"
+                                value={rule.pointsThreshold ?? 500}
+                                onChange={(e) =>
+                                  updateRule({
+                                    pointsThreshold: Math.max(1, Number(e.target.value) || 1),
+                                  })
+                                }
+                              />
+                            </div>
+                          )}
+
+                          {rule.trigger === 'nth_visit' && (
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor={`wa-rule-threshold-${rule.trigger}`}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {tAutomation('thresholdVisits')}
+                              </label>
+                              <Input
+                                id={`wa-rule-threshold-${rule.trigger}`}
+                                type="number"
+                                min={1}
+                                max={1000}
+                                className="w-20 h-8 text-xs"
+                                value={rule.nthVisit ?? 5}
+                                onChange={(e) =>
+                                  updateRule({ nthVisit: Math.max(1, Number(e.target.value) || 1) })
+                                }
+                              />
+                            </div>
+                          )}
+
+                          {isZDayCloseRule ? (
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor="wa-rule-recipient-z_report_day_close"
+                                className="text-xs text-muted-foreground"
+                              >
+                                {tAutomation('zReportRecipientLabel')}
+                              </label>
+                              <Input
+                                id="wa-rule-recipient-z_report_day_close"
+                                type="tel"
+                                inputMode="tel"
+                                dir="ltr"
+                                disabled={ruleDisabled}
+                                className="w-44 h-8 text-xs font-mono"
+                                value={rule.recipientPhone ?? ''}
+                                placeholder={tBlocklist('phonePlaceholder', {
+                                  dialCode: dialCode || '+CC',
+                                })}
+                                onChange={(e) => updateRule({ recipientPhone: e.target.value })}
+                              />
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor={`wa-rule-template-${rule.trigger}`}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {tAutomation('templateSelectLabel')}
+                              </label>
+                              <select
+                                id={`wa-rule-template-${rule.trigger}`}
+                                value={rule.templateId}
+                                onChange={(e) => updateRule({ templateId: e.target.value })}
+                                className="h-8 rounded-md border bg-background px-2 text-xs"
+                              >
+                                {automationConfig.templates.map((tpl) => (
+                                  <option key={tpl.id} value={tpl.id}>
+                                    {tpl.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+
+              {/* 3. Customer Segment Broadcast */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Radio className="size-5" /> {tAutomation('broadcastTitle')}
+                  </CardTitle>
+                  <CardDescription>{tAutomation('broadcastDescription')}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="wa-broadcast-template"
+                        className="text-xs text-muted-foreground"
+                      >
+                        {tAutomation('templateSelectLabel')}
+                      </label>
+                      <select
+                        id="wa-broadcast-template"
+                        value={broadcastTemplateId}
+                        onChange={(e) => setBroadcastTemplateId(e.target.value)}
+                        className="h-9 rounded-md border bg-background px-2.5 text-sm block"
+                      >
+                        {automationConfig.templates.map((tpl) => (
+                          <option key={tpl.id} value={tpl.id}>
+                            {tpl.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1 w-32">
+                      <label
+                        htmlFor="wa-broadcast-min-visits"
+                        className="text-xs text-muted-foreground"
+                      >
+                        {tAutomation('broadcastMinVisits')}
+                      </label>
+                      <Input
+                        id="wa-broadcast-min-visits"
+                        type="number"
+                        min={0}
+                        value={broadcastMinVisits}
+                        onChange={(e) => setBroadcastMinVisits(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-1 w-36">
+                      <label
+                        htmlFor="wa-broadcast-inactive-days"
+                        className="text-xs text-muted-foreground"
+                      >
+                        {tAutomation('broadcastInactiveDays')}
+                      </label>
+                      <Input
+                        id="wa-broadcast-inactive-days"
+                        type="number"
+                        min={0}
+                        value={broadcastInactiveDays}
+                        onChange={(e) => setBroadcastInactiveDays(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-1 w-32">
+                      <label
+                        htmlFor="wa-broadcast-min-points"
+                        className="text-xs text-muted-foreground"
+                      >
+                        {tAutomation('broadcastMinPoints')}
+                      </label>
+                      <Input
+                        id="wa-broadcast-min-points"
+                        type="number"
+                        min={0}
+                        value={broadcastMinPoints}
+                        onChange={(e) => setBroadcastMinPoints(e.target.value)}
+                      />
+                    </div>
+
+                    <Button type="button" onClick={sendBroadcastNow} disabled={broadcasting}>
+                      {broadcasting && <Loader2 className="size-4 animate-spin" />}{' '}
+                      <Send className="size-4" /> {tAutomation('broadcastSendCta')}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* 4. Safety & Anti-Spam Controls */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldCheck className="size-5" /> {tAutomation('safetyTitle')}
+                  </CardTitle>
+                  <CardDescription>{tAutomation('safetyDescription')}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <label className="flex items-center gap-3 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-primary"
+                      checked={automationConfig.safety.autoOptOutEnabled}
+                      onChange={(e) =>
+                        setAutomationConfig((prev) => ({
+                          ...prev,
+                          safety: { ...prev.safety, autoOptOutEnabled: e.target.checked },
+                        }))
+                      }
+                    />
+                    <span>{tAutomation('autoOptOutLabel')}</span>
+                  </label>
+
+                  <div className="space-y-2 pt-2 border-t">
+                    <label className="flex items-center gap-3 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-primary"
+                        checked={automationConfig.safety.quietHoursEnabled}
+                        onChange={(e) =>
+                          setAutomationConfig((prev) => ({
+                            ...prev,
+                            safety: { ...prev.safety, quietHoursEnabled: e.target.checked },
+                          }))
+                        }
+                      />
+                      <span>{tAutomation('quietHoursLabel')}</span>
+                    </label>
+
+                    <div className="grid gap-3 sm:grid-cols-3 pt-1">
+                      <div className="space-y-1">
+                        <label
+                          htmlFor="wa-quiet-hours-start"
+                          className="text-xs text-muted-foreground"
+                        >
+                          {tAutomation('quietHoursStart')}
+                        </label>
+                        <Input
+                          id="wa-quiet-hours-start"
+                          type="time"
+                          value={automationConfig.safety.quietHoursStart}
+                          onChange={(e) =>
+                            setAutomationConfig((prev) => ({
+                              ...prev,
+                              safety: { ...prev.safety, quietHoursStart: e.target.value },
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label
+                          htmlFor="wa-quiet-hours-end"
+                          className="text-xs text-muted-foreground"
+                        >
+                          {tAutomation('quietHoursEnd')}
+                        </label>
+                        <Input
+                          id="wa-quiet-hours-end"
+                          type="time"
+                          value={automationConfig.safety.quietHoursEnd}
+                          onChange={(e) =>
+                            setAutomationConfig((prev) => ({
+                              ...prev,
+                              safety: { ...prev.safety, quietHoursEnd: e.target.value },
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label htmlFor="wa-max-per-week" className="text-xs text-muted-foreground">
+                          {tAutomation('maxPerWeekLabel')}
+                        </label>
+                        <Input
+                          id="wa-max-per-week"
+                          type="number"
+                          min={1}
+                          max={50}
+                          value={automationConfig.safety.maxPerCustomerPerWeek}
+                          onChange={(e) =>
+                            setAutomationConfig((prev) => ({
+                              ...prev,
+                              safety: {
+                                ...prev.safety,
+                                maxPerCustomerPerWeek: Math.max(1, Number(e.target.value) || 1),
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t">
+                    <div className="space-y-1">
+                      <label htmlFor="wa-feedback-link" className="text-xs text-muted-foreground">
+                        {tAutomation('feedbackLinkLabel')}
+                      </label>
+                      <Input
+                        id="wa-feedback-link"
+                        dir="ltr"
+                        value={automationConfig.safety.feedbackLink}
+                        onChange={(e) =>
+                          setAutomationConfig((prev) => ({
+                            ...prev,
+                            safety: { ...prev.safety, feedbackLink: e.target.value },
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t flex justify-end">
+                    <Button
+                      onClick={saveAutomation}
+                      disabled={savingAutomation || !automationLoaded || automationLoadError}
+                    >
+                      {savingAutomation && <Loader2 className="size-4 animate-spin" />}{' '}
+                      {tAutomation('saveCta')}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+        </Tabs>
       </div>
     </>
   );

@@ -23,6 +23,7 @@ import {
   Hourglass,
   LayoutGrid,
   Lock,
+  MessageCircle,
   Minus,
   ReceiptText,
   RotateCcw,
@@ -40,11 +41,14 @@ import { useCashClose } from '@/hooks/useCashClose';
 import toast from 'react-hot-toast';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { useFormatDate } from '@/hooks/useFormatDate';
+import { PriceExceptionsCard } from '@/components/dashboard/PriceExceptionsCard';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { PAYMENT_METHODS } from '@/lib/payment-methods';
@@ -53,6 +57,9 @@ import { splitHoursMinutes } from '@/lib/table-timing';
 import { tenantCan } from '@/lib/permissions';
 import { businessDateForInstant } from '@shared/business-date';
 import { downloadBlob } from '@/lib/download';
+import { exportReportAsPdf, MenuPopupBlockedError } from '@/lib/export-pdf';
+import { SendWhatsAppReportModal } from '@/components/dashboard/SendWhatsAppReportModal';
+import { shareDailySalesViaWhatsApp } from '@/lib/whatsapp-share';
 
 interface PaymentMethodBreakdown {
   method: string | null;
@@ -89,6 +96,18 @@ interface RefundActivity {
   approved_by_name: string;
 }
 
+interface PeriodProfitability {
+  total_quantity: number;
+  net_revenue: number;
+  known_cost_revenue: number;
+  known_cost_quantity: number;
+  unknown_cost_quantity: number;
+  cost_status: 'known' | 'partial' | 'unknown';
+  ingredient_cost: number | null;
+  profit: number | null;
+  margin_percent: number | null;
+}
+
 interface FinancialSummary {
   startDate: string;
   endDate: string;
@@ -100,14 +119,23 @@ interface FinancialSummary {
   averageOrderValue: number;
   paymentMethods: PaymentMethodBreakdown[];
   refunds: RefundActivity[];
+  profitability?: PeriodProfitability;
 }
 
 interface TopProduct {
-  product_id: number;
+  product_id: number | string;
   product_name: string;
   total_quantity: number;
   total_revenue: number;
   order_count: number;
+  net_revenue?: number;
+  known_cost_revenue?: number;
+  known_cost_quantity?: number;
+  unknown_cost_quantity?: number;
+  cost_status?: 'known' | 'partial' | 'unknown';
+  ingredient_cost?: number | null;
+  profit?: number | null;
+  margin_percent?: number | null;
 }
 
 interface RecentOrder {
@@ -235,6 +263,10 @@ export default function DashboardPage() {
   const tCommon = useTranslations('common');
   const tPos = useTranslations('pos');
   const tOrders = useTranslations('orders');
+  const tProducts = useTranslations('products');
+  const tSettings = useTranslations('settings');
+  const tWhatsAppConnection = useTranslations('whatsapp.connection');
+  const tWhatsAppSend = useTranslations('whatsapp.send');
   const router = useRouter();
   const [stats, setStats] = useState<DailyStats | null>(null);
   const [daySummary, setDaySummary] = useState<DaySummary | null>(null);
@@ -245,9 +277,15 @@ export default function DashboardPage() {
   const [weeklyComparison, setWeeklyComparison] = useState<WeeklyComparison | null>(null);
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  const [dailySalesWhatsAppOpen, setDailySalesWhatsAppOpen] = useState(false);
 
   const isOwner = tenantCan(currentTenant, 'dashboard.view');
   const canViewFinancials = tenantCan(currentTenant, 'reports.financial.view');
+  const canSendDailySalesWhatsApp =
+    tenantCan(currentTenant, 'reports.view') &&
+    tenantCan(currentTenant, 'reports.daily-sales.export') &&
+    tenantCan(currentTenant, 'whatsapp.use');
+  const canViewSettings = tenantCan(currentTenant, 'settings.view');
   const fmt = useFormatCurrency();
   // Financial figures require `reports.financial.view`, independently of `dashboard.view`;
   // mask them instead of showing a misleading zero when that permission isn't granted.
@@ -266,14 +304,46 @@ export default function DashboardPage() {
   });
   const [selectedDate, setSelectedDate] = useState(todayLocal);
   const [selectedMonth, setSelectedMonth] = useState(todayLocal.slice(0, 7));
-  const [periodMode, setPeriodMode] = useState<'day' | 'month'>('day');
+  const [rangeStartDate, setRangeStartDate] = useState(() => shiftDate(todayLocal, -6));
+  const [rangeEndDate, setRangeEndDate] = useState(todayLocal);
+  const [periodMode, setPeriodMode] = useState<'day' | 'month' | 'range'>('day');
   const dayInputRef = useRef<HTMLInputElement>(null);
   const monthInputRef = useRef<HTMLInputElement>(null);
+  const rangeFromInputRef = useRef<HTMLInputElement>(null);
+  const rangeToInputRef = useRef<HTMLInputElement>(null);
   const isToday = periodMode === 'day' && selectedDate === todayLocal;
   const range =
     periodMode === 'month'
       ? getMonthRange(selectedMonth)
-      : { startDate: selectedDate, endDate: selectedDate };
+      : periodMode === 'range'
+        ? { startDate: rangeStartDate, endDate: rangeEndDate }
+        : { startDate: selectedDate, endDate: selectedDate };
+
+  const handleRangeStartChange = (nextFrom: string) => {
+    if (!nextFrom) return;
+    setRangeStartDate(nextFrom);
+    if (nextFrom > rangeEndDate) {
+      setRangeEndDate(nextFrom);
+    } else {
+      const maxEnd = shiftDate(nextFrom, 92);
+      if (rangeEndDate > maxEnd) {
+        setRangeEndDate(maxEnd > todayLocal ? todayLocal : maxEnd);
+      }
+    }
+  };
+
+  const handleRangeEndChange = (nextTo: string) => {
+    if (!nextTo) return;
+    setRangeEndDate(nextTo);
+    if (nextTo < rangeStartDate) {
+      setRangeStartDate(nextTo);
+    } else {
+      const minStart = shiftDate(nextTo, -92);
+      if (rangeStartDate < minStart) {
+        setRangeStartDate(minStart);
+      }
+    }
+  };
 
   /** Opens Chromium's native calendar UI while preserving keyboard fallback. */
   const openPicker = (input: HTMLInputElement | null) => {
@@ -308,7 +378,7 @@ export default function DashboardPage() {
       ? api.get('/reports/daily-stats', { signal: controller.signal })
       : Promise.resolve(null);
     const scopedSummary =
-      periodMode === 'month'
+      periodMode !== 'day'
         ? Promise.resolve(null)
         : api.get('/reports/summary', {
             params: { date: selectedDate },
@@ -355,12 +425,18 @@ export default function DashboardPage() {
       }),
       api.get('/reports/recentOrders', {
         params:
-          periodMode === 'month'
+          periodMode !== 'day'
             ? { start_date: range.startDate, end_date: range.endDate, limit: 6 }
             : { date: selectedDate, limit: 6 },
         signal: controller.signal,
       }),
-      api.get('/reports/insights', { params: { days: 30 }, signal: controller.signal }),
+      api.get('/reports/insights', {
+        params:
+          periodMode !== 'day'
+            ? { start_date: range.startDate, end_date: range.endDate }
+            : { days: 30 },
+        signal: controller.signal,
+      }),
       comparisonRequest,
     ])
       .then(
@@ -384,7 +460,15 @@ export default function DashboardPage() {
       });
     return () => controller.abort();
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOwner, canViewFinancials, periodMode, selectedDate, selectedMonth]);
+  }, [
+    isOwner,
+    canViewFinancials,
+    periodMode,
+    selectedDate,
+    selectedMonth,
+    rangeStartDate,
+    rangeEndDate,
+  ]);
 
   // Day-close wizard lives in useCashClose + CashCloseModal; the page
   // only opens it and mounts it.
@@ -402,30 +486,142 @@ export default function DashboardPage() {
     router.replace('/dashboard', { scroll: false });
   }, [cashCloseAction, cashCloseView, openCloseModal, router]);
 
-  const exportDailySales = async (format: 'xlsx' | 'csv') => {
-    if (periodMode !== 'day' || isExporting) return;
+  const exportDailySales = async (format: 'xlsx' | 'csv' | 'pdf') => {
+    if (isExporting) return;
     setIsExporting(true);
     try {
+      const dateParams =
+        periodMode === 'day'
+          ? { date: selectedDate }
+          : { from: range.startDate, to: range.endDate };
+      const span =
+        periodMode === 'day' || range.startDate === range.endDate
+          ? range.startDate
+          : `${range.startDate}_to_${range.endDate}`;
+
+      if (format === 'pdf') {
+        await exportReportAsPdf({
+          endpoint: '/reports/daily-sales/export',
+          params: dateParams,
+          filename: `daily-sales-${span}.pdf`,
+        });
+        return;
+      }
+
       if (format === 'xlsx') {
         const res = await api.get('/reports/daily-sales/export', {
-          params: { date: selectedDate, format: 'xlsx' },
+          params: { ...dateParams, format: 'xlsx' },
           responseType: 'blob',
         });
-        downloadBlob(res.data as Blob, `daily-sales-${selectedDate}.xlsx`);
+        downloadBlob(res.data as Blob, `daily-sales-${span}.xlsx`);
         return;
       }
       toast(t('exportCsvStarted'));
-      for (const part of ['summary', 'items'] as const) {
+      for (const part of ['summary', 'daily', 'taxes', 'items', 'payments'] as const) {
         const res = await api.get('/reports/daily-sales/export', {
-          params: { date: selectedDate, format: 'csv', part },
+          params: { ...dateParams, format: 'csv', part },
           responseType: 'blob',
         });
-        downloadBlob(res.data as Blob, `daily-sales-${selectedDate}-${part}.csv`);
+        downloadBlob(res.data as Blob, `daily-sales-${span}-${part}.csv`);
       }
+    } catch (error) {
+      toast.error(
+        error instanceof MenuPopupBlockedError
+          ? tProducts('menuPopupBlocked')
+          : tCommon('downloadFailed'),
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const exportDailyInvoices = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      const dateParams =
+        periodMode === 'day'
+          ? { date: selectedDate }
+          : { from: range.startDate, to: range.endDate };
+      const span =
+        periodMode === 'day' || range.startDate === range.endDate
+          ? range.startDate
+          : `${range.startDate}_to_${range.endDate}`;
+
+      await exportReportAsPdf({
+        endpoint: '/reports/daily-invoices/export',
+        params: dateParams,
+        filename: `invoices-${span}.pdf`,
+        pageSize: 'A4',
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof MenuPopupBlockedError
+          ? tProducts('menuPopupBlocked')
+          : tCommon('downloadFailed'),
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const exportCustomerSales = async (format: 'xlsx' | 'csv') => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      const res = await api.get('/reports/customer-sales/export', {
+        params: { start_date: range.startDate, end_date: range.endDate, format },
+        responseType: 'blob',
+      });
+      const span =
+        range.startDate === range.endDate
+          ? range.startDate
+          : `${range.startDate}_to_${range.endDate}`;
+      downloadBlob(res.data as Blob, `customer-sales-${span}.${format}`);
     } catch {
       toast.error(tCommon('downloadFailed'));
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleSendDailySalesWhatsApp = async (phoneE164: string): Promise<boolean> => {
+    try {
+      const dateParams =
+        periodMode === 'day'
+          ? { date: selectedDate }
+          : { from: range.startDate, to: range.endDate };
+      const result = await shareDailySalesViaWhatsApp(dateParams, phoneE164);
+      if (result === false) {
+        toast.error(tCommon('somethingWrong'));
+        return false;
+      }
+      toast.success(
+        t(
+          result === 'sent'
+            ? 'reportSentSuccess'
+            : result === 'submitted'
+              ? 'reportSubmittedPending'
+              : 'reportOpeningWhatsAppWeb',
+        ),
+      );
+      return true;
+    } catch (err: unknown) {
+      const reason = (err as { response?: { data?: { reason?: string } } })?.response?.data?.reason;
+      if (reason === 'offline_mode') {
+        toast.error(tSettings('offlineModeTitle'));
+      } else if (reason === 'feature_off') {
+        toast.error(tWhatsAppConnection('notEnabled'));
+      } else if (reason === 'blocked') {
+        toast.error(tWhatsAppSend('error.blocked'));
+      } else if (reason === 'not_on_whatsapp') {
+        toast.error(tWhatsAppSend('error.notOnWhatsapp'));
+      } else if (reason === 'rate_limited' || reason === 'cooldown') {
+        toast.error(tWhatsAppSend('error.rateLimited'));
+      } else {
+        toast.error(tCommon('somethingWrong'));
+      }
+      return false;
     }
   };
 
@@ -474,7 +670,7 @@ export default function DashboardPage() {
       )
     : null;
   const primaryTiles: DashboardTile[] =
-    periodMode === 'month'
+    periodMode !== 'day'
       ? [
           {
             label: t('netCollections'),
@@ -641,7 +837,11 @@ export default function DashboardPage() {
             {t('title')}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {periodMode === 'month' ? t('selectMonth') : t('selectDate')}
+            {periodMode === 'month'
+              ? t('selectMonth')
+              : periodMode === 'range'
+                ? t('periodWindow', { start: rangeStartDate, end: rangeEndDate })
+                : t('selectDate')}
           </p>
         </div>
 
@@ -666,7 +866,7 @@ export default function DashboardPage() {
                 <CalendarDays size={16} />
               </button>
             </div>
-          ) : (
+          ) : periodMode === 'month' ? (
             <div className="relative">
               <input
                 ref={monthInputRef}
@@ -686,6 +886,52 @@ export default function DashboardPage() {
                 <CalendarDays size={16} />
               </button>
             </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <input
+                  ref={rangeFromInputRef}
+                  type="date"
+                  value={rangeStartDate}
+                  max={todayLocal}
+                  onChange={(e) => handleRangeStartChange(e.target.value)}
+                  className="h-10 appearance-none rounded-xl border border-border bg-card ps-3 pe-10 text-sm text-foreground shadow-sm [color-scheme:light] focus:outline-none focus:ring-2 focus:ring-brand/30 dark:[color-scheme:dark] [&::-webkit-calendar-picker-indicator]:pointer-events-none [&::-webkit-calendar-picker-indicator]:opacity-0"
+                  aria-label={t('periodStart')}
+                />
+                <button
+                  type="button"
+                  onClick={() => openPicker(rangeFromInputRef.current)}
+                  className="absolute inset-y-0 end-0 z-10 flex w-9 items-center justify-center rounded-e-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label={t('openDatePicker')}
+                >
+                  <CalendarDays size={16} />
+                </button>
+              </div>
+              <div className="relative">
+                <input
+                  ref={rangeToInputRef}
+                  type="date"
+                  value={rangeEndDate}
+                  min={rangeStartDate}
+                  max={
+                    shiftDate(rangeStartDate, 92) < todayLocal
+                      ? shiftDate(rangeStartDate, 92)
+                      : todayLocal
+                  }
+                  onChange={(e) => handleRangeEndChange(e.target.value)}
+                  className="h-10 appearance-none rounded-xl border border-border bg-card ps-3 pe-10 text-sm text-foreground shadow-sm [color-scheme:light] focus:outline-none focus:ring-2 focus:ring-brand/30 dark:[color-scheme:dark] [&::-webkit-calendar-picker-indicator]:pointer-events-none [&::-webkit-calendar-picker-indicator]:opacity-0"
+                  aria-label={t('periodEnd')}
+                />
+                <button
+                  type="button"
+                  onClick={() => openPicker(rangeToInputRef.current)}
+                  className="absolute inset-y-0 end-0 z-10 flex w-9 items-center justify-center rounded-e-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label={t('openDatePicker')}
+                >
+                  <CalendarDays size={16} />
+                </button>
+              </div>
+            </div>
           )}
 
           <div
@@ -693,7 +939,7 @@ export default function DashboardPage() {
             role="group"
             aria-label={t('periodView')}
           >
-            {(['day', 'month'] as const).map((mode) => (
+            {(['day', 'month', 'range'] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -716,37 +962,66 @@ export default function DashboardPage() {
             <Lock size={14} />
             {t('closeShift')}
           </Button>
-          {periodMode === 'day' && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={isExporting}
-                  className="h-10 rounded-xl bg-card px-4 shadow-sm"
-                  title={t('exportSales')}
-                >
-                  <Download size={14} />
-                  {t('exportSales')}
-                  <ChevronDown size={14} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onSelect={() => exportDailySales('xlsx')}>
-                  <FileSpreadsheet size={14} />
-                  {t('exportXlsx')}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isExporting}
+                className="h-10 rounded-xl bg-card px-4 shadow-sm"
+                title={t('exportSales')}
+              >
+                <Download size={14} />
+                {t('exportSales')}
+                <ChevronDown size={14} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onSelect={() => exportDailySales('xlsx')}>
+                <FileSpreadsheet size={14} />
+                {t('exportXlsx')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => exportDailySales('csv')}>
+                <FileText size={14} />
+                {t('exportCsv')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => exportDailySales('pdf')}>
+                <FileText size={14} />
+                {t('exportPdf')}
+              </DropdownMenuItem>
+              {canSendDailySalesWhatsApp && (
+                <DropdownMenuItem onSelect={() => setDailySalesWhatsAppOpen(true)}>
+                  <MessageCircle size={14} className="text-emerald-500" />
+                  {t('sendViaWhatsApp')}
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => exportDailySales('csv')}>
-                  <FileText size={14} />
-                  {t('exportCsv')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+              )}
+              <DropdownMenuItem onSelect={() => exportDailyInvoices()}>
+                <FileText size={14} />
+                {t('exportInvoicesPdf')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>{t('exportCustomerSales')}</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => exportCustomerSales('xlsx')}>
+                <FileSpreadsheet size={14} />
+                {t('exportXlsx')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => exportCustomerSales('csv')}>
+                <FileText size={14} />
+                {t('exportCsv')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
       <CashCloseModal model={cashClose} />
+      <SendWhatsAppReportModal
+        open={dailySalesWhatsAppOpen}
+        country={currentTenant?.country ?? ''}
+        canViewSettings={canViewSettings}
+        onOpenChange={setDailySalesWhatsAppOpen}
+        onSend={handleSendDailySalesWhatsApp}
+      />
 
       {loading ? (
         <div
@@ -814,6 +1089,57 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {canViewFinancials && financialSummary?.profitability && (
+            <div className="mt-5 grid grid-cols-1 overflow-hidden rounded-2xl border border-border bg-card shadow-sm sm:grid-cols-3">
+              <div className="flex items-center gap-3 p-4 sm:p-5">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+                  <ChefHat size={18} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-muted-foreground">{t('ingredientCost')}</p>
+                  <p className="mt-1 text-lg font-semibold text-foreground">
+                    {financialSummary.profitability.ingredient_cost !== null
+                      ? fmt(Number(financialSummary.profitability.ingredient_cost))
+                      : t('costUnknown')}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 border-t border-border p-4 sm:border-s sm:border-t-0 sm:p-5">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
+                  <TrendingUp size={18} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-muted-foreground">{t('grossProfit')}</p>
+                  <p className="mt-1 text-lg font-semibold text-foreground">
+                    {financialSummary.profitability.profit !== null
+                      ? fmt(Number(financialSummary.profitability.profit))
+                      : t('costUnknown')}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 border-t border-border p-4 sm:border-s sm:border-t-0 sm:p-5">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                  <BarChart3 size={18} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-muted-foreground">{t('grossMargin')}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <p className="text-lg font-semibold text-foreground">
+                      {financialSummary.profitability.margin_percent !== null
+                        ? `${financialSummary.profitability.margin_percent}%`
+                        : t('costUnknown')}
+                    </p>
+                    {financialSummary.profitability.cost_status === 'partial' && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                        {t('partialCost')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -918,12 +1244,19 @@ export default function DashboardPage() {
                   {topProducts.map((product) => (
                     <div
                       key={product.product_id}
-                      className="flex items-center justify-between px-5 py-3"
+                      className="flex items-center justify-between gap-3 px-5 py-3"
                     >
                       <div className="min-w-0">
-                        <span className="text-sm font-medium text-foreground">
-                          {product.product_name}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-foreground">
+                            {product.product_name}
+                          </span>
+                          {canViewFinancials && product.cost_status === 'partial' && (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                              {t('partialCost')}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-muted-foreground">
                           {t('productSoldOrders', {
                             quantity: product.total_quantity,
@@ -931,14 +1264,48 @@ export default function DashboardPage() {
                           })}
                         </p>
                       </div>
-                      <span className="text-sm font-semibold text-foreground shrink-0">
-                        {fmt(Number(product.total_revenue))}
-                      </span>
+                      <div className="shrink-0 text-end">
+                        <span className="text-sm font-semibold text-foreground">
+                          {fmt(Number(product.total_revenue))}
+                        </span>
+                        {canViewFinancials && product.cost_status && (
+                          <div className="text-xs text-muted-foreground">
+                            {product.cost_status === 'unknown' ||
+                            product.ingredient_cost === null ||
+                            product.ingredient_cost === undefined ? (
+                              <span>{t('costUnknown')}</span>
+                            ) : (
+                              <span>
+                                {t('ingredientCostLabel', {
+                                  amount: fmt(Number(product.ingredient_cost)),
+                                })}
+                                {product.profit !== null && product.profit !== undefined && (
+                                  <>
+                                    {' · '}
+                                    {t('profitMarginLabel', {
+                                      profit: fmt(Number(product.profit)),
+                                      margin:
+                                        product.margin_percent !== null &&
+                                        product.margin_percent !== undefined
+                                          ? `${product.margin_percent}%`
+                                          : '—',
+                                    })}
+                                  </>
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="mt-5">
+            <PriceExceptionsCard startDate={range.startDate} endDate={range.endDate} />
           </div>
 
           <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">

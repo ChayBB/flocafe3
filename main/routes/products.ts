@@ -1,3 +1,9 @@
+import {
+  assertOnlineAllowed,
+  getOfflineModeAbortSignal,
+  isOfflineMode,
+  OfflineModeError,
+} from '../services/offline-mode';
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, generateShortId, getSettingValue } from '../db';
 import { isBlockedSsrfTarget } from '../middleware/security';
@@ -13,6 +19,7 @@ import * as https from 'https';
 import * as net from 'net';
 import { asyncHandler } from '../middleware/async-handler';
 import { TERMINAL_ITEM_STATUSES } from '../../shared/order-item-status';
+import { ACTIVE_CATEGORIES_CTE_CLAUSES } from './categories';
 
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 
@@ -137,20 +144,56 @@ async function resolvePublicHostname(hostname: string, signal: AbortSignal): Pro
   return addresses[0].address;
 }
 
-function fetchPinnedHttps(
+export function fetchPinnedHttps(
   rawUrl: string,
   resolvedAddress: string,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ): Promise<{ status: number; headers: Headers; body: Buffer }> {
+  try {
+    assertOnlineAllowed('Image import');
+  } catch (error) {
+    return Promise.reject(error);
+  }
   const parsedUrl = new URL(rawUrl);
+  const offlineSignal = getOfflineModeAbortSignal();
+  const effectiveSignal = signal ? AbortSignal.any([signal, offlineSignal]) : offlineSignal;
+  if (effectiveSignal.aborted) {
+    if (isOfflineMode() || offlineSignal.aborted) {
+      return Promise.reject(new OfflineModeError('Image import'));
+    }
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    return Promise.reject(abortError);
+  }
 
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (error?: Error, result?: { status: number; headers: Headers; body: Buffer }) => {
       if (settled) return;
       settled = true;
-      if (error) reject(error);
-      else resolve(result!);
+      effectiveSignal.removeEventListener('abort', onAbort);
+      if (error) {
+        if (isOfflineMode() || offlineSignal.aborted) {
+          reject(new OfflineModeError('Image import'));
+        } else {
+          reject(error);
+        }
+      } else if (isOfflineMode() || offlineSignal.aborted) {
+        reject(new OfflineModeError('Image import'));
+      } else {
+        resolve(result!);
+      }
+    };
+
+    const onAbort = () => {
+      request.destroy();
+      if (isOfflineMode() || offlineSignal.aborted) {
+        finish(new OfflineModeError('Image import'));
+        return;
+      }
+      const abortError = new Error('The operation was aborted');
+      abortError.name = 'AbortError';
+      finish(abortError);
     };
 
     const request = https.request(
@@ -161,7 +204,7 @@ function fetchPinnedHttps(
         method: 'GET',
         headers: { 'User-Agent': 'FloCafe-ImageProxy/1.0' },
         servername: parsedUrl.hostname,
-        signal,
+        signal: effectiveSignal,
         lookup: ((_hostname, options, callback) => {
           const family = net.isIP(resolvedAddress);
           // Restrict lookup strictly to the verified SSRF-safe address.
@@ -177,6 +220,12 @@ function fetchPinnedHttps(
         let totalBytes = 0;
 
         response.on('data', (chunk: Buffer) => {
+          if (isOfflineMode() || offlineSignal.aborted) {
+            response.destroy();
+            request.destroy();
+            finish(new OfflineModeError('Image import'));
+            return;
+          }
           totalBytes += chunk.length;
           if (totalBytes > MAX_FETCH_BYTES) {
             response.destroy();
@@ -198,6 +247,11 @@ function fetchPinnedHttps(
     );
 
     request.on('error', (error) => finish(error));
+    if (effectiveSignal.aborted) {
+      onAbort();
+      return;
+    }
+    effectiveSignal.addEventListener('abort', onAbort, { once: true });
     request.end();
   });
 }
@@ -1068,13 +1122,34 @@ function writeProductVariants(
   }
 }
 
-function validateCategoryId(db: any, categoryId: unknown): string | null {
+function validateCategoryId(
+  db: ReturnType<typeof getDatabase>,
+  categoryId: unknown,
+  retainedCategoryId?: string | null,
+): string | null {
   if (categoryId === null || categoryId === undefined || categoryId === '') return null;
   if (typeof categoryId !== 'string') return 'category_id must be a string or null';
-  const category = db
-    .prepare('SELECT id FROM categories WHERE id = ? AND deleted_at IS NULL AND is_active = 1')
-    .get(categoryId);
+  const normalizedCategoryId = categoryId.trim();
+  if (!normalizedCategoryId) return null;
+  const selectCategory = db.prepare(
+    'SELECT id, is_active, parent_id FROM categories WHERE id = ? AND deleted_at IS NULL',
+  );
+  const category = selectCategory.get(normalizedCategoryId) as
+    | { id: string; is_active: number | boolean; parent_id: string | null }
+    | undefined;
   if (!category) return 'Category not found or inactive';
+  if (normalizedCategoryId === (retainedCategoryId ?? null)) return null;
+  if (!category.is_active) return 'Category not found or inactive';
+  const seen = new Set<string>([category.id]);
+  let nextParentId = category.parent_id ? category.parent_id.trim() || null : null;
+  while (nextParentId && !seen.has(nextParentId)) {
+    seen.add(nextParentId);
+    const ancestor = selectCategory.get(nextParentId) as
+      | { id: string; is_active: number | boolean; parent_id: string | null }
+      | undefined;
+    if (!ancestor || !ancestor.is_active) return 'Category not found or inactive';
+    nextParentId = ancestor.parent_id ? ancestor.parent_id.trim() || null : null;
+  }
   return null;
 }
 
@@ -1127,14 +1202,16 @@ router.get('/', requirePermission('catalog.view'), (req: Request, res: Response)
   try {
     const db = getDatabase();
     const includeInactiveVariants = wantsInactiveVariants(req);
-    let query = `SELECT p.id, p.category_id, p.name, p.description, p.price, p.cost, p.sku, p.barcode,
+    const activeOnly = req.query.active === 'true' || req.query.active === '1';
+    const ctePrefix = activeOnly ? `WITH RECURSIVE ${ACTIVE_CATEGORIES_CTE_CLAUSES} ` : '';
+    let query = `${ctePrefix}SELECT p.id, p.category_id, p.name, p.description, p.price, p.cost, p.sku, p.barcode,
       p.sale_unit, p.allow_fractional_quantity, p.weight_precision,
       p.inventory_product_id, p.inventory_deduction_quantity,
       p.is_active, p.sort_order, p.track_inventory, p.stock_quantity, p.low_stock_threshold,
       p.tax_type, p.tax_rate, p.tax_category_id, p.tax_behavior, p.cb_percent, p.tags, p.dietary_tags, p.deleted_at, p.created_at, p.updated_at,
       CASE WHEN p.image_url IS NULL OR p.image_url = '' THEN 0 ELSE 1 END AS has_image
-      FROM products p 
-      LEFT JOIN categories c ON p.category_id = c.id
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id AND c.deleted_at IS NULL
       WHERE p.deleted_at IS NULL`;
     const params: any[] = [];
 
@@ -1142,8 +1219,9 @@ router.get('/', requirePermission('catalog.view'), (req: Request, res: Response)
       query += ' AND p.category_id = ?';
       params.push(req.query.category_id);
     }
-    if (req.query.active === 'true' || req.query.active === '1') {
-      query += ' AND p.is_active = 1 AND (c.id IS NULL OR c.is_active = 1)';
+    if (activeOnly) {
+      query +=
+        " AND p.is_active = 1 AND (NULLIF(TRIM(p.category_id), '') IS NULL OR c.id IN (SELECT id FROM active_categories))";
     }
     if (req.query.search) {
       query += ' AND (p.name LIKE ? OR p.sku LIKE ?)';
@@ -1189,6 +1267,7 @@ router.get('/', requirePermission('catalog.view'), (req: Request, res: Response)
 
     res.json({ products: productsWithRelations });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -1274,6 +1353,7 @@ router.get(
       });
       res.send(buffer);
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1312,6 +1392,7 @@ router.get('/:id', requirePermission('catalog.view'), (req: Request, res: Respon
       }),
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -1328,6 +1409,9 @@ router.post(
       if (!url || typeof url !== 'string') {
         return res.status(400).json({ error: 'URL is required' });
       }
+      if (isOfflineMode()) {
+        return res.status(503).json({ error: 'offline_mode' });
+      }
 
       // HTTPS only — prevents MITM and mixed-content issues
       if (!url.startsWith('https://')) {
@@ -1341,13 +1425,20 @@ router.post(
       let response: { status: number; headers: Headers; body: Buffer } | undefined;
       const controller = new AbortController();
       const requestSignal = getHttpRequestSignal(req);
+      const offlineSignal = getOfflineModeAbortSignal();
       const abortForShutdown = () => controller.abort();
-      if (requestSignal?.aborted) controller.abort();
-      else requestSignal?.addEventListener('abort', abortForShutdown, { once: true });
+      if (requestSignal?.aborted || offlineSignal.aborted) controller.abort();
+      else {
+        requestSignal?.addEventListener('abort', abortForShutdown, { once: true });
+        offlineSignal.addEventListener('abort', abortForShutdown, { once: true });
+      }
       const timeout = setTimeout(() => controller.abort(), 15_000); // 15s timeout
 
       try {
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+          if (isOfflineMode() || offlineSignal.aborted) {
+            return res.status(503).json({ error: 'offline_mode' });
+          }
           let parsedUrl: URL;
           try {
             parsedUrl = new URL(currentUrl);
@@ -1368,6 +1459,10 @@ router.post(
           try {
             resolvedAddress = await resolvePublicHostname(parsedUrl.hostname, controller.signal);
           } catch (error: any) {
+            res.locals.postHogError = error;
+            if (error?.code === 'offline_mode' || isOfflineMode() || offlineSignal.aborted) {
+              return res.status(503).json({ error: 'offline_mode' });
+            }
             if (error?.name === 'AbortError') {
               return res.status(504).json({ error: 'Request timed out' });
             }
@@ -1377,10 +1472,18 @@ router.post(
             return res.status(400).json({ error: 'URL is not allowed' });
           }
 
+          if (isOfflineMode() || offlineSignal.aborted) {
+            return res.status(503).json({ error: 'offline_mode' });
+          }
+
           let hopResponse: { status: number; headers: Headers; body: Buffer };
           try {
             hopResponse = await fetchPinnedHttps(currentUrl, resolvedAddress, controller.signal);
           } catch (fetchError: any) {
+            res.locals.postHogError = fetchError;
+            if (fetchError?.code === 'offline_mode' || isOfflineMode() || offlineSignal.aborted) {
+              return res.status(503).json({ error: 'offline_mode' });
+            }
             if (fetchError.name === 'AbortError') {
               return res.status(504).json({ error: 'Request timed out' });
             }
@@ -1406,6 +1509,10 @@ router.post(
 
           response = hopResponse;
           break;
+        }
+
+        if (isOfflineMode() || offlineSignal.aborted) {
+          return res.status(503).json({ error: 'offline_mode' });
         }
 
         if (!response) {
@@ -1435,14 +1542,17 @@ router.post(
           const dataUri = `data:${detectedType};base64,${base64}`;
 
           res.json({ data: dataUri });
-        } catch {
+        } catch (error) {
+          res.locals.postHogError = error;
           return res.status(502).json({ error: 'Could not fetch the image' });
         }
       } finally {
         clearTimeout(timeout);
         requestSignal?.removeEventListener('abort', abortForShutdown);
+        offlineSignal.removeEventListener('abort', abortForShutdown);
       }
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -1673,6 +1783,7 @@ router.post('/', requirePermission('catalog.manage'), (req: Request, res: Respon
       }),
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
     res
@@ -1688,6 +1799,7 @@ router.put('/:id', requirePermission('catalog.manage'), (req: Request, res: Resp
       .prepare('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL')
       .get(req.params.id) as
       | {
+          category_id?: string | null;
           sale_unit?: string;
           allow_fractional_quantity?: number;
           stock_quantity?: number;
@@ -1776,7 +1888,11 @@ router.put('/:id', requirePermission('catalog.manage'), (req: Request, res: Resp
       return res.status(400).json({ error: taxCategoryError });
     }
     if (hasOwn(req.body, 'category_id')) {
-      const categoryError = validateCategoryId(db, category_id);
+      const categoryError = validateCategoryId(
+        db,
+        category_id,
+        normalizeNullableString(product.category_id),
+      );
       if (categoryError) {
         captureProductValidation('fc.backend.product.update.validation', 'category_invalid');
         return res.status(400).json({ error: categoryError });
@@ -2022,6 +2138,7 @@ router.put('/:id', requirePermission('catalog.manage'), (req: Request, res: Resp
       }),
     });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
     res
@@ -2071,6 +2188,7 @@ router.delete('/:id', requirePermission('catalog.manage'), (req: Request, res: R
     db.prepare('UPDATE products SET deleted_at = ? WHERE id = ?').run(now(), req.params.id);
     res.json({ message: 'Product deleted' });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -2129,6 +2247,7 @@ router.post('/:id/stock', requirePermission('inventory.manage'), (req: Request, 
     })();
     res.json({ product: serializeProduct(updated) });
   } catch (error: any) {
+    res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
     const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
     res
@@ -2150,6 +2269,7 @@ router.get(
         .get() as { count: number };
       res.json({ count: row.count });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -2168,6 +2288,7 @@ router.post(
         .run(now());
       res.json({ updated: result.changes });
     } catch (error: any) {
+      res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }

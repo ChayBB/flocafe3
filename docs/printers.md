@@ -14,13 +14,23 @@ FloCafe prints receipts and kitchen order tickets from the desktop app. Configur
 | Type | Use it for | What you need |
 | --- | --- | --- |
 | Network | Receipt or kitchen printers on the local network | Printer IP address and port; most ESC/POS printers use port `9100` |
-| USB / OS Queue | Direct USB printers and OS-managed print queues | A direct USB connection or a configured OS print queue (Windows Spooler or CUPS) |
+| USB / OS Queue | Direct USB printers and OS-managed print queues | A configured OS print queue (Windows Spooler, or CUPS via **System Settings > Printers & Scanners** on macOS including Mac App Store builds) |
 | WebUSB | A browser-connected printer | A compatible browser and a user-selected device; the browser sends the print bytes |
 
 Set the paper width to match the printer, either 58 mm or 80 mm. The first configured printer
 becomes the default; choose a different default in Settings when another printer should receive
-ordinary receipts. If no hardware printer is configured, FloCafe falls back to system print when
+ordinary receipts. Keep **Print Method** set to **ESCPOS (USB / Network Thermal Printer)** for
+USB, Network, and WebUSB receipt printers; **Browser Print (any printer)** opens the browser print
+dialog instead. If no hardware printer is configured, FloCafe falls back to system print when
 printing bills.
+
+Set **Text size** per printer to Normal, Large, or Extra large when printed text is hard to read.
+It applies to the kitchen tickets, delivery slips, and bills sent to that printer across ESC/POS
+(USB, Network, and WebUSB) and Browser Print. On ESC/POS, Large doubles the character height and
+keeps the same number of characters per line, while Extra large doubles height and width so lines
+hold half as many characters and wrap sooner; on Browser Print, Large and Extra large scale the
+thermal receipt, kitchen-ticket, and delivery-slip font sizes and weights. Existing printers stay on
+Normal, which prints as before.
 
 Enable **Open cash drawer on checkout** on a receipt printer only when a till is connected to that
 printer's drawer-kick port. When enabled, FloCafe appends the standard ESC/POS drawer pulse to
@@ -28,11 +38,12 @@ printed receipt jobs for that printer, and only for payment methods on the drawe
 
 ## Receipt logos
 
-Upload a PNG, JPEG, or WebP image under **Settings > General > Store Logo**. The source file can be
-up to 5 MB. FloCafe processes it in the browser and creates a monochrome raster for ESC/POS output.
-In **Settings > Printers > Bill Content**, enable **Store Logo** to include the logo on supported
-bill print paths. The setting is off by default. Browser bills center the logo above the business
-header. See the [printing architecture](architecture/printing.md) for the renderer details.
+Upload a browser-supported image (PNG, JPEG, WebP, BMP, GIF, SVG, AVIF, or ICO, up to 5 MB) under
+**Settings > General > Store Logo**. FloCafe trims surrounding margins, normalizes contrast, builds
+a monochrome thermal preview alongside the uploaded logo, and enables **Store Logo** automatically
+when you save. You can toggle **Store Logo** independently in **Settings > Printers > Bill Content**.
+Browser bills center the logo above the business header. See the
+[printing architecture](architecture/printing.md#receipt-logos) for the renderer details.
 
 ## Menu printing
 
@@ -43,8 +54,13 @@ From **Products** or **POS**, open **Print Menu** and choose a destination befor
 - **Paper** opens the system print dialog for A4 or Letter paper.
 - **PDF** saves a structured PDF through the desktop save dialog. In a browser, use **Save as PDF**
   in the system print dialog instead.
+- **Publish to QR Menu** generates a customer-facing PDF and replaces the store's existing public
+  Google Drive menu without changing its QR link.
 
-The dialog also lets you filter which products and details appear. See the
+Paper, PDF, and QR output support Mobile-First Cafe, Classic Bistro, and Standard templates plus an
+optional product-photo toggle. The dialog also lets you filter which products and details appear.
+The QR Menu tab in Settings can instead upload a custom PDF, pause or resume public sharing,
+download a 1024 px QR PNG, and print an A5 tabletop card. See the
 [printing architecture](architecture/printing.md#menu-catalog-printing) for how each destination is
 rendered.
 
@@ -64,16 +80,13 @@ to the Xprinter profile. A name containing `epson tm`, `tm-t88`, `tm-t82`, `tm-t
 resolves to the Epson TM series profile. Only a name that matches nothing falls through to the
 generic profile chosen by paper width.
 
-The generic profiles are the conservative ones. They are ASCII-only, with no text shaping, and
-they skip unsupported non-financial text with a warning but **refuse** a receipt whose financial
-rows contain unsupported text, reporting `Receipt not printed: a financial row contains unsupported
-printer text`. The Xprinter and Epson profiles add the Latin code pages and Latin script
-representability on top of that. All four shipped profiles enable the capability-gated raster
-path; what differs is encoding and script coverage.
-
-If a receipt is refused because of unsupported text in a financial row, check the resolved profile
-before changing anything else. A printer set to the generic profile when it should be an Xprinter
-or Epson is the usual cause.
+The generic profiles are the conservative ones for native text encoding (ASCII-only, with no text
+shaping), while the Xprinter and Epson profiles add the Latin code pages and Latin script
+representability. All four shipped profiles enable the capability-gated
+[raster printing](architecture/printing.md#raster-printing) path, so lines containing characters
+outside the printer's native code pages are rendered as raster bands. If raster rendering is
+unavailable or fails on a financial row, FloCafe refuses the print rather than omitting an amount,
+reporting `Receipt not printed: ...` with the affected row and next steps.
 
 ## Arabic-script text
 
@@ -87,10 +100,9 @@ A validated printer profile may also enable the capability-gated raster path, wh
 isolated Chromium renderer and bundled local fonts for content the printer cannot shape itself.
 Profile capability is what enables it; a locale never does.
 
-On the document-driven thermal and browser paths, unsupported non-financial text is skipped with a
-warning, while an unsupported item row or financial row refuses the receipt before transport with
-an explicit operator warning. The exact warning contract and the direct-write exceptions are in
-[the printing architecture](architecture/printing.md).
+When neither firmware shaping nor raster rendering is available, unsupported non-financial text is
+skipped with a warning and an unsupported financial row refuses the receipt before transport; see
+[capabilities and refusal](architecture/printing.md#capabilities-and-refusal).
 
 ## Receipt and kitchen-ticket languages
 
@@ -162,8 +174,7 @@ restart. Tickets printed from the browser or WebUSB path report their failure on
 A printer's **Printer Name** is a free label for what it does, such as "Isan kitchen" or "Drinks
 bar". For a USB / OS-queue printer, **Printer on this computer** picks the OS queue it sends to,
 from the same detection FloCafe uses; it is stored as `device_name`. FloCafe dispatches the job by
-sending that exact queue name to the OS (`lp -d <name>` on macOS and Linux, `OpenPrinterW` on
-Windows). There is no fuzzy matching. A printer saved without a `device_name` sends to its
+sending that exact queue name to the OS (see [Transports](architecture/printing.md#transports)). There is no fuzzy matching. A printer saved without a `device_name` sends to its
 **Printer Name**.
 
 - On macOS and Linux, the CUPS queue name can differ from the display name shown in system
@@ -198,6 +209,18 @@ processors or reject raw byte streams. If prints fail or come out garbled:
 
 ### macOS and Linux CUPS printers
 
+- On macOS (including the Mac App Store build), USB receipt printers must first be added in
+  **System Settings > Printers & Scanners** before FloCafe can detect or print to them. Connect the
+  USB printer, click **Add Printer, Scanner, or Fax...**, and select the manufacturer's driver or a
+  generic queue (**Generic PostScript Printer** or **Generic PCL Printer**); FloCafe sends raw
+  ESC/POS bytes through CUPS and bypasses macOS page filters (see
+  [Transports](architecture/printing.md#transports)). Once the queue is added in macOS, click
+  **Detect** in **Settings > Printers** and select the detected queue so the printer name in FloCafe
+  matches the CUPS queue name.
+- When no matching CUPS queue exists (for example, before the USB printer is added in **System
+  Settings > Printers & Scanners** or when a manual name does not match the CUPS queue identifier),
+  CUPS returns `client-error-not-found` (`0x0406`) and FloCafe reports `Printer queue "<name>" was
+  not found in macOS Printers & Scanners` (`failureClass: not_configured`).
 - If a printer was unplugged, the CUPS print queue may be in a disabled or paused state. Re-enable
   the queue in your operating system printer settings; FloCafe resumes sending print jobs once the
   queue is active.
@@ -227,7 +250,9 @@ If printing still fails:
 
 1. Open **Help > Open Logs Folder**, or check `main.log`.
 2. Search for lines starting with `[Printer]` around the time of the failure to find the exact error
-   code or stage.
+   code or stage (for example, `[Printer] IPP print queued for "<name>" (job <id>)` or
+   `[Printer] IPP print failed for "<name>"`). On macOS and Linux, also check `/var/log/cups/error_log`
+   and `/var/log/cups/access_log` for CUPS daemon diagnostics.
 3. If you are opening an issue, include the `[Printer]` log snippet, your OS, printer make and model,
    connection type, and paper width.
 

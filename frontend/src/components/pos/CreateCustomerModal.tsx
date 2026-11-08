@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -46,6 +46,17 @@ export default function CreateCustomerModal({
     phone: isPhoneInitial ? initialSearch.trim() : '',
   }));
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !saving) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [saving, onClose]);
 
   const handleSwapFields = () => {
     setForm((prev) => ({ ...prev, firstName: prev.phone, phone: prev.firstName }));
