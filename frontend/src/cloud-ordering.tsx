@@ -39,6 +39,7 @@ interface SentOrder {
     name: string;
     quantity: number;
     note: string;
+    status?: string | null;
     addons: { name: string; quantity: number }[];
   }[];
 }
@@ -173,6 +174,7 @@ function Ordering() {
   }>();
   const [orderNote, setOrderNote] = useState('');
   const [sent, setSent] = useState<SentOrder[]>([]);
+  const announced = useRef(new Map<string, string | null>());
   const [pending, setPending] = useState<Attempt>();
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -248,15 +250,51 @@ function Ordering() {
       });
       if (!response.ok) return;
       const orders = readSentOrders(await response.json());
-      if (orders) setSent(orders);
+      if (!orders) return;
+      const seen = announced.current;
+      for (const order of orders) {
+        order.items.forEach((item, index) => {
+          const key = `${order.id}:${index}`;
+          const status = item.status ?? null;
+          const before = seen.get(key);
+          seen.set(key, status);
+          if (before === undefined || before === status) return;
+          if (status === 'preparing' || status === 'ready' || status === 'served') {
+            const label =
+              status === 'preparing'
+                ? t('statusPreparing')
+                : status === 'ready'
+                  ? t('statusReady')
+                  : t('statusServed');
+            toast(`${item.name} · ${label}`, {
+              icon: status === 'ready' ? '🔔' : undefined,
+              duration: 6000,
+            });
+            if (status === 'ready') navigator.vibrate?.([200, 100, 200]);
+          }
+        });
+      }
+      setSent(orders);
     } catch {
       // The sent list is informational; ordering keeps working without it.
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
-    if (open && ready && !expired) void refreshSent();
-  }, [open, ready, expired, refreshSent]);
+    if (ready && !expired) void refreshSent();
+  }, [ready, expired, refreshSent]);
+
+  const cooking = sent.some(
+    (order) =>
+      order.status !== 'cancelled' &&
+      order.items.some((item) => item.status !== 'served' && item.status !== 'cancelled'),
+  );
+  useEffect(() => {
+    if (!(open || cooking) || !ready || expired) return;
+    void refreshSent();
+    const timer = window.setInterval(() => void refreshSent(), 15_000);
+    return () => window.clearInterval(timer);
+  }, [open, cooking, ready, expired, refreshSent]);
 
   useEffect(() => {
     void Promise.resolve().then(load);
@@ -306,18 +344,12 @@ function Ordering() {
         (candidate) => presentation.orderItemIds.get(candidate.id) === line.menu_item_id,
       );
     const variant = product?.variants?.find((candidate) => candidate.id === line.menu_item_id);
-    const options = item?.addon_groups?.flatMap((group) => group.options) ?? [];
-    const addonNames = (line.addons ?? []).map((addon) => ({
-      id: addon.id,
-      quantity: addon.quantity,
-      name: options.find((option) => option.id === addon.id)?.name ?? '',
-    }));
     const name = product
       ? variant
         ? `${product.name} (${variant.name})`
         : product.name
       : (item?.name ?? 'รายการที่รอยืนยัน');
-    return { product, variant, addonNames, name };
+    return { product, variant, name };
   };
   const limitError = () => toast.error('จำนวนรายการหรือตัวเลือกเกินขีดจำกัด กรุณาลดจำนวนแล้วลองใหม่');
   const changeQty = (key: string, delta: number) => {
@@ -524,6 +556,7 @@ function Ordering() {
             cartQuantities={quantities}
             searchPlaceholder={t('searchMenu')}
             flat
+            flingScale={0.5}
             scrollSpy
             loopSections
             disabled={disabled}
@@ -582,19 +615,6 @@ function Ordering() {
                               <span className="block truncate text-sm font-medium">
                                 {info.name}
                               </span>
-                              {info.addonNames.length > 0 && (
-                                <div className="mt-0.5 space-y-0.5">
-                                  {info.addonNames.map((addon) => (
-                                    <p
-                                      key={addon.id}
-                                      className="truncate text-xs text-muted-foreground"
-                                    >
-                                      + {addon.name}
-                                      {addon.quantity > 1 ? ` x${addon.quantity}` : ''}
-                                    </p>
-                                  ))}
-                                </div>
-                              )}
                               {line.note && (
                                 <p className="mt-0.5 truncate text-xs italic text-muted-foreground">
                                   {line.note}
@@ -702,12 +722,6 @@ function Ordering() {
                         <li key={key} className="flex items-start justify-between gap-2 py-3">
                           <div className="min-w-0">
                             <p className="text-sm font-medium">{item.name}</p>
-                            {item.addons.map((addon, addonIndex) => (
-                              <p key={addonIndex} className="text-xs text-muted-foreground">
-                                + {addon.name}
-                                {addon.quantity > 1 ? ` x${addon.quantity}` : ''}
-                              </p>
-                            ))}
                             {item.note && (
                               <p className="text-xs italic text-muted-foreground">{item.note}</p>
                             )}
@@ -715,7 +729,7 @@ function Ordering() {
                               <Ltr>x {item.quantity}</Ltr>
                             </p>
                           </div>
-                          <SentStatus status={order.status} />
+                          <SentStatus status={item.status ?? order.status} />
                         </li>
                       ))}
                   </ul>
@@ -805,6 +819,6 @@ function Ordering() {
 createRoot(document.getElementById('root')!).render(
   <IntlProvider locale="th-TH" messages={messages} timeZone="Asia/Bangkok">
     <Ordering />
-    <Toaster />
+    <Toaster containerStyle={{ zIndex: 2147483647 }} />
   </IntlProvider>,
 );

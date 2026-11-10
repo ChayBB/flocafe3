@@ -99,7 +99,14 @@ export interface GuestOrderInput {
 }
 
 export type GuestOrderOutcome =
-  | { kind: 'placed'; status: number; orderNumber: string | null; replayed: boolean }
+  | {
+      kind: 'placed';
+      status: number;
+      orderNumber: string | null;
+      replayed: boolean;
+      /** The order_items rows this placement created, oldest first; empty on a replay. */
+      itemIds: number[];
+    }
   | { kind: 'held'; status: number; body: Record<string, unknown> }
   | { kind: 'failed'; status: number; error: string };
 
@@ -179,14 +186,20 @@ export async function placeGuestOrder(
     };
   }
   const order = result.data.order;
+  const newItems: { id: number }[] = replayed
+    ? []
+    : (order.items || []).filter((item: { id: number }) => !existingItemIds.has(item.id));
   if (!replayed) {
-    const newItems = (order.items || []).filter(
-      (item: { id: number }) => !existingItemIds.has(item.id),
-    );
     // The kitchen ticket is printed here because a guest has no print permission of their own.
     void callMainApiAsGuest(req, 'POST', '/printers/print-kot', {
       body: { orderId: order.id, items: newItems },
     }).catch(() => undefined);
   }
-  return { kind: 'placed', status: 201, orderNumber: order.order_number ?? null, replayed };
+  return {
+    kind: 'placed',
+    status: 201,
+    orderNumber: order.order_number ?? null,
+    replayed,
+    itemIds: newItems.map((item) => item.id).sort((a, b) => a - b),
+  };
 }

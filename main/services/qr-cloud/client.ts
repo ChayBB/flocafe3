@@ -245,6 +245,13 @@ export function acknowledgeConnectorOrder(
   return requestConnectorJson(options, '/api/v1/connectors/ack-receipt', JSON.stringify(receipt));
 }
 
+export function reportConnectorKitchenStatus(
+  options: FetchEventsOptions,
+  report: { order_id: string; statuses: string[] },
+): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/order-status', JSON.stringify(report));
+}
+
 export function readConnectorCapabilities(options: FetchEventsOptions): Promise<unknown> {
   return requestConnectorJson(options, '/api/v1/connectors/capabilities');
 }

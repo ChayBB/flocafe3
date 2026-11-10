@@ -165,7 +165,7 @@ async function verifyOrderAcceptance() {
   inbox.storeEvents([{ id: eventId, kind: 'order.created', payload: { order_id: orderId } }]);
   inbox.openInbox().exec('DROP TABLE order_acceptances; PRAGMA user_version = 1');
   inbox.closeInbox();
-  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 3);
+  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 4);
   assert.equal(
     inbox.openInbox().prepare('SELECT status FROM inbox_events WHERE event_id = ?').get(eventId)
       .status,
@@ -189,6 +189,7 @@ async function verifyOrderAcceptance() {
   const outbound: string[] = [];
   let pageBody: unknown = order;
   const acknowledgements: { pos_receipt_id: string }[] = [];
+  const kitchenReports: { order_id: string; statuses: string[] }[] = [];
   https.request = (
     options: { method: string; path: string; rejectUnauthorized: boolean },
     callback: (response: unknown) => void,
@@ -201,6 +202,13 @@ async function verifyOrderAcceptance() {
       const ack = options.path.endsWith('/ack-receipt');
       const receipt = ack ? JSON.parse(body!) : null;
       const tableAction = options.path.endsWith('/table-qr') ? JSON.parse(body!) : null;
+      if (options.path.endsWith('/order-status')) {
+        kitchenReports.push(JSON.parse(body!));
+        response.statusCode = 200;
+        callback(response);
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
       if (tableAction) {
         response.statusCode = 200;
         callback(response);
@@ -387,6 +395,32 @@ async function verifyOrderAcceptance() {
     assert.ok(job().acknowledged_at);
     assert.deepEqual(acknowledgements[0], acknowledgements[1]);
     assert.equal(lines().length, 1);
+
+    const sync = () =>
+      jobDb
+        .prepare('SELECT done, last_payload FROM order_status_sync WHERE event_id = ?')
+        .get(eventId);
+    assert.deepEqual(kitchenReports, [{ order_id: orderId, statuses: ['pending'] }]);
+    assert.deepEqual(sync(), { done: 0, last_payload: '["pending"]' });
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.equal(kitchenReports.length, 1, 'an unchanged kitchen status is not re-sent');
+    db.prepare("UPDATE order_items SET status = 'ready' WHERE order_id = ?").run(placed.id);
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.deepEqual(kitchenReports.at(-1), { order_id: orderId, statuses: ['ready'] });
+    db.prepare("UPDATE order_items SET status = 'served' WHERE order_id = ?").run(placed.id);
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.deepEqual(kitchenReports.at(-1), { order_id: orderId, statuses: ['served'] });
+    assert.deepEqual(sync(), { done: 1, last_payload: '["served"]' });
+    const { kitchenStatusOf } = require('../main/services/qr-cloud/order-delivery');
+    assert.deepEqual(
+      ['pending', 'preparing', 'ready', 'completed', 'voided', undefined].map(kitchenStatusOf),
+      ['pending', 'preparing', 'ready', 'served', 'cancelled', 'cancelled'],
+    );
+    assertEqualOrThrow(
+      kitchenReports.length,
+      3,
+      'POS kitchen progress reaches the Cloud order once per change',
+    );
 
     const automatic = config.updateConfig({ automatic: true });
     const older = crypto.randomUUID();

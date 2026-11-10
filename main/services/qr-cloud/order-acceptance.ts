@@ -321,6 +321,12 @@ export async function acceptCloudOrder(
       .prepare(`INSERT INTO order_ack_jobs (event_id, cloud_url, cloud_order_id, pos_receipt_id)
       VALUES (?, ?, ?, ?) ON CONFLICT(event_id) DO NOTHING`)
       .run(eventId, cloudUrl, preview.order_id, randomUUID());
+    if (result.itemIds.length) {
+      inbox
+        .prepare(`INSERT INTO order_status_sync (event_id, cloud_url, cloud_order_id, pos_item_ids)
+        VALUES (?, ?, ?, ?) ON CONFLICT(event_id) DO NOTHING`)
+        .run(eventId, cloudUrl, preview.order_id, JSON.stringify(result.itemIds));
+    }
     inbox.prepare('DELETE FROM order_auto_jobs WHERE event_id = ?').run(eventId);
     inbox
       .prepare(

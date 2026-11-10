@@ -12,7 +12,7 @@ import * as path from 'node:path';
  * `poll_log`) so existing rows import with their Cloud event ids intact and deduplicate.
  */
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS inbox_events (
@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS order_ack_jobs (
   acknowledged_at TEXT,
   last_error TEXT
 );
+CREATE TABLE IF NOT EXISTS order_status_sync (
+  event_id TEXT PRIMARY KEY,
+  cloud_url TEXT NOT NULL,
+  cloud_order_id TEXT NOT NULL,
+  pos_item_ids TEXT NOT NULL,
+  last_payload TEXT,
+  done INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_order_status_sync_open ON order_status_sync(cloud_url, done, retry_at);
 CREATE TABLE IF NOT EXISTS poll_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   checked_at TEXT NOT NULL DEFAULT (datetime('now')),

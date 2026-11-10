@@ -8,6 +8,7 @@ import { readConnectorEventPage, readConnectorOrder } from './connector-order-so
 import { menuPreview, tableSessionScope } from './menu-preview';
 import { posTableQr } from './pos-table-qr';
 import { acknowledgeDelivery } from './connector-ack';
+import { kitchenStatuses, recordKitchenStatus } from './connector-kitchen-status';
 import { connectorAuthorizer, issueConnectorToken } from './connector-auth';
 import { publishCatalog } from './catalog-sync';
 import { AddonGroups, AddonSelection, resolveCatalogAddons, type AddonGroup } from './catalog-addons';
@@ -234,7 +235,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  const orders=await sql`SELECT o.id,o.status,o.total_satang,o.note,o.created_at,
    (SELECT cd.pos_order_number FROM outbox_events e JOIN connector_deliveries cd ON cd.event_id=e.id
      WHERE e.tenant_id=o.tenant_id AND e.branch_id=o.branch_id AND e.kind='order.created' AND e.payload->>'order_id'=o.id::text LIMIT 1) AS pos_order_number,
-   coalesce((SELECT jsonb_agg(jsonb_build_object('name',i.name_snapshot,'quantity',i.quantity,'note',i.note,
+   coalesce((SELECT jsonb_agg(jsonb_build_object('name',i.name_snapshot,'quantity',i.quantity,'note',i.note,'status',i.kitchen_status,
      'addons',(SELECT coalesce(jsonb_agg(jsonb_build_object('name',a->>'name','quantity',(a->>'quantity')::int)),'[]'::jsonb) FROM jsonb_array_elements(i.addons_snapshot) a)
    ) ORDER BY i.id) FROM order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS items
    FROM orders o JOIN table_sessions s ON s.id=o.table_session_id AND (s.tenant_id,s.branch_id)=(o.tenant_id,o.branch_id)
@@ -280,6 +281,14 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  event_id:t.String({format:'uuid'}), cloud_order_id:t.String({format:'uuid'}),
  pos_receipt_id:t.String({format:'uuid'}), pos_order_number:t.String({minLength:1,maxLength:80}),
 })})
+.post('/api/v1/connectors/order-status',async({request,body})=>{
+ const scope=await authorizeConnector(request,'orders.ack');
+ if(!scope)return err(401,'unauthorized');
+ const outcome=await recordKitchenStatus(sql,scope,body);
+ if(outcome==='missing')return err(404,'order not found');
+ if(outcome==='conflict')return err(409,'order not acknowledged');
+ return {ok:true};
+},{body:t.Object({order_id:t.String({format:'uuid'}),statuses:t.Array(t.Union(kitchenStatuses.map(status=>t.Literal(status))),{minItems:1,maxItems:30})})})
 .post('/api/v1/admin/payments/cash-confirm',async({request,body})=>{
  if(!isAdmin(request))return err(401,'unauthorized');
  // Bootstrap-only: replace with branch-scoped staff RBAC before production.

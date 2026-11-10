@@ -1,8 +1,23 @@
-import { acknowledgeConnectorOrder, QrCloudClientError } from './client';
+import { getDatabase } from '../../db';
+import { isTerminalItemStatus } from '../../../shared/order-item-status';
+import {
+  acknowledgeConnectorOrder,
+  QrCloudClientError,
+  reportConnectorKitchenStatus,
+} from './client';
 import { readConfig, readConnectorSetting, type QrCloudConfig } from './config';
 import { openInbox } from './inbox';
 import { acceptCloudOrder, CloudOrderError } from './order-acceptance';
 import { readApprovedCa } from './tls';
+
+const STATUS_SYNC_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** The guest-facing stage of a POS order item; a row no longer on the bill counts as cancelled. */
+export function kitchenStatusOf(status: string | undefined): string {
+  if (!status || isTerminalItemStatus(status)) return 'cancelled';
+  if (status === 'served' || status === 'completed') return 'served';
+  return status === 'preparing' || status === 'ready' ? status : 'pending';
+}
 
 function nextAttempt(attempts: number) {
   return Date.now() + Math.min(300_000, 5_000 * 2 ** Math.min(attempts, 6));
@@ -104,6 +119,73 @@ export async function processCloudOrderDelivery(config: QrCloudConfig, signal: A
       db.prepare(
         'UPDATE order_ack_jobs SET attempts = attempts + 1, retry_at = ?, last_error = ? WHERE event_id = ?',
       ).run(nextAttempt(attempts), code, receipt.event_id);
+    }
+  }
+
+  // Kitchen progress is informational for guests; it must never fail order delivery.
+  await syncKitchenStatus(config, signal).catch(() => undefined);
+}
+
+async function syncKitchenStatus(config: QrCloudConfig, signal: AbortSignal) {
+  const db = openInbox();
+  const rows = db
+    .prepare(`
+    SELECT s.event_id, s.cloud_order_id, s.pos_item_ids, s.last_payload, s.attempts, s.created_at
+    FROM order_status_sync s JOIN order_ack_jobs j ON j.event_id = s.event_id
+    WHERE s.cloud_url = ? AND s.done = 0 AND s.retry_at <= ? AND j.acknowledged_at IS NOT NULL
+    ORDER BY s.retry_at, s.created_at LIMIT 10
+  `)
+    .all(config.cloudUrl, Date.now()) as {
+    event_id: string;
+    cloud_order_id: string;
+    pos_item_ids: string;
+    last_payload: string | null;
+    attempts: number;
+    created_at: string;
+  }[];
+  const pos = getDatabase();
+  for (const row of rows) {
+    if (signal.aborted || readConfig().cloudUrl !== config.cloudUrl) return;
+    const ids = JSON.parse(row.pos_item_ids) as number[];
+    const current = new Map(
+      (
+        pos
+          .prepare(
+            `SELECT id, status FROM order_items WHERE id IN (${ids.map(() => '?').join(',')})`,
+          )
+          .all(...ids) as { id: number; status: string }[]
+      ).map((item) => [item.id, item.status]),
+    );
+    const statuses = ids.map((id) => kitchenStatusOf(current.get(id)));
+    const payload = JSON.stringify(statuses);
+    const finished = statuses.every((status) => status === 'served' || status === 'cancelled');
+    const expired =
+      Date.now() - Date.parse(`${row.created_at.replace(' ', 'T')}Z`) > STATUS_SYNC_WINDOW_MS;
+    if (payload === row.last_payload) {
+      if (finished || expired)
+        db.prepare('UPDATE order_status_sync SET done = 1 WHERE event_id = ?').run(row.event_id);
+      continue;
+    }
+    try {
+      const response = (await reportConnectorKitchenStatus(
+        {
+          config,
+          token: readConnectorSetting(),
+          caPem: readApprovedCa()?.pem,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]),
+        },
+        { order_id: row.cloud_order_id, statuses },
+      )) as { ok?: boolean } | null;
+      if (response?.ok !== true) throw new QrCloudClientError('bad_response');
+      db.prepare(
+        'UPDATE order_status_sync SET last_payload = ?, done = ?, attempts = 0, retry_at = 0, last_error = NULL WHERE event_id = ?',
+      ).run(payload, finished || expired ? 1 : 0, row.event_id);
+    } catch (error) {
+      if (signal.aborted) return;
+      const code = error instanceof QrCloudClientError ? error.code : 'status_sync_failed';
+      db.prepare(
+        'UPDATE order_status_sync SET attempts = attempts + 1, retry_at = ?, last_error = ?, done = ? WHERE event_id = ?',
+      ).run(nextAttempt(row.attempts), code, expired ? 1 : 0, row.event_id);
     }
   }
 }
