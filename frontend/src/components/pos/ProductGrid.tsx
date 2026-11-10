@@ -29,6 +29,7 @@ import {
   type PosItemSort,
 } from '@/lib/pos-sort';
 import CollapsiblePosChoices from './CollapsiblePosChoices';
+import { useDampedFlingScroll } from '@/hooks/useDampedFlingScroll';
 
 const FLAT_TAB =
   'max-w-56 shrink-0 truncate border-b-2 px-0.5 py-1.5 text-[15px] whitespace-nowrap transition-colors';
@@ -422,6 +423,8 @@ interface Props {
   flat?: boolean;
   /** Flat look only: filters after "All" that show just the matching products in one grid. */
   quickFilters?: QuickFilter[];
+  /** Scales the speed a touch fling leaves the catalog with; omitted keeps the browser's own scrolling. */
+  flingScale?: number;
 }
 
 export interface QuickFilter {
@@ -454,6 +457,7 @@ export default function ProductGrid({
   loopSections = false,
   flat = false,
   quickFilters = [],
+  flingScale,
   categorySort = 'saved',
   itemSort = 'saved',
 }: Props) {
@@ -543,6 +547,7 @@ export default function ProductGrid({
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  useDampedFlingScroll(scrollRef, flingScale);
   const gridRootRef = useRef<HTMLDivElement>(null);
   const spyPausedUntil = useRef(0);
   const spyFrame = useRef<number | null>(null);
