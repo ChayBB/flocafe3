@@ -702,6 +702,12 @@ frontend/src/
 `npm run build:frontend` is the check that catches a server-side construct: it is the only build
 that switches the export target on, so run it rather than a bare `next dev`.
 
+Browser E2E starts its own fixture with a temporary database and connects over loopback on ports
+`31101` (API), `31102` (KDS), and `31103` (Server App). To run on different ports, set `E2E_BASE_URL`,
+`E2E_KDS_BASE_URL`, and `E2E_SERVER_APP_BASE_URL` to distinct HTTP loopback origins. A port
+conflict stops startup and names the affected service. Playwright starts tests after its fixture
+process has authenticated a seeded user through all three services.
+
 ### Lint engine
 
 Oxlint lints both scopes, pinned to an exact version in each `package.json`. `npm run lint:backend`

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -11,7 +12,7 @@ import * as path from 'node:path';
  * `poll_log`) so existing rows import with their Cloud event ids intact and deduplicate.
  */
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS inbox_events (
@@ -26,6 +27,29 @@ CREATE TABLE IF NOT EXISTS inbox_events (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox_events(status, received_at);
+CREATE TABLE IF NOT EXISTS order_acceptances (
+  event_id TEXT PRIMARY KEY REFERENCES inbox_events(event_id),
+  actor_id TEXT NOT NULL,
+  pos_order_number TEXT NOT NULL,
+  accepted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS order_auto_jobs (
+  event_id TEXT PRIMARY KEY REFERENCES inbox_events(event_id),
+  cloud_url TEXT NOT NULL,
+  automatic_since TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS order_ack_jobs (
+  event_id TEXT PRIMARY KEY REFERENCES order_acceptances(event_id),
+  cloud_url TEXT NOT NULL,
+  cloud_order_id TEXT NOT NULL,
+  pos_receipt_id TEXT NOT NULL UNIQUE,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at INTEGER NOT NULL DEFAULT 0,
+  acknowledged_at TEXT,
+  last_error TEXT
+);
 CREATE TABLE IF NOT EXISTS poll_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   checked_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -49,6 +73,7 @@ export interface StoreResult {
 }
 
 export interface InboxSummary {
+  available: boolean;
   received: number;
   processing: number;
   applied: number;
@@ -87,11 +112,11 @@ export function inboxDirectory(): string {
     const { app } = require('electron') as {
       app?: { isPackaged?: boolean; getPath(name: string): string };
     };
-    if (app?.isPackaged) return path.join(app.getPath('userData'), 'qr-cloud');
+    if (app) return path.join(app.getPath('userData'), 'qr-cloud');
   } catch {
     // Tests and plain Node run without Electron.
   }
-  return path.join(process.cwd(), 'qr-cloud');
+  throw new InboxError('inbox_dir_unavailable');
 }
 
 export function inboxPath(): string {
@@ -116,8 +141,10 @@ export function openInbox(): Database.Database {
     if (check !== 'ok') throw new InboxError('inbox_corrupt');
     const version = Number(opened.pragma('user_version', { simple: true }));
     if (version < SCHEMA_VERSION) {
-      opened.exec(SCHEMA);
-      opened.pragma(`user_version = ${SCHEMA_VERSION}`);
+      opened.transaction(() => {
+        opened.exec(SCHEMA);
+        opened.pragma(`user_version = ${SCHEMA_VERSION}`);
+      })();
     }
   } catch (error) {
     opened.close();
@@ -164,13 +191,19 @@ export function parseCloudEvent(value: unknown): CloudEvent | null {
  * Stores events in one transaction. The Cloud event id is the primary key, so a replayed poll
  * stores nothing new: duplicates are counted, never overwritten and never re-processed.
  */
-export function storeEvents(events: unknown[]): StoreResult {
+export function storeEvents(
+  events: unknown[],
+  automatic?: { cloudUrl: string; since: string },
+): StoreResult {
   const database = openInbox();
   const insert = database.prepare(
     `INSERT OR IGNORE INTO inbox_events (event_id, kind, payload_json, cloud_created_at)
      VALUES (?, ?, ?, ?)`,
   );
   const exists = database.prepare('SELECT 1 FROM inbox_events WHERE event_id = ?');
+  const queue = database.prepare(
+    'INSERT INTO order_auto_jobs (event_id, cloud_url, automatic_since) VALUES (?, ?, ?)',
+  );
   let stored = 0;
   let duplicates = 0;
   let rejected = 0;
@@ -187,8 +220,17 @@ export function storeEvents(events: unknown[]): StoreResult {
         JSON.stringify(event.payload),
         event.created_at,
       );
-      if (result.changes === 1) stored += 1;
-      else if (exists.get(event.id)) duplicates += 1;
+      if (result.changes === 1) {
+        stored += 1;
+        if (
+          automatic &&
+          event.kind === 'order.created' &&
+          event.created_at &&
+          Date.parse(event.created_at) >= Date.parse(automatic.since)
+        ) {
+          queue.run(event.id, automatic.cloudUrl, automatic.since);
+        }
+      } else if (exists.get(event.id)) duplicates += 1;
       else rejected += 1;
     }
   });
@@ -227,6 +269,7 @@ export function recentPolls(
 
 export function inboxSummary(): InboxSummary {
   const empty: InboxSummary = {
+    available: false,
     received: 0,
     processing: 0,
     applied: 0,
@@ -238,12 +281,10 @@ export function inboxSummary(): InboxSummary {
     const database = openInbox();
     const rows = database
       .prepare('SELECT status, COUNT(*) AS total FROM inbox_events GROUP BY status')
-      .all() as Array<{ status: keyof InboxSummary; total: number }>;
-    const summary = { ...empty };
+      .all() as Array<{ status: 'received' | 'processing' | 'applied' | 'failed'; total: number }>;
+    const summary = { ...empty, available: true };
     for (const row of rows) {
-      if (row.status in summary && typeof summary[row.status] === 'number') {
-        (summary[row.status] as number) = row.total;
-      }
+      summary[row.status] = row.total;
       summary.total += row.total;
     }
     const newest = database.prepare('SELECT MAX(received_at) AS newest FROM inbox_events').get() as
@@ -274,8 +315,7 @@ export function clearErrorHistory(): number {
 /**
  * Copies an existing standalone Connector inbox into this inbox.
  *
- * The source file is opened read-only and never modified; a byte copy is written beside it as a
- * backup first. Rows keep their Cloud event ids, so re-running the import copies nothing twice.
+ * Import from a consistent SQLite backup, including committed WAL rows.
  */
 export function importLegacyInbox(sourcePath: string): ImportResult {
   const source = path.resolve(sourcePath);
@@ -284,6 +324,7 @@ export function importLegacyInbox(sourcePath: string): ImportResult {
   if (path.basename(source) !== 'connector.db') throw new InboxError('import_source_invalid');
   if (!fs.existsSync(source)) throw new InboxError('import_source_missing');
   let legacy: Database.Database;
+  const backupPath = `${source}.pre-qr-cloud-import-${randomUUID()}.bak`;
   try {
     legacy = new Database(source, { readonly: true, fileMustExist: true });
   } catch {
@@ -297,51 +338,45 @@ export function importLegacyInbox(sourcePath: string): ImportResult {
       .all() as Array<{ name: string }>;
     if (!tables.some((table) => table.name === 'inbox_events'))
       throw new InboxError('import_source_invalid');
-    const rows = legacy
-      .prepare(
-        'SELECT event_id, kind, payload_json, cloud_created_at, status, received_at FROM inbox_events',
-      )
-      .all() as Array<{
-      event_id: string;
-      kind: string;
-      payload_json: string;
-      cloud_created_at: string | null;
-      status: string;
-      received_at: string;
-    }>;
-
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backupPath = `${source}.pre-qr-cloud-import-${stamp}.bak`;
-    fs.copyFileSync(source, backupPath);
-
+    if (legacy.pragma('quick_check', { simple: true }) !== 'ok')
+      throw new InboxError('import_source_invalid');
+    legacy.prepare('VACUUM INTO ?').run(backupPath);
+  } catch {
+    throw new InboxError('import_source_invalid');
+  } finally {
+    legacy.close();
+  }
+  const snapshot = new Database(backupPath, { readonly: true, fileMustExist: true });
+  try {
+    if (snapshot.pragma('quick_check', { simple: true }) !== 'ok')
+      throw new InboxError('import_source_invalid');
+    const rows = snapshot.prepare(
+      'SELECT event_id, kind, payload_json, cloud_created_at, status, received_at, updated_at FROM inbox_events',
+    );
     const database = openInbox();
     const insert = database.prepare(
-      `INSERT OR IGNORE INTO inbox_events
+      `INSERT INTO inbox_events
          (event_id, kind, payload_json, cloud_created_at, status, received_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (@event_id, @kind, @payload_json, @cloud_created_at, @status, @received_at, @updated_at)
+       ON CONFLICT(event_id) DO NOTHING`,
     );
     let copied = 0;
     let duplicates = 0;
     database.transaction(() => {
-      for (const row of rows) {
-        const status = ['received', 'processing', 'applied', 'failed'].includes(row.status)
-          ? row.status
-          : 'received';
-        const result = insert.run(
-          row.event_id,
-          row.kind,
-          row.payload_json,
-          row.cloud_created_at,
-          status,
-          row.received_at,
-          row.received_at,
-        );
+      for (const row of rows.iterate()) {
+        const result = insert.run(row);
         if (result.changes === 1) copied += 1;
         else duplicates += 1;
       }
     })();
-    return { source, backup_path: backupPath, copied, duplicates, source_rows: rows.length };
+    return {
+      source,
+      backup_path: backupPath,
+      copied,
+      duplicates,
+      source_rows: copied + duplicates,
+    };
   } finally {
-    legacy.close();
+    snapshot.close();
   }
 }

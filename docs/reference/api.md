@@ -440,8 +440,9 @@ does not wrap the handler again.
 - Cancelling the last active item cancels the order and frees its table.
 - `orders.item.cancel` ships to `owner`, `manager` and `server`, so service staff can take back an
   item the kitchen has not started. Cancelling a `pending` item also sets `service_change` to
-  `cancelled` and `service_change_at`; the KDS keeps that item on the board, flagged, for the same
-  15 minutes as a voided item. Restoring the item clears the flag.
+  `cancelled` and `service_change_at`. The KDS shows the notice in Preparing for 30 seconds from
+  cancellation, then in Served for the rest of the 15-minute visibility period, subject to the
+  display's enabled stages. It retains the cancelled status. Restoring the item clears the flag.
 - `override_pin` attempts are rate limited per canonical client IP, not per item, to slow brute force (counting only failed attempts; 429 after 5 failed attempts within 15 minutes; serialized to prevent concurrent brute-force races).
 
 `PATCH /:orderId/items/:itemId/takeaway` (`orders.create`, item cancel limiter) packs an item that
@@ -472,8 +473,9 @@ moves to the kept bill. It answers `409` with `code` `target_empty` (use move-or
 or split on the target).
 
 `POST /:id/bill-request` (`orders.create`, item cancel limiter) records that a table asked for its
-bill: the Server App calls it from the print button, shown once every live item is priced and confirmed
-served, then prints the bill. It sets `bill_requested_at`, `bill_requested_by` and
+bill. Sending an order from the Server App prints the kitchen ticket. The bill action becomes
+available once every live item is priced and confirmed served. The Server App calls the bill-request
+route before printing the bill. The route sets `bill_requested_at`, `bill_requested_by` and
 `bill_requested_by_name` (a reprint keeps the first time) and records a `bill_requested` audit
 entry. It answers `409` for a completed or cancelled order, `409` `weight_pending` while a live
 item still waits for its weight or kitchen price, and `409` `served_unconfirmed` until every live
@@ -1199,7 +1201,7 @@ Twenty-one routes in total, thirteen of which forward:
 | `GET` | `/api/crm/lookup` | `GET /api/crm/lookup` |
 | `POST` | `/api/customers` | `POST /api/customers` |
 | `POST` | `/api/printers/print-kot` | `POST /api/printers/print-kot` |
-| `POST` | `/api/printers/print-bill` | `POST /api/printers/print-bill` (`403` `BILL_PRINTING_DISABLED` when `server_app_bill_printing_enabled` is off) |
+| `POST` | `/api/printers/print-bill` | `POST /api/printers/print-bill`. Returns `403` `BILL_PRINTING_DISABLED` when the Server App setting is off, or `409` `served_unconfirmed` until the order has at least one live item and every live item is confirmed served. The same service confirmation applies when a user with the `server` role calls the main API directly. |
 | `GET` | `/api/products/popular` | `GET /api/products/popular` |
 
 Adding a route to `3001` does not expose it on `3003`. A path becomes reachable from the Server App
@@ -1269,18 +1271,31 @@ machine) or `not_pairing`. They answer `502` with `relay_unreachable` or `relay_
 `/api/qr-cloud` is the integrated Cloud connector (see
 [Cloud integrations](../architecture/cloud-integrations.md#qr-cloud-connector)). `GET /`
 (`settings.view`) answers `{ config, status }` where `config` reports `has_token` but never the
-token, and `status` carries the runtime `state`, `last_success_at`, `last_error`, inbox counts, TLS
-fingerprint and `websocket: { available: false }`. `settings.manage` is required for:
+token. `status` includes runtime `state`, `authentication` (`unchecked`, `accepted`, or `rejected`),
+`last_poll_at`, `last_success_at`, `last_duplicate_count`, `last_error`, inbox availability and
+counts, TLS fingerprint and `websocket: { available: false }`. `settings.manage` is required for:
 
 | Method | Path | Body | Notes |
 | --- | --- | --- | --- |
-| `PUT` | `/settings` | `enabled`, `mode`, `cloud_url`, `connection_mode`, `poll_interval_ms`, `auto_start`, `retry_max`, `timeout_ms`, `reconcile_interval_ms` | Validated server-side; a bad value answers `400` with its `code`. |
-| `POST` | `/token` | `token` | Replaces the stored credential; answered as `{ has_token }`. |
+| `PUT` | `/settings` | `enabled`, `mode`, `cloud_url`, `connection_mode`, `poll_interval_ms`, `auto_start`, `retry_max`, `timeout_ms`, `reconcile_interval_ms`, `acceptance_mode`, `confirm_automatic` | Staff confirmation is the default. Enabling automatic acceptance requires `confirm_automatic: true` and Cloud receipt support. |
+| `POST` | `/token` | `token` | Replaces the stored credential and returns `{ has_token, status }`. Returns `503 credential_storage_unavailable` if the token cannot be stored securely. |
 | `DELETE` | `/token` | none | Clears the credential and stops polling. |
 | `POST` | `/test` | none | One isolated request: `{ ok, code, detail, latency_ms, checked_at }`; rate-limited to 10 a minute. |
 | `POST` | `/retry` | none | Re-arms the loop. |
-| `POST` | `/enable`, `/disable` | none | Enable or stop the connector. |
-| `POST` | `/inbox/import` | `source_path`, `confirm: true` | Copies a standalone `connector.db` after writing a backup; re-running imports nothing new. |
+| `POST` | `/enable`, `/disable` | none | Persists the enabled state and updates the connector loop. Enabling by either route or settings update fails with `cutover_required` while `config.cutover_pending` is true. |
+| `POST` | `/legacy-import/preview` | none | Reads the fixed Windows legacy paths. Returns sanitized fields, conflicts, `validation_errors` for the configuration, and separate CA metadata and errors. A valid configuration receives an actor-bound preview ID valid for five minutes. |
+| `POST` | `/legacy-import/commit` | `preview_id`, `confirm: true`, optional `replace_credential: true` | Revalidates the source and current settings, stores the credential securely, and returns `{ imported: true, cutover_pending: true }`. Requires replacement confirmation if a credential exists. |
+| `POST` | `/legacy-import/ca` | `expected_fingerprint`, `confirm: true` | Approves the fixed legacy staging CA during cutover when the supplied fingerprint matches the certificate and the staging root. Refuses a different configured CA. |
+| `POST` | `/legacy-import/cutover` | `confirm_legacy_stopped: true` | Runs a rate-limited connection test. Success clears the hold and leaves polling disabled. Returns the connection test result. |
+| `POST` | `/activate` | `confirm_legacy_stopped: true` when cutover is pending | Tests the saved connection on a disabled integrated Connector. Success enables polling and clears any confirmed cutover hold. Returns the test result, configuration, and status. A failed test leaves polling disabled. Requires a loopback socket. |
+| `POST` | `/inbox/import` | `source_path`, `confirm: true` | Imports standalone `connector.db` events after writing a SQLite snapshot. Existing event IDs are skipped. |
+| `GET` | `/inbox/orders` | none | Also requires `orders.create`. Lists up to 30 pending order event IDs and timestamps. |
+| `GET` | `/inbox/orders/:id` | none | Also requires `orders.create`. Reads authenticated Cloud order details and resolves POS products and available table choices. |
+| `POST` | `/inbox/orders/:id/accept` | `table_id`, `confirmed: true` | Also requires `orders.create`. Returns `pos_order_number` after idempotent local placement. |
+| `GET` | `/table-qr` | none | Also requires `tables.manage`. Lists all POS tables with their `id`, `number`, and boolean `is_active`. Only active tables can open Cloud ordering. |
+| `POST` | `/table-qr` | `action` (`open` or `close`) with either `table_id` or `all_tables: true` and `confirmed: true` | Also requires `tables.manage`. Opens active tables for three hours and returns their reusable stickers, or closes the selected tables and revokes their Cloud guest sessions. Batch requests return a result for each attempted table. |
+| `GET` | `/catalog` | none | Also requires `catalog.manage`. Returns the eligible menu count and snapshot fingerprint without writing to Cloud. |
+| `POST` | `/catalog` | `confirmed: true`, `fingerprint` | Also requires `catalog.manage`. Publishes the verified snapshot to the connector's branch, returning its revision and count. |
 | `POST` | `/ca/inspect` | `certificate` | Subject, issuer, validity and SHA-256 fingerprint; trusts nothing. |
 | `POST` | `/ca` | `certificate`, `expected_fingerprint`, `confirm: true` | Stores the approved staging CA in the app-managed directory only. |
 | `DELETE` | `/ca` | none | Removes the approved CA. |
@@ -1288,7 +1303,8 @@ fingerprint and `websocket: { available: false }`. `settings.manage` is required
 
 `GET /diagnostics` and `GET /inbox` need `settings.view` and never include event payloads. Mutations
 refuse a non-loopback `Origin`. The API is bearer-token authenticated, so no cookie session exists
-for a cross-site request to ride.
+for a cross-site request to ride. Legacy import operations also require a loopback socket and
+reject unrecognized body fields. A stale preview or a configuration conflict returns HTTP 409.
 
 `requireServerAppAuth` is applied to every route except `/api/health`, `/api/server-app/info`, public product images, the four `/api/guest/*` routes, and the login route, and
 it runs the feature check **before** the token check. Behaviour by condition:

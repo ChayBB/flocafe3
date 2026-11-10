@@ -14,21 +14,22 @@ import { GUEST_USER_ID } from './guest-order';
 
 /** Calls the main API on behalf of the Guest account that table-QR visitors order as. */
 export async function callMainApiAsGuest(
-  req: Request,
+  req: Request | undefined,
   method: 'GET' | 'POST',
   apiPath: string,
   options: {
     body?: unknown;
     query?: Record<string, string>;
     headers?: Record<string, string>;
+    signal?: AbortSignal;
   } = {},
 ): Promise<{ status: number; data: any }> {
   const target = new URL(`/api${apiPath}`, `http://127.0.0.1:${getServerPort()}`);
   for (const [key, value] of Object.entries(options.query ?? {}))
     target.searchParams.set(key, value);
-  const reservation = (req as any).databaseAdmissionReservation as
-    | DatabaseAdmissionReservation
-    | undefined;
+  const reservation = (
+    req as (Request & { databaseAdmissionReservation?: DatabaseAdmissionReservation }) | undefined
+  )?.databaseAdmissionReservation as DatabaseAdmissionReservation | undefined;
   const handoffToken = reservation ? createDatabaseMaintenanceHandoff(reservation) : undefined;
   const guestToken = jwt.sign(
     { userId: GUEST_USER_ID, email: null, role: 'server', jti: randomUUID() },
@@ -45,7 +46,7 @@ export async function callMainApiAsGuest(
         ...(handoffToken ? { 'x-flo-maintenance-handoff': handoffToken } : {}),
       },
       body: method === 'GET' ? undefined : JSON.stringify(options.body ?? {}),
-      signal: getHttpRequestSignal(req),
+      signal: options.signal ?? (req && getHttpRequestSignal(req)),
     });
     const text = await upstream.text();
     let data: any = null;
@@ -93,6 +94,8 @@ export interface GuestOrderInput {
   note: string | null;
   /** The page's key, already checked; one key is one order, however often it is sent. */
   key: string;
+  source?: 'cloud';
+  signal?: AbortSignal;
 }
 
 export type GuestOrderOutcome =
@@ -105,12 +108,15 @@ export type GuestOrderOutcome =
  * `gate` may hold the order back (a cooldown, a quota) before it reaches the bill and the kitchen.
  */
 export async function placeGuestOrder(
-  req: Request,
+  req: Request | undefined,
   input: GuestOrderInput,
   gate?: () => { status: number; body: Record<string, unknown> } | null,
 ): Promise<GuestOrderOutcome> {
   const db = getDatabase();
-  const headers = { 'Idempotency-Key': `guest-${input.tableId}-${input.key}` };
+  const headers = {
+    'Idempotency-Key':
+      input.source === 'cloud' ? `cloud-qr-${input.key}` : `guest-${input.tableId}-${input.key}`,
+  };
   ensureGuestUser();
   const step = await oneGuestOrderAtATime(input.tableId, async () => {
     // A retry whose first try went through answers from the stored result: the bill it opened
@@ -144,23 +150,23 @@ export async function placeGuestOrder(
           ).map((row) => row.id)
         : [],
     );
-    const result = await trackHttpRequestWork(
-      req,
-      open
-        ? callMainApiAsGuest(req, 'POST', `/orders/${open.id}/items`, {
-            body: { items: input.items, special_instructions: input.note ?? undefined },
-            headers,
-          })
-        : callMainApiAsGuest(req, 'POST', '/orders', {
-            body: {
-              table_id: input.tableId,
-              type: 'dine_in',
-              special_instructions: input.note ?? undefined,
-              items: input.items,
-            },
-            headers,
-          }),
-    );
+    const placement = open
+      ? callMainApiAsGuest(req, 'POST', `/orders/${open.id}/items`, {
+          body: { items: input.items, special_instructions: input.note ?? undefined },
+          headers,
+          signal: input.signal,
+        })
+      : callMainApiAsGuest(req, 'POST', '/orders', {
+          body: {
+            table_id: input.tableId,
+            type: 'dine_in',
+            special_instructions: input.note ?? undefined,
+            items: input.items,
+          },
+          headers,
+          signal: input.signal,
+        });
+    const result = await (req ? trackHttpRequestWork(req, placement) : placement);
     return { result, existingItemIds, replayed: false };
   });
   if (step.held) return { kind: 'held', status: step.held.status, body: step.held.body };

@@ -1,31 +1,32 @@
-/* Test-only dual-server bootstrap for Playwright. Keeps fixture data out of dev-server.js. */
+/* Test-only server bootstrap for Playwright. Keeps fixture data out of dev-server.js. */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Module = require('module');
 const { createServer } = require('node:net');
+const jwt = require('jsonwebtoken');
+const { E2E_BASE_URL, E2E_KDS_BASE_URL, E2E_SERVER_APP_BASE_URL } = require('./e2e-urls.cjs');
+
+const services = [
+  { name: 'Main API', origin: E2E_BASE_URL, port: Number(new URL(E2E_BASE_URL).port) },
+  { name: 'KDS', origin: E2E_KDS_BASE_URL, port: Number(new URL(E2E_KDS_BASE_URL).port) },
+  {
+    name: 'Server App',
+    origin: E2E_SERVER_APP_BASE_URL,
+    port: Number(new URL(E2E_SERVER_APP_BASE_URL).port),
+  },
+];
+if (new Set(services.map(({ port }) => port)).size !== services.length) {
+  throw new Error('E2E Main API, KDS, and Server App require distinct ports');
+}
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-e2e-'));
 
-if (process.env.E2E_TASK_LOCAL_PORTS) {
-  const baseUrl = process.env.E2E_BASE_URL;
-  if (baseUrl) {
-    const basePort = new URL(baseUrl).port;
-    if (basePort) process.env.PORT = basePort;
-  }
-
-  const kdsPort = process.env.E2E_KDS_BASE_URL
-    ? new URL(process.env.E2E_KDS_BASE_URL).port
-    : process.env.E2E_KDS_PORT;
-  if (kdsPort) process.env.KDS_PORT = kdsPort;
-
-  const serverAppPort = process.env.E2E_SERVER_APP_BASE_URL
-    ? new URL(process.env.E2E_SERVER_APP_BASE_URL).port
-    : process.env.E2E_SERVER_APP_PORT;
-  if (serverAppPort) process.env.SERVER_APP_PORT = serverAppPort;
-}
-
-process.env.JWT_SECRET = 'e2e-test-secret';
+process.env.E2E_TASK_LOCAL_PORTS = '1';
+process.env.PORT = String(services[0].port);
+process.env.KDS_PORT = String(services[1].port);
+process.env.SERVER_APP_PORT = String(services[2].port);
+process.env.JWT_SECRET = process.env.FLO_E2E_JWT_SECRET || 'e2e-test-secret';
 process.env.FLO_AUTH_RATE_LIMIT_MAX = '1000';
 // The whole suite shares one server and one client IP, so a production-sized limit
 // here 429s the suite's own page loads instead of rate-limiting an abusive caller.
@@ -184,12 +185,6 @@ function installAndActivateTaxPack(db, pack) {
 }
 const { startKdsServer, stopKdsServer, getKdsPort } = require('../dist/main/kds-server');
 
-function expectedPort(rawUrl, fallback) {
-  if (!rawUrl) return fallback;
-  const port = Number(new URL(rawUrl).port);
-  return Number.isInteger(port) && port > 0 ? port : fallback;
-}
-
 function assertRequiredPortAvailable(port, service) {
   return new Promise((resolve, reject) => {
     const probe = createServer();
@@ -205,6 +200,21 @@ function assertRequiredPortAvailable(port, service) {
       probe.close(() => resolve());
     });
   });
+}
+
+async function assertFixtureAuthentication({ name, origin }, token) {
+  try {
+    const response = await fetch(`${origin}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const { user } = await response.json();
+    if (user?.id !== 'e2e-manager') throw new Error('unexpected fixture user');
+  } catch (error) {
+    throw new Error(`E2E ${name} authentication check failed at ${origin}: ${error.message}`);
+  }
 }
 
 function seedUser(id, email, role) {
@@ -364,12 +374,7 @@ async function stop(exitCode = 0) {
 }
 
 (async () => {
-  await assertRequiredPortAvailable(expectedPort(process.env.E2E_BASE_URL, 3001), 'Main API');
-  await assertRequiredPortAvailable(expectedPort(process.env.E2E_KDS_BASE_URL, 3002), 'KDS');
-  await assertRequiredPortAvailable(
-    expectedPort(process.env.E2E_SERVER_APP_BASE_URL, 3003),
-    'Server App',
-  );
+  for (const { name, port } of services) await assertRequiredPortAvailable(port, name);
   await startStandaloneServers({
     initializeDatabase: initDatabase,
     prepare: () => {
@@ -383,17 +388,18 @@ async function stop(exitCode = 0) {
     startServerApp,
     isShutdownRequested: () => shutdownRequested,
   });
-  const expectedPorts = {
-    main: expectedPort(process.env.E2E_BASE_URL, 3001),
-    kds: expectedPort(process.env.E2E_KDS_BASE_URL, 3002),
-    serverApp: expectedPort(process.env.E2E_SERVER_APP_BASE_URL, 3003),
-  };
-  const actualPorts = { main: getServerPort(), kds: getKdsPort(), serverApp: getServerAppPort() };
-  if (Object.entries(expectedPorts).some(([key, port]) => actualPorts[key] !== port)) {
-    throw new Error(
-      `E2E service port mismatch: expected ${JSON.stringify(expectedPorts)}, got ${JSON.stringify(actualPorts)}`,
-    );
+  const actualPorts = [getServerPort(), getKdsPort(), getServerAppPort()];
+  for (const [index, { name, port }] of services.entries()) {
+    if (actualPorts[index] !== port) {
+      throw new Error(`E2E ${name} port mismatch: expected ${port}, got ${actualPorts[index]}`);
+    }
   }
+  const token = jwt.sign(
+    { userId: 'e2e-manager', email: 'manager@flo.local', role: 'manager' },
+    process.env.JWT_SECRET,
+    { expiresIn: '1m' },
+  );
+  await Promise.all(services.map((service) => assertFixtureAuthentication(service, token)));
   console.log('[E2E] Main, KDS, and Server App servers ready');
 })().catch((error) => {
   console.error(error);

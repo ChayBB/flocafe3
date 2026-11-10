@@ -32,6 +32,7 @@ import {
   isVoidedItemKdsVisible,
   isCancelledNoticeKdsVisible,
   KDS_VOIDED_ITEM_VISIBILITY_MS,
+  KDS_CANCELLED_NOTICE_CUTOFF_SQL,
   projectKdsItem,
   projectKdsOrder,
   KDS_MOVED_FROM_TABLE_SQL,
@@ -430,7 +431,9 @@ export function startKdsServer(): Promise<void> {
           LEFT JOIN users creator_u ON creator_u.id = o.user_id
           INNER JOIN order_items oi ON oi.order_id = o.id
           WHERE o.id IN (${ACTIVE_RELEASED_KDS_ORDER_IDS_SQL})
-          AND oi.status NOT IN ('completed', 'cancelled', 'void_adjustment', 'refunded')
+          AND (oi.status NOT IN ('completed', 'cancelled', 'void_adjustment', 'refunded')
+            OR (oi.status = 'cancelled' AND oi.service_change = 'cancelled'
+              AND oi.service_change_at > ${KDS_CANCELLED_NOTICE_CUTOFF_SQL}))
           AND (oi.status != 'voided' OR oi.voided_at IS NULL OR oi.voided_at > ?)
         `;
         const orderParams: string[] = [voidedCutoff];

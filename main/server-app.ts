@@ -937,6 +937,7 @@ export function startServerApp(): Promise<void> {
             code: 'BILL_PRINTING_DISABLED',
           });
         }
+        req.body = { ...req.body, requireServedConfirmation: true };
         return forwardToMainApi(req, res, '/printers/print-bill');
       },
     );

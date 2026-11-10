@@ -1,17 +1,18 @@
 import * as dns from 'node:dns';
 import * as https from 'node:https';
 import { isBlockedSsrfTarget } from '../../middleware/security';
-import type { QrCloudConfig } from './config';
+import { normalizeCloudUrl, QrCloudConfigError, type QrCloudConfig } from './config';
 
 /**
  * The Cloud connector's only network client.
  *
- * It issues one bounded GET to the connector event feed. It has no code path that writes to the
- * Cloud: no ACK, no order mutation, no price change. TLS validation is always on; the approved
+ * It reads the event feed and order details and manages explicitly opened table QR sessions.
+ * TLS validation is always on; the approved
  * staging CA is supplied as an extra anchor for this hostname only.
  */
 
 export const EVENTS_PATH = '/api/v1/connectors/events';
+export const CONNECTOR_EVENT_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const MAX_EVENTS_PER_POLL = 200;
 
@@ -88,6 +89,8 @@ export interface CloudEventsResponse {
   events: unknown[];
   status: number;
   latencyMs: number;
+  nextCursor?: string;
+  scope?: { tenant_id: string; branch_id: string };
 }
 
 export interface FetchEventsOptions {
@@ -95,6 +98,7 @@ export interface FetchEventsOptions {
   token: string;
   caPem?: string | null;
   signal?: AbortSignal;
+  after?: string;
 }
 
 function classifyNetworkError(error: NodeJS.ErrnoException): QrCloudClientError {
@@ -103,29 +107,28 @@ function classifyNetworkError(error: NodeJS.ErrnoException): QrCloudClientError 
   if (code === 'ETIMEDOUT' || code === 'ABORT_ERR') return new QrCloudClientError('timeout');
   if (TLS_ERROR_CODES.has(code)) return new QrCloudClientError('tls_failed', code);
   if (OFFLINE_ERROR_CODES.has(code)) return new QrCloudClientError('offline', code);
-  return new QrCloudClientError('offline', code || error.message);
+  return new QrCloudClientError('offline', code || undefined);
 }
 
-/**
- * One bounded request. The response must be `{ events: [...] }`; anything else is `bad_response`.
- * Events above the per-poll cap are dropped and reported as a protocol violation.
- */
-export async function fetchConnectorEvents(
+async function requestConnectorJson(
   options: FetchEventsOptions,
-): Promise<CloudEventsResponse> {
+  endpoint: string,
+  json?: string,
+): Promise<unknown> {
   const { config, token, caPem, signal } = options;
   if (!config.cloudUrl) throw new QrCloudClientError('not_configured');
   if (!token) throw new QrCloudClientError('not_configured');
 
   let url: URL;
   try {
-    url = new URL(`${config.cloudUrl}${EVENTS_PATH}`);
-  } catch {
+    url = new URL(`${normalizeCloudUrl(config.cloudUrl)}${endpoint}`);
+  } catch (error) {
+    if (error instanceof QrCloudConfigError && error.code === 'cloud_url_private_target')
+      throw new QrCloudClientError('blocked_target');
     throw new QrCloudClientError('not_configured');
   }
   if (url.protocol !== 'https:') throw new QrCloudClientError('not_configured');
 
-  const started = Date.now();
   const body = await new Promise<string>((resolve, reject) => {
     let settled = false;
     const finish = (fn: () => void) => {
@@ -140,11 +143,18 @@ export async function fetchConnectorEvents(
         hostname: url.hostname,
         port: url.port || 443,
         path: `${url.pathname}${url.search}`,
-        method: 'GET',
+        method: json === undefined ? 'GET' : 'POST',
+        agent: false,
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
           'User-Agent': 'FloCafe-CloudConnector/1',
+          ...(json === undefined
+            ? {}
+            : {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(json),
+              }),
         },
         timeout: config.timeoutMs,
         ca: caPem ? [caPem] : undefined,
@@ -154,15 +164,15 @@ export async function fetchConnectorEvents(
       (response) => {
         const status = response.statusCode ?? 0;
         if (status === 401 || status === 403) {
-          response.resume();
+          response.destroy();
           return finish(() => reject(new QrCloudClientError('auth_failed', `HTTP ${status}`)));
         }
         if (status >= 500) {
-          response.resume();
+          response.destroy();
           return finish(() => reject(new QrCloudClientError('server_error', `HTTP ${status}`)));
         }
         if (status !== 200) {
-          response.resume();
+          response.destroy();
           return finish(() => reject(new QrCloudClientError('bad_response', `HTTP ${status}`)));
         }
         const chunks: Buffer[] = [];
@@ -185,10 +195,6 @@ export async function fetchConnectorEvents(
       request.destroy(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' }));
       finish(() => reject(new QrCloudClientError('timeout', 'cancelled')));
     };
-    if (signal) {
-      if (signal.aborted) return onAbort();
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
     request.on('timeout', () => {
       request.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
     });
@@ -198,23 +204,117 @@ export async function fetchConnectorEvents(
         return finish(() => reject(new QrCloudClientError('bad_response', 'too_large')));
       finish(() => reject(classifyNetworkError(err)));
     });
-    request.end();
+    if (signal) {
+      if (signal.aborted) return onAbort();
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    request.end(json);
   });
 
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(body);
+    return JSON.parse(body);
   } catch {
     throw new QrCloudClientError('bad_response', 'invalid_json');
   }
+}
+
+export function fetchConnectorOrder(
+  options: FetchEventsOptions,
+  eventId: string,
+): Promise<unknown> {
+  if (!CONNECTOR_EVENT_ID.test(eventId)) throw new QrCloudClientError('bad_response');
+  return requestConnectorJson(options, `${EVENTS_PATH}/${eventId}/order?addons=1`);
+}
+
+export function manageConnectorTableQr(
+  options: FetchEventsOptions,
+  table: { action: 'open' | 'close'; pos_table_id: string; name: string },
+): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/table-qr', JSON.stringify(table));
+}
+
+export function acknowledgeConnectorOrder(
+  options: FetchEventsOptions,
+  receipt: {
+    event_id: string;
+    cloud_order_id: string;
+    pos_receipt_id: string;
+    pos_order_number: string;
+  },
+): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/ack-receipt', JSON.stringify(receipt));
+}
+
+export function readConnectorCapabilities(options: FetchEventsOptions): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/capabilities');
+}
+
+export function connectorCatalog(
+  options: FetchEventsOptions,
+  catalog?: {
+    revision: string;
+    base_revision: string | null;
+    items: unknown[];
+  },
+): Promise<unknown> {
+  return requestConnectorJson(
+    options,
+    '/api/v1/connectors/catalog',
+    catalog && JSON.stringify(catalog),
+  );
+}
+
+export async function fetchConnectorEvents(
+  options: FetchEventsOptions,
+): Promise<CloudEventsResponse> {
+  const started = Date.now();
+  const after = options.after;
+  if (after && !CONNECTOR_EVENT_ID.test(after)) throw new QrCloudClientError('bad_response');
+  const parsed = await requestConnectorJson(
+    options,
+    after ? `${EVENTS_PATH}?after=${after}` : EVENTS_PATH,
+  );
   if (
     !parsed ||
     typeof parsed !== 'object' ||
     !Array.isArray((parsed as { events?: unknown }).events)
   )
     throw new QrCloudClientError('bad_response', 'unexpected_shape');
-  const events = (parsed as { events: unknown[] }).events;
+  const {
+    events,
+    next_cursor: cursor,
+    scope,
+  } = parsed as {
+    events: unknown[];
+    next_cursor?: unknown;
+    scope?: { tenant_id?: unknown; branch_id?: unknown };
+  };
   if (events.length > MAX_EVENTS_PER_POLL)
     throw new QrCloudClientError('bad_response', 'too_many_events');
-  return { events, status: 200, latencyMs: Date.now() - started };
+  if (
+    cursor != null &&
+    (typeof cursor !== 'string' ||
+      !CONNECTOR_EVENT_ID.test(cursor) ||
+      cursor === after ||
+      (events.at(-1) as { id?: unknown } | null)?.id !== cursor)
+  ) {
+    throw new QrCloudClientError('bad_response', 'invalid_cursor');
+  }
+  if (
+    scope !== undefined &&
+    (!scope ||
+      typeof scope.tenant_id !== 'string' ||
+      typeof scope.branch_id !== 'string' ||
+      !CONNECTOR_EVENT_ID.test(scope.tenant_id) ||
+      !CONNECTOR_EVENT_ID.test(scope.branch_id))
+  ) {
+    throw new QrCloudClientError('bad_response', 'invalid_scope');
+  }
+  return {
+    events,
+    status: 200,
+    latencyMs: Date.now() - started,
+    nextCursor: cursor ?? undefined,
+    scope: scope && { tenant_id: scope.tenant_id as string, branch_id: scope.branch_id as string },
+  };
 }

@@ -10,7 +10,13 @@ import { KdsColumn } from '@/components/kds/KdsColumn';
 import { KdsSetPrice } from '@/components/kds/KdsSetPrice';
 import { KdsServiceNotice, noticeRowClass } from '@/components/kds/KdsServiceNotice';
 import { KdsStatusToggle } from '@/components/kds/KdsStatusToggle';
-import { activeStages, boardColumnFor, skipsActiveStage, type BoardStatus } from '@/lib/kds-stages';
+import {
+  activeStages,
+  boardColumnForItem,
+  skipsActiveStage,
+  useKdsCancellationClock,
+  type BoardStatus,
+} from '@/lib/kds-stages';
 import { Badge } from '@/components/ui/badge';
 import {
   STATUS_CONFIG,
@@ -60,6 +66,7 @@ export function KdsKanbanBoard({
 }: KdsKanbanBoardProps) {
   const t = useTranslations('kds');
   const { confirm, ConfirmDialog } = useConfirm();
+  const cancellationClock = useKdsCancellationClock(orders);
 
   // Group by status, then by order. Default rendering matches the tabs view:
   // one card per order, with the order header and a list of items in that status.
@@ -78,7 +85,7 @@ export function KdsKanbanBoard({
         served: [],
       };
       for (const item of order.items || []) {
-        const column = boardColumnFor(statusOf(item), inactiveStatuses);
+        const column = boardColumnForItem(item, inactiveStatuses, cancellationClock);
         if (column) buckets[column].push(item);
       }
       for (const status of STATUS_ORDER) {
@@ -86,7 +93,7 @@ export function KdsKanbanBoard({
       }
     }
     return map;
-  }, [orders, inactiveStatuses]);
+  }, [orders, inactiveStatuses, cancellationClock]);
 
   // Voided items, grouped per order — read-only, struck through, and never a
   // drag source or drop target (see BoardStatus above).
@@ -209,7 +216,6 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
   const t = useTranslations('kds');
   const tOrders = useTranslations('orders');
   const config = STATUS_CONFIG[status];
-  // A cancelled item only stays to tell the kitchen; it never moves.
   const dragItems = items
     .filter((i) => i.status !== 'cancelled')
     .map((i) => ({ id: i.id, status: statusOf(i) }));
@@ -217,6 +223,7 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
   const { ref, isDragging } = useDraggable({
     id: `order-${order.id}-${status}`,
     data: { items: dragItems, fromStatus: status },
+    disabled: dragItems.length === 0,
   });
 
   return (

@@ -1,6 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
-import { E2E_BASE_URL, E2E_KDS_BASE_URL, E2E_SERVER_APP_BASE_URL } from './e2e/helpers/urls';
+import { E2E_BASE_URL } from './e2e/helpers/urls';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+
+process.env.FLO_E2E_JWT_SECRET ??= randomBytes(32).toString('hex');
 
 export default defineConfig({
   testDir: './e2e',
@@ -14,21 +17,10 @@ export default defineConfig({
   },
   webServer: {
     command: 'node tests/e2e-server.cjs',
-    // The server app starts last, so its health endpoint is the browser
-    // harness's all-services-ready barrier.
-    url: `${E2E_SERVER_APP_BASE_URL}/api/health`,
-    reuseExistingServer: !process.env.CI,
+    wait: { stdout: /^\[E2E\] Main, KDS, and Server App servers ready$/m },
+    reuseExistingServer: false,
     timeout: 120_000,
     cwd: path.resolve(__dirname, '..'),
-    env: {
-      ...process.env,
-      E2E_TASK_LOCAL_PORTS: '1',
-      E2E_BASE_URL,
-      E2E_KDS_BASE_URL,
-      E2E_SERVER_APP_BASE_URL,
-    },
   },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'], baseURL: E2E_BASE_URL } },
-  ],
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], baseURL: E2E_BASE_URL } }],
 });

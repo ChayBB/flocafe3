@@ -26,6 +26,7 @@ import {
   type InboxSummary,
 } from './inbox';
 import { caStatus, readApprovedCa } from './tls';
+import { cloudReceiptSummary, processCloudOrderDelivery } from './order-delivery';
 
 /**
  * Connection lifecycle for the integrated Cloud connector.
@@ -34,8 +35,7 @@ import { caStatus, readApprovedCa } from './tls';
  * beginning a new one, and every scheduled step checks its generation. Bounded timeouts and
  * exponential backoff with jitter apply to every attempt; shutdown cancels an in-flight request.
  *
- * The connector is inbox-only by product decision: a successful poll stores events and updates
- * status. It never creates POS orders, sends an ACK or changes Cloud state.
+ * A successful poll stores events before processing eligible deliveries and confirmed receipts.
  */
 
 export type QrCloudState =
@@ -56,12 +56,16 @@ export interface ConnectorErrorEntry {
   detail: string | null;
 }
 
+type CloudAuthentication = 'unchecked' | 'accepted' | 'rejected';
+
 const ERROR_HISTORY_LIMIT = 20;
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_CAP_MS = 120_000;
 
 let state: QrCloudState = 'DISABLED';
 let generation = 0;
+let pendingPageCursor: string | undefined;
+let authenticatedScope: CloudEventsResponse['scope'];
 let loopTimer: NodeJS.Timeout | null = null;
 let inFlight: AbortController | null = null;
 let failures = 0;
@@ -70,8 +74,9 @@ let lastError: ConnectorErrorEntry | null = null;
 let errorHistory: ConnectorErrorEntry[] = [];
 let lastPollAt: string | null = null;
 let lastEventCount = 0;
+let lastDuplicateCount: number | null = null;
+let authentication: CloudAuthentication = 'unchecked';
 let startedAt: string | null = null;
-let applyRevision = 0;
 
 /** Test seam: the poll loop's transport can be replaced, production always uses the HTTPS client. */
 let fetchEventsImpl: (options: FetchEventsOptions) => Promise<CloudEventsResponse> =
@@ -150,7 +155,7 @@ function schedule(generationAtSchedule: number, delayMs: number): void {
 async function pollOnce(generationAtPoll: number): Promise<void> {
   const config = readConfig();
   if (generation !== generationAtPoll) return;
-  if (!config.enabled) {
+  if (!config.enabled || config.cutoverPending || config.mode !== 'integrated') {
     state = 'DISABLED';
     return;
   }
@@ -158,23 +163,35 @@ async function pollOnce(generationAtPoll: number): Promise<void> {
     state = 'NOT_CONFIGURED';
     return;
   }
-  if (state === 'DISABLED' || state === 'NOT_CONFIGURED' || state === 'CONNECTED_POLLING') {
-    state = 'CONNECTING';
-  }
   const controller = new AbortController();
   inFlight = controller;
+  lastPollAt = nowIso();
   try {
     const ca = readApprovedCa();
     const response = await fetchEventsImpl({
       config,
       token: readConnectorSetting(),
+      after: pendingPageCursor,
       caPem: ca?.pem ?? null,
-      signal: controller.signal,
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(config.timeoutMs)]),
     });
     if (generation !== generationAtPoll) return;
-    const result = storeEvents(response.events);
-    lastPollAt = nowIso();
+    authentication = 'accepted';
+    authenticatedScope = response.scope;
+    let result: ReturnType<typeof storeEvents>;
+    try {
+      result = storeEvents(
+        response.events,
+        config.automaticSince
+          ? { cloudUrl: config.cloudUrl, since: config.automaticSince }
+          : undefined,
+      );
+      pendingPageCursor = response.nextCursor;
+    } catch {
+      throw new QrCloudClientError('inbox_error');
+    }
     lastEventCount = response.events.length;
+    lastDuplicateCount = result.duplicates;
     recordPoll(response.events.length, 'ok');
     lastSuccessAt = lastPollAt;
     failures = 0;
@@ -182,15 +199,20 @@ async function pollOnce(generationAtPoll: number): Promise<void> {
     state = 'CONNECTED_POLLING';
     upsertSettings({ [QR_CLOUD_SETTING_KEYS.lastSuccessAt]: lastSuccessAt });
     if (result.rejected > 0) recordError('event_rejected', `${result.rejected} event(s) rejected`);
-    schedule(generationAtPoll, config.pollIntervalMs);
+    await processCloudOrderDelivery(config, controller.signal);
+    if (generation === generationAtPoll) schedule(generationAtPoll, config.pollIntervalMs);
   } catch (error) {
     if (generation !== generationAtPoll) return;
     const code = error instanceof QrCloudClientError ? error.code : 'offline';
     const detail = error instanceof QrCloudClientError ? error.detail : null;
+    if (code === 'auth_failed') authentication = 'rejected';
     failures += 1;
     recordPoll(0, 'error', code);
     recordError(code, detail ?? null);
-    state = failures >= config.retryMax ? 'DEGRADED' : stateForError(error);
+    state =
+      failures >= config.retryMax && code !== 'auth_failed' && code !== 'tls_failed'
+        ? 'DEGRADED'
+        : stateForError(error);
     const delay =
       failures >= config.retryMax ? config.reconcileIntervalMs : backoffDelay(failures, config);
     schedule(generationAtPoll, delay);
@@ -200,9 +222,12 @@ async function pollOnce(generationAtPoll: number): Promise<void> {
 }
 
 function stopLoop(nextState: QrCloudState): void {
+  pendingPageCursor = undefined;
+  authenticatedScope = undefined;
   generation += 1;
   clearTimer();
   cancelInFlight();
+  authentication = 'unchecked';
   state = nextState;
 }
 
@@ -211,7 +236,7 @@ export function startQrCloudConnector(options: { force?: boolean } = {}): void {
   const config = readConfig();
   stopLoop(state === 'DISABLED' ? 'DISABLED' : state);
 
-  if (!config.enabled) {
+  if (!config.enabled || config.cutoverPending || config.mode !== 'integrated') {
     state = 'DISABLED';
     return;
   }
@@ -243,31 +268,23 @@ export function shutdownQrCloudConnector(): void {
   closeInbox();
 }
 
-/**
- * Applies a settings patch and re-arms the loop only when the effective configuration changed.
- * Concurrent saves are serialised by a revision counter, so a burst of saves cannot leave two
- * polling loops behind.
- */
+/** Synchronous settings writes and generation cancellation keep one polling loop. */
 export function applyQrCloudConfig(patch: QrCloudConfigPatch): QrCloudConfig {
-  applyRevision += 1;
-  const revision = applyRevision;
-  updateConfig(patch);
-  const config = readConfig();
-  if (revision !== applyRevision) return config; // a newer save already re-armed the loop
-  if (config.enabled && config.cloudUrl && readConnectorSetting()) startQrCloudConnector();
-  else stopQrCloudConnector();
+  const config = updateConfig(patch);
+  startQrCloudConnector();
   return config;
 }
 
 export function replaceQrCloudToken(token: unknown): void {
   writeConnectorToken(token);
-  const config = readConfig();
+  const config = updateConfig({ automatic: false });
   if (config.enabled && config.cloudUrl) startQrCloudConnector();
 }
 
 export function revokeQrCloudToken(): void {
   clearConnectorToken();
-  stopQrCloudConnector();
+  updateConfig({ automatic: false });
+  startQrCloudConnector();
 }
 
 export interface ConnectionTestResult {
@@ -278,8 +295,9 @@ export interface ConnectionTestResult {
   checked_at: string;
 }
 
-/** One isolated request with its own timeout; never starts or disturbs the polling loop. */
+/** One request with its own timeout; never starts or reschedules the polling loop. */
 export async function testQrCloudConnection(): Promise<ConnectionTestResult> {
+  const generationAtTest = generation;
   const checkedAt = nowIso();
   const config = readConfig();
   const token = readConnectorSetting();
@@ -297,6 +315,7 @@ export async function testQrCloudConnection(): Promise<ConnectionTestResult> {
   try {
     const ca = readApprovedCa();
     await fetchEventsImpl({ config, token, caPem: ca?.pem ?? null, signal: controller.signal });
+    if (generation === generationAtTest) authentication = 'accepted';
     return {
       ok: true,
       code: null,
@@ -307,6 +326,7 @@ export async function testQrCloudConnection(): Promise<ConnectionTestResult> {
   } catch (error) {
     const code = error instanceof QrCloudClientError ? error.code : 'offline';
     const detail = error instanceof QrCloudClientError ? (error.detail ?? null) : null;
+    if (generation === generationAtTest && code === 'auth_failed') authentication = 'rejected';
     return { ok: false, code, detail, latency_ms: Date.now() - started, checked_at: checkedAt };
   } finally {
     clearTimeout(timeout);
@@ -326,8 +346,11 @@ export interface QrCloudStatus {
   last_success_at: string | null;
   last_poll_at: string | null;
   last_event_count: number;
+  last_duplicate_count: number | null;
+  authentication: CloudAuthentication;
   last_error: ConnectorErrorEntry | null;
   inbox: InboxSummary;
+  receipts: ReturnType<typeof cloudReceiptSummary>;
   tls: ReturnType<typeof caStatus>;
   websocket: { available: boolean; reason: string };
   started_at: string | null;
@@ -346,15 +369,18 @@ export function getQrCloudStatus(): QrCloudStatus {
     // Presence of a stored token is not proof of authentication; only a successful poll is.
     has_token: readConnectorSetting() !== '',
     branch_identity: {
-      tenant: null,
-      branch: null,
-      source: 'not_exposed_by_cloud_api',
+      tenant: authenticatedScope?.tenant_id ?? null,
+      branch: authenticatedScope?.branch_id ?? null,
+      source: authenticatedScope ? 'authenticated_cloud' : 'not_exposed_by_cloud_api',
     },
     last_success_at: lastSuccessAt ?? getSettingValue(QR_CLOUD_SETTING_KEYS.lastSuccessAt) ?? null,
     last_poll_at: lastPollAt,
     last_event_count: lastEventCount,
+    last_duplicate_count: lastDuplicateCount,
+    authentication,
     last_error: lastError,
     inbox: inboxSummary(),
+    receipts: cloudReceiptSummary(config.cloudUrl),
     tls: caStatus(),
     websocket: { available: false, reason: 'cloud_wss_contract_not_deployed' },
     started_at: startedAt,

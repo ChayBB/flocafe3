@@ -1,4 +1,12 @@
-import { STATUS_ORDER, type KitchenStatus } from '@/hooks/useKdsConnection';
+import { useEffect, useState } from 'react';
+import {
+  STATUS_ORDER,
+  normalizeKitchenStatus,
+  type KdsOrder,
+  type KdsOrderItem,
+  type KitchenStatus,
+} from '@/hooks/useKdsConnection';
+import { parseDbTimestamp } from '@/lib/utils';
 
 /** The four board stages; 'voided' is read-only and never a column. */
 export type BoardStatus = (typeof STATUS_ORDER)[number];
@@ -25,6 +33,46 @@ export function boardColumnFor(
   const earlier = active.filter((stage) => STATUS_ORDER.indexOf(stage) < index);
   if (earlier.length > 0) return earlier[earlier.length - 1];
   return active.find((stage) => STATUS_ORDER.indexOf(stage) > index) ?? null;
+}
+
+function cancellationDeadline(item: KdsOrderItem): number | null {
+  if (item.status !== 'cancelled' || item.service_change !== 'cancelled' || !item.service_change_at)
+    return null;
+  const timestamp = parseDbTimestamp(item.service_change_at).getTime();
+  return Number.isFinite(timestamp) ? timestamp + 30_000 : null;
+}
+
+export function useKdsCancellationClock(orders: KdsOrder[]): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    let next = Infinity;
+    for (const order of orders) {
+      for (const item of order.items ?? []) {
+        const deadline = cancellationDeadline(item);
+        if (deadline !== null && deadline > now) next = Math.min(next, deadline);
+      }
+    }
+    if (!Number.isFinite(next)) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, next - Date.now()));
+    return () => clearTimeout(timer);
+  }, [orders, now]);
+  return now;
+}
+
+/** Cancellation notices move for display only, without a kitchen status transition. */
+export function boardColumnForItem(
+  item: KdsOrderItem,
+  inactive: readonly KitchenStatus[],
+  now: number,
+): BoardStatus | null {
+  const deadline = cancellationDeadline(item);
+  const stage =
+    deadline === null
+      ? normalizeKitchenStatus(item.status)
+      : now < deadline
+        ? 'preparing'
+        : 'served';
+  return boardColumnFor(stage, inactive);
 }
 
 /** Where the one-tap toggle sends an item from a column: the next active stage, else served. */

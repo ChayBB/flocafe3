@@ -12351,6 +12351,7 @@ export async function verifyPinAsync(
 
 // Duration a voided in-progress item remains visible on KDS boards before dropping off.
 export const KDS_VOIDED_ITEM_VISIBILITY_MS = 15 * 60 * 1000;
+export const KDS_CANCELLED_NOTICE_CUTOFF_SQL = `datetime('now', '-${KDS_VOIDED_ITEM_VISIBILITY_MS / 1000} seconds')`;
 
 /** A waiting item service staff cancelled stays on the KDS, flagged, for the same grace period. */
 export function isCancelledNoticeKdsVisible(item: {
@@ -12389,6 +12390,15 @@ export const ACTIVE_RELEASED_KDS_ORDER_IDS_SQL = `
     AND active_oi.status NOT IN ('served', 'cancelled')
   WHERE active_o.release_status = 'released'
     AND active_o.status NOT IN ('pending', 'preparing', 'ready', 'served', 'cancelled')
+  UNION
+  SELECT cancelled_o.id FROM orders cancelled_o
+  WHERE cancelled_o.release_status = 'released' AND cancelled_o.status = 'cancelled'
+    AND EXISTS (
+      SELECT 1 FROM order_items cancelled_oi
+      WHERE cancelled_oi.order_id = cancelled_o.id AND cancelled_oi.status = 'cancelled'
+        AND cancelled_oi.service_change = 'cancelled'
+        AND cancelled_oi.service_change_at > ${KDS_CANCELLED_NOTICE_CUTOFF_SQL}
+    )
 `;
 
 export const UNRELEASED_KDS_ORDER_ITEM_ERROR =

@@ -1,0 +1,88 @@
+https://qr-staging.test {
+    tls internal
+
+    encode zstd gzip
+
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+        -Server
+    }
+
+    reverse_proxy api:3000
+}
+
+qr-ordering.accesscam.org {
+    header {
+        >Cache-Control "no-store"
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+        -Server
+    }
+
+    @customerMenu {
+        method GET
+        path /api/v1/menu /api/v1/table-session/orders
+    }
+    @customerOrder {
+        method POST
+        path /api/v1/orders /api/v1/table-qr/session
+    }
+
+    handle @customerMenu {
+        reverse_proxy api:3000
+    }
+    handle @customerOrder {
+        request_body {
+            max_size 64KB
+        }
+        reverse_proxy api:3000
+    }
+    handle {
+        respond 404
+    }
+}
+
+order.aiwittaya.com {
+    encode zstd gzip
+
+    header {
+        >Cache-Control "no-store"
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        X-Frame-Options DENY
+        -Server
+    }
+
+    @customerMenu {
+        method GET
+        path /api/v1/menu /api/v1/table-session/orders
+    }
+    @customerOrder {
+        method POST
+        path /api/v1/orders /api/v1/table-qr/session
+    }
+    @orderingAssets {
+        method GET HEAD
+        path / /index.html /order.js /styles.css /menu-ui/*
+    }
+
+    handle @customerMenu {
+        reverse_proxy api:3000
+    }
+    handle @customerOrder {
+        request_body {
+            max_size 64KB
+        }
+        reverse_proxy api:3000
+    }
+    handle @orderingAssets {
+        root * /data/flo-ordering
+        file_server
+    }
+    handle {
+        respond 404
+    }
+}

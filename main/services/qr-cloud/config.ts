@@ -1,12 +1,15 @@
 import { getSettingValue, upsertSettings } from '../../db';
-import { readProtectedSetting, writeProtectedSetting } from '../../security/protected-setting';
+import {
+  ProtectedStorageUnavailableError,
+  readProtectedSetting,
+  writeProtectedSetting,
+} from '../../security/protected-setting';
 import { isBlockedSsrfTarget } from '../../middleware/security';
 
 /**
  * Cloud QR Ordering connector configuration.
  *
- * The integrated connector is inbox-only: it polls the Cloud event feed and stores events
- * durably. It never creates POS orders, never sends an ACK, and never changes Cloud state.
+ * The integrated connector keeps new orders in the inbox unless automatic acceptance is enabled.
  */
 
 export const QR_CLOUD_SETTING_KEYS = {
@@ -27,6 +30,8 @@ export const QR_CLOUD_SETTING_KEYS = {
   caSubject: 'qr_cloud_ca_subject',
   caNotAfter: 'qr_cloud_ca_not_after',
   importedAt: 'qr_cloud_inbox_imported_at',
+  cutoverPending: 'qr_cloud_legacy_cutover_pending',
+  automaticSince: 'qr_cloud_automatic_since',
 } as const;
 
 /** The bearer token lives in OS-protected storage; the settings row only carries a marker. */
@@ -45,6 +50,8 @@ export interface QrCloudConfig {
   retryMax: number;
   timeoutMs: number;
   reconcileIntervalMs: number;
+  cutoverPending: boolean;
+  automaticSince: string | null;
 }
 
 export const DEFAULT_CONFIG: QrCloudConfig = {
@@ -57,6 +64,8 @@ export const DEFAULT_CONFIG: QrCloudConfig = {
   retryMax: 5,
   timeoutMs: 10_000,
   reconcileIntervalMs: 120_000,
+  cutoverPending: false,
+  automaticSince: null,
 };
 
 export const POLL_INTERVAL_MIN_MS = 5_000;
@@ -83,6 +92,9 @@ export type QrCloudConfigErrorCode =
   | 'retry_invalid'
   | 'reconcile_invalid'
   | 'mode_invalid'
+  | 'token_invalid'
+  | 'credential_storage_unavailable'
+  | 'cutover_required'
   | 'connection_mode_invalid';
 
 function clampInt(value: unknown, min: number, max: number, code: QrCloudConfigErrorCode): number {
@@ -136,6 +148,8 @@ export function readConfig(): QrCloudConfig {
     retryMax: int(raw('retryMax'), DEFAULT_CONFIG.retryMax),
     timeoutMs: int(raw('timeoutMs'), DEFAULT_CONFIG.timeoutMs),
     reconcileIntervalMs: int(raw('reconcileIntervalMs'), DEFAULT_CONFIG.reconcileIntervalMs),
+    cutoverPending: raw('cutoverPending') === '1',
+    automaticSince: raw('automaticSince') || null,
   };
 }
 
@@ -149,6 +163,7 @@ export interface QrCloudConfigPatch {
   retryMax?: number;
   timeoutMs?: number;
   reconcileIntervalMs?: number;
+  automatic?: boolean;
 }
 
 /** Validates and persists a settings patch, returning the config that is now in force. */
@@ -156,8 +171,15 @@ export function updateConfig(patch: QrCloudConfigPatch): QrCloudConfig {
   const current = readConfig();
   const next: QrCloudConfig = { ...current };
   const writes: Record<string, string> = {};
+  if (patch.automatic !== undefined) {
+    next.automaticSince = patch.automatic
+      ? (current.automaticSince ?? new Date().toISOString())
+      : null;
+    writes[QR_CLOUD_SETTING_KEYS.automaticSince] = next.automaticSince ?? '';
+  }
 
   if (patch.enabled !== undefined) {
+    if (patch.enabled && current.cutoverPending) throw new QrCloudConfigError('cutover_required');
     next.enabled = Boolean(patch.enabled);
     writes[QR_CLOUD_SETTING_KEYS.enabled] = next.enabled ? '1' : '0';
   }
@@ -207,17 +229,33 @@ export function updateConfig(patch: QrCloudConfigPatch): QrCloudConfig {
     );
     writes[QR_CLOUD_SETTING_KEYS.reconcileIntervalMs] = String(next.reconcileIntervalMs);
   }
+  if (!next.enabled || next.mode !== 'integrated' || next.cloudUrl !== current.cloudUrl) {
+    next.automaticSince = null;
+    writes[QR_CLOUD_SETTING_KEYS.automaticSince] = '';
+  }
 
   if (Object.keys(writes).length > 0) upsertSettings(writes);
   return next;
 }
 
-/** Stores a replacement bearer token. An empty value clears it. Never readable back through the API. */
-export function writeConnectorToken(raw: unknown): void {
-  if (typeof raw !== 'string') throw new QrCloudConfigError('cloud_url_invalid');
+export function validateConnectorToken(raw: unknown): string {
+  if (typeof raw !== 'string') throw new QrCloudConfigError('token_invalid');
   const token = raw.trim();
-  if (token.length > 512 || /\s/.test(token)) throw new QrCloudConfigError('cloud_url_invalid');
-  writeProtectedSetting(QR_CLOUD_TOKEN_KEY, token);
+  if (!token || token.length > 512 || /[^\x21-\x7e]/.test(token))
+    throw new QrCloudConfigError('token_invalid');
+  return token;
+}
+
+/** Stores a replacement bearer token. Never readable back through the API. */
+export function writeConnectorToken(raw: unknown): void {
+  const token = validateConnectorToken(raw);
+  try {
+    writeProtectedSetting(QR_CLOUD_TOKEN_KEY, token, true);
+  } catch (error) {
+    if (error instanceof ProtectedStorageUnavailableError)
+      throw new QrCloudConfigError('credential_storage_unavailable');
+    throw error;
+  }
 }
 
 export function hasConnectorToken(): boolean {
@@ -225,9 +263,9 @@ export function hasConnectorToken(): boolean {
 }
 
 export function readConnectorSetting(): string {
-  return readProtectedSetting(QR_CLOUD_TOKEN_KEY) || '';
+  return readProtectedSetting(QR_CLOUD_TOKEN_KEY, true);
 }
 
 export function clearConnectorToken(): void {
-  writeProtectedSetting(QR_CLOUD_TOKEN_KEY, '');
+  writeProtectedSetting(QR_CLOUD_TOKEN_KEY, '', true);
 }

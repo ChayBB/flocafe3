@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>สั่งอาหาร | FloCafe</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./order.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="brand">FLOCAFE</p>
+      <h1>สั่งอาหารที่โต๊ะ</h1>
+      <p>เลือกเมนูและจำนวน แล้วส่งรายการให้ร้าน</p>
+    </header>
+
+    <p id="status" class="notice" role="status" aria-live="polite">กำลังตรวจสอบ QR ของโต๊ะ…</p>
+    <button id="reload-menu" type="button" hidden>ลองโหลดเมนูใหม่</button>
+
+    <section id="menu-section" aria-labelledby="menu-title" hidden>
+      <h2 id="menu-title">เมนู</h2>
+      <ul id="menu" class="menu"></ul>
+    </section>
+
+    <section id="checkout" class="checkout" aria-labelledby="checkout-title" hidden>
+      <h2 id="checkout-title">รายการของคุณ</h2>
+      <p id="summary" aria-live="polite"></p>
+      <ul id="configured-items"></ul>
+      <p class="muted">ร้านจะตรวจสอบรายการและยอดก่อนชำระเงิน</p>
+      <button id="submit-order" type="button" disabled>ส่งออเดอร์</button>
+    </section>
+  </main>
+</body>
+</html>

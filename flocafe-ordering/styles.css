@@ -1,0 +1,35 @@
+:root {
+  font: 16px/1.5 system-ui, sans-serif;
+  color: #2d211a;
+  background: #f8f4ee;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 40rem; margin: auto; padding: 1.25rem; }
+header { padding: 1.25rem 0; }
+h1, h2, p { margin: 0 0 .5rem; }
+h1 { font-size: clamp(1.8rem, 6vw, 2.5rem); }
+h2 { font-size: 1.15rem; }
+.brand { color: #8c371b; font-weight: 800; letter-spacing: .14em; }
+.muted { color: #6b5649; font-size: .9rem; }
+.notice { padding: .85rem 1rem; border-radius: .75rem; background: #fff; overflow-wrap: anywhere; }
+.menu { padding: 0; margin: 0; list-style: none; display: grid; gap: .65rem; }
+.menu li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.menu li, .checkout { padding: 1rem; border: 1px solid #e5d8ca; border-radius: .85rem; background: #fff; }
+.menu li p { overflow-wrap: anywhere; }
+.menu .menu-category { border: 0; background: transparent; padding: .4rem 0; font-weight: 700; }
+.menu li label { flex: 0 0 auto; display: grid; font-size: .85rem; }
+input, button { font: inherit; }
+input { width: 4rem; min-height: 2.75rem; padding: .35rem; border: 1px solid #b8a28f; border-radius: .5rem; }
+section { margin-top: 1.25rem; }
+button { min-height: 2.75rem; border: 0; border-radius: .55rem; padding: .55rem .9rem; color: white; background: #8c371b; cursor: pointer; }
+button:disabled { background: #e5ddd5; color: #625449; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 3px solid #99401f; outline-offset: 3px; }
+.checkout button { width: 100%; margin-top: .5rem; }
+.menu .menu-with-options { display: block; }
+.menu fieldset { margin: .75rem 0; border: 1px solid #e5d8ca; border-radius: .5rem; }
+.menu fieldset label { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin: .25rem 0; }
+.menu input[type="checkbox"] { width: 1.25rem; min-height: 1.25rem; }
+#configured-items:empty { display: none; }
+#configured-items button { width: auto; margin: .25rem 0 .25rem .5rem; }

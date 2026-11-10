@@ -1,6 +1,13 @@
 import { Elysia } from 'elysia';
 
 export const connectorNotificationPath = '/api/v1/connectors/notifications';
+export const connectorWebSocketOptions = {
+  idleTimeout: 30,
+  sendPings: true,
+  maxPayloadLength: 1024,
+  backpressureLimit: 32 * 1024,
+  closeOnBackpressureLimit: true,
+};
 const eventWindow = 64;
 const maxPeers = 32;
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
@@ -12,7 +19,7 @@ export interface ConnectorScope {
 
 interface NotificationSource {
   scope: ConnectorScope;
-  authenticate(request: Request): boolean;
+  authenticate(request: Request): boolean | Promise<boolean>;
   readPending(scope: ConnectorScope, limit: number): Promise<readonly unknown[]>;
   subscribe(wake: () => void): () => void;
   sweepMs?: number;
@@ -42,6 +49,7 @@ export function connectorNotifications(source: NotificationSource) {
   let scanning = false;
   let failed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let wakeTimer: ReturnType<typeof setTimeout> | undefined;
   let unsubscribe: (() => void) | undefined;
 
   async function refresh() {
@@ -74,7 +82,13 @@ export function connectorNotifications(source: NotificationSource) {
     }
   }
 
-  const wake = () => void refresh();
+  const wake = () => {
+    if (wakeTimer || peers.size === 0) return;
+    wakeTimer = setTimeout(() => {
+      wakeTimer = undefined;
+      void refresh();
+    }, 100);
+  };
   return new Elysia({ name: 'connector-notifications' })
     .onStart(() => {
       unsubscribe = source.subscribe(wake);
@@ -82,25 +96,21 @@ export function connectorNotifications(source: NotificationSource) {
     })
     .onStop(() => {
       clearInterval(timer);
+      clearTimeout(wakeTimer);
       unsubscribe?.();
       for (const peer of peers.values()) peer.close(1001, 'Server stopping');
       peers.clear();
     })
     .ws(connectorNotificationPath, {
-      beforeHandle({ request, status }) {
+      async beforeHandle({ request, status }) {
         const authorization = request.headers.get('authorization') ?? '';
-        if (!/^Bearer [^\s]+$/i.test(authorization) || !source.authenticate(request)) {
+        if (!/^Bearer [^\s]+$/i.test(authorization) || !(await source.authenticate(request))) {
           return status(401, { error: 'unauthorized' });
         }
         if (!scopeConfigured || peers.size >= maxPeers) {
           return status(503, { error: 'notifications unavailable' });
         }
       },
-      idleTimeout: 30,
-      sendPings: true,
-      maxPayloadLength: 1024,
-      backpressureLimit: 32 * 1024,
-      closeOnBackpressureLimit: true,
       open(ws) {
         if (peers.size >= maxPeers) {
           ws.close(1013, 'Retry with polling');

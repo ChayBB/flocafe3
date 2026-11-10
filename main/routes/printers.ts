@@ -72,6 +72,7 @@ import {
   isValidPrinterProfileId,
 } from '../printers/profiles';
 import { hasPermission, requirePermission, requireAnyPermission } from '../services/authorization';
+import { getOrderServeConfirmation } from '../services/orders';
 import { getOpenSession, listOpenSessions } from '../services/shift-session-gate';
 import {
   formatCurrencyForTenant,
@@ -1045,6 +1046,23 @@ router.post(
       const db = getDatabase();
       if (billId ? billHasWeightPending(db, billId) : orderHasWeightPending(db, orderId)) {
         return sendWeightPendingError(res);
+      }
+      if (authUser?.role === 'server' || req.body.requireServedConfirmation === true) {
+        const target = (
+          billId
+            ? db.prepare('SELECT order_id AS id FROM bills WHERE id = ?').get(billId)
+            : db.prepare('SELECT id FROM orders WHERE id = ?').get(orderId)
+        ) as { id: number } | undefined;
+        if (!target) {
+          return res.status(404).json({ error: billId ? 'Bill not found' : 'Order not found' });
+        }
+        const { hasLiveItems, hasUnconfirmedItems } = getOrderServeConfirmation(db, target.id);
+        if (!hasLiveItems || hasUnconfirmedItems) {
+          return res.status(409).json({
+            error: 'Confirm every item is served before printing the bill',
+            code: 'served_unconfirmed',
+          });
+        }
       }
       let printer = db
         .prepare(

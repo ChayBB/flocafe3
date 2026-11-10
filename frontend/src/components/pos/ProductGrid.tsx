@@ -403,6 +403,7 @@ interface Props {
   onScaledProduct: (product: Product, quantity: number) => void;
   formatPrice?: (amount: number) => string;
   showImages?: boolean;
+  imageOf?: (product: Product) => string | undefined;
   gridClassName?: string;
   searchPlaceholder?: string;
   disabled?: boolean;
@@ -444,6 +445,7 @@ export default function ProductGrid({
   onScaledProduct,
   formatPrice,
   showImages,
+  imageOf,
   gridClassName,
   searchPlaceholder,
   disabled = false,
@@ -778,7 +780,11 @@ export default function ProductGrid({
             {/* Image overlays the tile when available */}
             {product.has_image && (
               <img
-                src={`${api.defaults.baseURL}/products/${product.id}/image?t=${product.updated_at ? parseDbTimestamp(product.updated_at).getTime() : 0}`}
+                src={
+                  imageOf
+                    ? imageOf(product)
+                    : `${api.defaults.baseURL}/products/${product.id}/image?t=${product.updated_at ? parseDbTimestamp(product.updated_at).getTime() : 0}`
+                }
                 alt={product.name}
                 className="absolute inset-0 w-full h-full object-cover rounded-lg"
                 onError={(e) => {

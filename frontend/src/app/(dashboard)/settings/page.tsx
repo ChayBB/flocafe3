@@ -69,7 +69,6 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { formatPhoneLocal, normalizeOptionalPhone } from '@/lib/phone';
 import { useConfirm } from '@/hooks/use-confirm';
-import { GuestQrNetworkSettings } from '@/components/settings/GuestQrNetworkSettings';
 import { CloudConnectorSettings } from '@/components/settings/CloudConnectorSettings';
 import { StoreBrandingCard } from '@/components/settings/StoreBrandingCard';
 import { MasterPinPrompt } from '@/components/settings/MasterPinPrompt';
@@ -6596,6 +6595,7 @@ export default function SettingsPage() {
 
           <TabsContent value="orderflow">
             <SettingsTabShell title={t('tabOrderflow')}>
+              <CloudConnectorSettings guestQrEnabled={guestQrOrderingEnabled} canManage={isAdmin} />
               {/* OrderFlow — online orders */}
               <div className="bg-card rounded-xl border border-border p-6 space-y-4">
                 <div className="flex items-center gap-2">
@@ -6638,7 +6638,6 @@ export default function SettingsPage() {
                     </span>
                   </span>
                 </label>
-                <CloudConnectorSettings guestQrEnabled={guestQrOrderingEnabled} />
               </div>
             </SettingsTabShell>
           </TabsContent>

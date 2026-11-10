@@ -122,10 +122,17 @@ function utter(
     utterance.voice = voice;
     utterance.rate = 0.95;
     utterance.volume = volume;
-    const timer = window.setTimeout(() => resolve(true), timeoutMs);
+    let started = false;
+    const timer = window.setTimeout(() => {
+      done(started);
+      if (!started || volume === 0) window.speechSynthesis.cancel();
+    }, timeoutMs);
     const done = (spoke: boolean) => {
       window.clearTimeout(timer);
       resolve(spoke);
+    };
+    utterance.onstart = () => {
+      started = true;
     };
     utterance.onend = () => done(true);
     utterance.onerror = () => done(false);

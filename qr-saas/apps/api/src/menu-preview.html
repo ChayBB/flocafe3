@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>เมนูทดสอบ QR Ordering</title>
+    <style>
+      :root { color-scheme: light dark; font: 100% system-ui, sans-serif; }
+      body { margin: 0; padding: 1.25rem; }
+      main { max-width: 32rem; margin: 0 auto; }
+      h1 { margin: .3rem 0; font-size: 1.65rem; overflow-wrap: anywhere; }
+      ul { padding: 0; list-style: none; }
+      li { display: flex; justify-content: space-between; gap: 1rem; padding: .85rem 0; border-bottom: 1px solid GrayText; }
+      li span:first-child { overflow-wrap: anywhere; }
+      li span:last-child { flex: none; }
+    </style>
+    <script src="/menu-preview.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <p>FloCafe · QR Ordering</p>
+      <h1 id="table-name">เมนูทดสอบ</h1>
+      <p>หน้านี้ใช้ดูเมนูเท่านั้น ยังไม่เปิดรับออเดอร์</p>
+      <p id="status" role="status">กำลังโหลดเมนู…</p>
+      <ul id="menu" aria-label="รายการอาหาร"></ul>
+    </main>
+  </body>
+</html>

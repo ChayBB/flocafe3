@@ -1,10 +1,8 @@
 'use client';
 
-import { CheckCheck } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import type { OrderItem } from '@/lib/types';
 import { itemStatusDot } from '@/components/orders/OrderCard';
-import { allServedConfirmed } from '@/components/orders/BillRequestBadge';
 
 const STAGES = ['pending', 'preparing', 'ready', 'served'] as const;
 export type FoodStage = (typeof STAGES)[number];
@@ -24,10 +22,8 @@ export function OrderFoodStageCounts({
   onSelect: (stage: FoodStage | null) => void;
 }) {
   const t = useTranslations('orders');
-  const tKds = useTranslations('kds');
   const counts = stageCounts(items);
   if (counts.every((count) => count === 0)) return null;
-  const confirmed = allServedConfirmed(items);
 
   return (
     <div
@@ -56,15 +52,6 @@ export function OrderFoodStageCounts({
             />
             <span className="sr-only">{label}</span>
             <span className="font-medium tabular-nums text-foreground/80">{counts[index]}</span>
-            {stage === 'served' && confirmed && (
-              <CheckCheck
-                data-testid="order-food-served-confirmed"
-                size={14}
-                strokeWidth={2.5}
-                className="text-green-600 dark:text-green-400"
-                aria-label={tKds('servedConfirmedMark')}
-              />
-            )}
           </button>
         );
       })}

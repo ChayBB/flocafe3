@@ -43,6 +43,60 @@ export interface CaCertificateInfo {
   pem: string;
 }
 
+function derFields(bytes: Buffer): { tag: number; value: Buffer }[] {
+  const fields = [];
+  for (let offset = 0; offset < bytes.length;) {
+    if (offset + 2 > bytes.length) throw new CaCertificateError('certificate_invalid');
+    const tag = bytes[offset++];
+    let length = bytes[offset++];
+    if (length & 0x80) {
+      const width = length & 0x7f;
+      if (width < 1 || width > 3 || offset + width > bytes.length)
+        throw new CaCertificateError('certificate_invalid');
+      length = bytes.readUIntBE(offset, width);
+      offset += width;
+    }
+    if (offset + length > bytes.length) throw new CaCertificateError('certificate_invalid');
+    fields.push({ tag, value: bytes.subarray(offset, offset + length) });
+    offset += length;
+  }
+  return fields;
+}
+
+export function inspectCaBasicConstraints(pem: string) {
+  const certificate = derFields(new X509Certificate(pem).raw)[0];
+  const tbs = certificate && derFields(certificate.value)[0];
+  if (certificate?.tag !== 0x30 || tbs?.tag !== 0x30)
+    throw new CaCertificateError('certificate_invalid');
+  const wrapper = derFields(tbs.value).find(({ tag }) => tag === 0xa3);
+  if (!wrapper) return null;
+  const extensions = derFields(wrapper.value)[0];
+  if (extensions?.tag !== 0x30) throw new CaCertificateError('certificate_invalid');
+  for (const entry of derFields(extensions.value)) {
+    const fields = derFields(entry.value);
+    // X.509 Basic Constraints extension OID 2.5.29.19.
+    if (fields[0]?.tag !== 6 || fields[0].value.toString('hex') !== '551d13') continue;
+    const critical = fields[1]?.tag === 1 && fields[1].value[0] !== 0;
+    const octets = fields.find(({ tag }) => tag === 4);
+    if (!octets) throw new CaCertificateError('certificate_invalid');
+    const constraints = derFields(octets.value)[0];
+    if (constraints?.tag !== 0x30) throw new CaCertificateError('certificate_invalid');
+    const pathLength = derFields(constraints.value).find(({ tag }) => tag === 2);
+    if (
+      pathLength &&
+      (!pathLength.value.length ||
+        pathLength.value.length > 8 ||
+        (pathLength.value[0] & 0x80) !== 0)
+    )
+      throw new CaCertificateError('certificate_invalid');
+    return {
+      critical,
+      path_length: pathLength ? BigInt(`0x${pathLength.value.toString('hex')}`).toString() : null,
+    };
+  }
+  return null;
+}
+
 /** `aa:bb:…` uppercase with colons, from either PEM/DER bytes or a typed fingerprint. */
 export function normalizeFingerprint(value: unknown): string {
   if (typeof value !== 'string') throw new CaCertificateError('fingerprint_invalid');

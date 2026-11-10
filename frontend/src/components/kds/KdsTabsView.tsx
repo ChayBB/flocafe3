@@ -6,7 +6,7 @@ import { ElapsedTime } from '@/components/kds/ElapsedTime';
 import { KdsSetPrice } from '@/components/kds/KdsSetPrice';
 import { KdsServiceNotice, noticeRowClass } from '@/components/kds/KdsServiceNotice';
 import { KdsStatusToggle } from '@/components/kds/KdsStatusToggle';
-import { activeStages, boardColumnFor } from '@/lib/kds-stages';
+import { activeStages, boardColumnForItem, useKdsCancellationClock } from '@/lib/kds-stages';
 import { Badge } from '@/components/ui/badge';
 import {
   STATUS_CONFIG,
@@ -42,11 +42,14 @@ export function KdsTabsView({
   const t = useTranslations('kds');
   const tOrders = useTranslations('orders');
   const [selectedTab, setSelectedTab] = useState<KitchenStatus>('pending');
+  const cancellationClock = useKdsCancellationClock(orders);
   const tabs: KitchenStatus[] = [...activeStages(inactiveStatuses), 'voided'];
   const activeTab = tabs.includes(selectedTab) ? selectedTab : tabs[0];
   const tabOf = (item: KdsOrderItem): KitchenStatus | null => {
     const status = normalizeKitchenStatus(item.status);
-    return status === 'voided' ? 'voided' : boardColumnFor(status, inactiveStatuses);
+    return status === 'voided'
+      ? 'voided'
+      : boardColumnForItem(item, inactiveStatuses, cancellationClock);
   };
 
   const statusLabel = (s: KitchenStatus) => t(STATUS_CONFIG[s].labelKey);

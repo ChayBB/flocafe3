@@ -15,6 +15,13 @@
   }
   log {
     output stdout
-    format json
+    format filter {
+      wrap json
+      fields {
+        request>headers>Authorization delete
+        request>headers>Cookie delete
+        request>uri regexp "^(/api/v1/connectors/notifications)[?].*$" "$1"
+      }
+    }
   }
 }

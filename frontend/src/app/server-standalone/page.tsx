@@ -35,6 +35,7 @@ import { useSyncServerLanguage, writeLanguageOverride } from '@/lib/i18n';
 import type { Language } from '@/lib/i18n/languages';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import { ServerAppHeader } from '@/components/server-app/ServerAppHeader';
+import { StaffSignIn } from '@/components/server-app/StaffSignIn';
 import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/GuestOrderHistory';
 import { useReloadOnNewBuild } from '@/hooks/useReloadOnNewBuild';
 import { holdDarkClass } from '@/lib/kds-screen-mode';
@@ -210,9 +211,10 @@ function awaitingPayment(order: Order | null | undefined): boolean {
 function ownedOrAllTables<T extends { owner_user_id?: string | null }>(
   tables: T[],
   userId: string | undefined,
+  areaOnly: boolean,
 ): T[] {
   const owned = userId ? tables.filter((table) => table.owner_user_id === userId) : [];
-  return owned.length > 0 ? owned : tables;
+  return areaOnly || owned.length > 0 ? owned : tables;
 }
 
 /** A table QR opens this app with `?table=<id>`; otherwise the first table the staff member sees is selected. */
@@ -285,6 +287,11 @@ export default function ServerStandalonePage() {
   );
   // A tablet always shows its tables beside the menu; a phone opens on them and toggles them with Select Table.
   const showTablePicker = Boolean(user) && (tablePickerOpen || isWide);
+  const staffAreaOnly = useSyncExternalStore(
+    subscribeToNothing,
+    () => new URLSearchParams(window.location.search).get('staff') === 'area',
+    () => false,
+  );
   useEffect(() => {
     document.documentElement.classList.add('theme-server-app');
     return () => document.documentElement.classList.remove('theme-server-app');
@@ -343,9 +350,10 @@ export default function ServerStandalonePage() {
   // Best sellers of the last 30 days; staff only, so a guest at a QR table sees no popular filter.
   const [popularIds, setPopularIds] = useState<string[] | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
+  const staffTables = ownedOrAllTables(tables, user?.id, staffAreaOnly);
   // Tables whose bill the cashier could not print yet: every item must be confirmed served first.
   const serveConfirmTables = user
-    ? ownedOrAllTables(tables, user.id).filter(
+    ? staffTables.filter(
         (table) => (table.activeOrder || table.current_order)?.serve_confirm_requested_at,
       )
     : [];
@@ -1818,18 +1826,12 @@ export default function ServerStandalonePage() {
           snapshot.orderCustomer ||
           (snapshot.customerName ? { name: snapshot.customerName } : undefined),
       };
-      // Backgrounded so an unreachable printer can't block Send; sequenced (not concurrent)
-      // since KOT and bill can share a default printer and race its socket connection.
-      void (async () => {
-        await printKotForOrder(
-          orderId,
-          { ...enrichedOrder, items: newItems },
-          requestToken,
-          isCurrent,
-        );
-        const printed = await printOrderSlip(orderId, requestToken, isCurrent);
-        if (printed === 'failed' && isCurrent()) toast.error(t('billPrintFailed'));
-      })();
+      void printKotForOrder(
+        orderId,
+        { ...enrichedOrder, items: newItems },
+        requestToken,
+        isCurrent,
+      );
     } catch (error: unknown) {
       if (!isCurrent()) return;
       if (
@@ -2356,15 +2358,7 @@ export default function ServerStandalonePage() {
                 <UserRound size={17} />
               </button>
             ) : (
-              <button
-                onClick={() => setShowLogin(true)}
-                aria-label={tAuth('signIn')}
-                title={tAuth('signIn')}
-                data-testid="server-app-login-button"
-                className="flex size-12 items-center justify-center rounded-full bg-orange-500 text-white shadow-md hover:bg-orange-600"
-              >
-                <UserRound size={17} />
-              </button>
+              <StaffSignIn onClick={() => setShowLogin(true)} />
             )}
           </>
         }
@@ -2430,7 +2424,10 @@ export default function ServerStandalonePage() {
                 {t('tables')}
               </h2>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
-                {ownedOrAllTables(tables, user?.id).map((table) => {
+                {staffAreaOnly && tablesLoaded && staffTables.length === 0 && (
+                  <p className="text-sm text-muted-foreground">{tPos('noTablesFound')}</p>
+                )}
+                {staffTables.map((table) => {
                   const selected = table.id === selectedTableId;
                   const order = table.activeOrder || table.current_order;
                   // Serving tables are light green, ones waiting to pay amber with a clock, cleaning

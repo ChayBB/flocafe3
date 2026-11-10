@@ -47,6 +47,7 @@ import { maskNote, readProfanityWords } from '../services/profanity-filter';
 import {
   calculateOrderTotals,
   completedKdsProjectionCutoff,
+  getOrderServeConfirmation,
   recomputeOrderTotals,
   reconcileActiveOrderStatusFromItems,
 } from '../services/orders';
@@ -1008,6 +1009,8 @@ type ProductRow = TaxProductRow & {
 };
 
 interface OrderItemInput {
+  expected_cloud_price_satang?: number;
+  expected_cloud_addon_satang?: number;
   product_id: string;
   quantity: number;
   unit_price?: number;
@@ -1034,6 +1037,26 @@ interface OrderItemInput {
         inventory_deducted_quantity?: number;
       }[]
     | null;
+}
+
+function requireExpectedCloudPrice(expectedSatang: unknown, unitPrice: number) {
+  if (
+    expectedSatang !== undefined &&
+    (getTenantCurrency() !== 'THB' || expectedSatang !== Math.round(unitPrice * 100))
+  ) {
+    throw Object.assign(new Error('pos_price_changed'), { statusCode: 409 });
+  }
+}
+
+function requireExpectedCloudItemPrices(item: OrderItemInput, unitPrice: number) {
+  requireExpectedCloudPrice(item.expected_cloud_price_satang, unitPrice);
+  if (item.expected_cloud_addon_satang !== undefined) {
+    const addonPrice = (item.addons ?? []).reduce(
+      (sum, addon) => sum + (addon.price || 0) * (addon.quantity || 1),
+      0,
+    );
+    requireExpectedCloudPrice(item.expected_cloud_addon_satang, addonPrice);
+  }
 }
 
 function insertOrderItems(
@@ -1102,6 +1125,7 @@ function insertOrderItems(
       : variant
         ? variantUnitPrice(variant, isOnlineOrder)
         : parseFloat(String(product.price));
+    requireExpectedCloudItemPrices(item, unitPrice);
     const menuUnitPrice = unitPrice;
     let priceOverride: PriceOverrideInput | null = null;
     if (item.price_override !== undefined && item.price_override !== null) {
@@ -2558,6 +2582,7 @@ router.post(
           let unitPrice = variant
             ? variantUnitPrice(variant, isOnlineOrder)
             : parseFloat(product.price);
+          requireExpectedCloudItemPrices(item, unitPrice);
           const menuUnitPrice = unitPrice;
           let priceOverride: PriceOverrideInput | null = null;
           if (item.price_override !== undefined && item.price_override !== null) {
@@ -7739,15 +7764,8 @@ router.post(
             code: 'weight_pending',
           });
         }
-        const liveItems = (
-          db
-            .prepare('SELECT status, served_confirmed_at FROM order_items WHERE order_id = ?')
-            .all(orderId) as {
-            status: string;
-            served_confirmed_at: string | null;
-          }[]
-        ).filter((item) => !isTerminalItemStatus(item.status));
-        if (liveItems.length === 0) {
+        const { hasLiveItems, hasUnconfirmedItems } = getOrderServeConfirmation(db, orderId);
+        if (!hasLiveItems) {
           throw Object.assign(new Error('Confirm every item is served before printing the bill'), {
             statusCode: 409,
             code: 'served_unconfirmed',
@@ -7755,7 +7773,7 @@ router.post(
         }
         // Only a table's order is served at a table; a take-away or delivery bill prints for the cashier at once.
         const needsServeConfirmation = !cashierPrint || current.type === 'dine_in';
-        if (needsServeConfirmation && liveItems.some((item) => !item.served_confirmed_at)) {
+        if (needsServeConfirmation && hasUnconfirmedItems) {
           if (!cashierPrint) {
             throw Object.assign(
               new Error('Confirm every item is served before printing the bill'),

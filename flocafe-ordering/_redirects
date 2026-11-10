@@ -1,0 +1,3 @@
+/api/v1/menu    https://qr-ordering.accesscam.org/api/v1/menu    200!
+/api/v1/orders  https://qr-ordering.accesscam.org/api/v1/orders  200!
+/api/v1/table-qr/session  https://qr-ordering.accesscam.org/api/v1/table-qr/session  200!

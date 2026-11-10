@@ -1,6 +1,10 @@
 'use client';
 
-import { OrderStatusBadge, isAwaitingBillPayment } from '@/components/orders/BillRequestBadge';
+import {
+  OrderStatusBadge,
+  allServedConfirmed,
+  isAwaitingBillPayment,
+} from '@/components/orders/BillRequestBadge';
 import { amountDue, needsBillPrintBeforePayment } from '@/lib/bill-print-flow';
 import {
   OrderFoodProgressBar,
@@ -214,8 +218,9 @@ function OrderDetailContent({
   const itemEditBlocked = (itemId: number) => pendingResolveIds.includes(itemId);
 
   const activeItems = (order.items || []).filter((i) => !isTerminalItemStatus(i.status));
+  const showFoodStatus = order.status !== 'cancelled' && !allServedConfirmed(order.items ?? []);
   // The filter belongs to the order it was picked on, so opening another order shows everything.
-  const stageFilter = foodFilter?.orderId === order.id ? foodFilter.stage : null;
+  const stageFilter = showFoodStatus && foodFilter?.orderId === order.id ? foodFilter.stage : null;
   const shownItems = stageFilter
     ? activeItems.filter((item) => item.status === stageFilter)
     : activeItems;
@@ -476,7 +481,7 @@ function OrderDetailContent({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            {order.status !== 'cancelled' && (
+            {showFoodStatus && (
               <OrderFoodStageCounts
                 items={order.items || []}
                 selected={stageFilter}
@@ -494,7 +499,7 @@ function OrderDetailContent({
             )}
           </div>
         </div>
-        {order.status !== 'cancelled' && <OrderFoodProgressBar items={order.items || []} />}
+        {showFoodStatus && <OrderFoodProgressBar items={order.items || []} />}
       </div>
 
       {/* ── SCROLLING BODY ─────────────────────────────────────────────────── */}

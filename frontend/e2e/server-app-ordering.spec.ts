@@ -82,7 +82,7 @@ test.describe('Server App tableside ordering', () => {
     ).toBeTruthy();
   });
 
-  test('does not open browser print popup when no hardware printer is configured (400)', async ({
+  test('sending an order requests only a kitchen ticket without opening browser print', async ({
     page,
   }) => {
     const managerToken = getE2eToken('e2e-manager', 'manager@flo.local', 'manager');
@@ -138,18 +138,16 @@ test.describe('Server App tableside ordering', () => {
     const kotResponsePromise = page.waitForResponse(
       (res) => res.url().includes('/api/printers/print-kot') && res.status() === 400,
     );
-    const billResponsePromise = page.waitForResponse(
-      (res) => res.url().includes('/api/printers/print-bill') && res.status() === 400,
-    );
-
     await page.getByRole('button', { name: 'Send to kitchen' }).first().click();
     await expect(page.getByText('Order sent', { exact: true }).first()).toBeVisible();
 
-    await Promise.all([kotResponsePromise, billResponsePromise]);
-    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await kotResponsePromise;
+    await expect(
+      page.waitForRequest('**/api/printers/print-bill', { timeout: 1000 }),
+    ).rejects.toThrow('Timeout');
 
     expect(kotCalls).toBe(1);
-    expect(billCalls).toBe(1);
+    expect(billCalls).toBe(0);
 
     const browserPrintCalls = await page.evaluate(
       () => (window as unknown as { __browserPrintCalls?: number }).__browserPrintCalls ?? 0,

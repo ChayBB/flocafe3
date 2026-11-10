@@ -26,6 +26,18 @@ import {
 } from '../../shared/charges';
 
 type Database = ReturnType<typeof getDatabase>;
+
+export function getOrderServeConfirmation(db: Database, orderId: string | number) {
+  const items = db
+    .prepare('SELECT status, served_confirmed_at FROM order_items WHERE order_id = ?')
+    .all(orderId) as { status: string; served_confirmed_at: string | null }[];
+  const liveItems = items.filter((item) => !isTerminalItemStatus(item.status));
+  return {
+    hasLiveItems: liveItems.length > 0,
+    hasUnconfirmedItems: liveItems.some((item) => !item.served_confirmed_at),
+  };
+}
+
 type OrderItemRow = {
   id?: number | string;
   order_id?: number | string;

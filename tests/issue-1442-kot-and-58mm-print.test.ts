@@ -47,7 +47,11 @@ const {
 
 const { orderRoutes } = require('../main/routes/orders');
 const { tableRoutes } = require('../main/routes/tables');
-const { startServer: startMainServer, stopServer: stopMainServer } = require('../main/server');
+const {
+  getServerPort,
+  startServer: startMainServer,
+  stopServer: stopMainServer,
+} = require('../main/server');
 const { startServerApp, stopServerApp } = require('../main/server-app');
 const { getServerAppPort } = require('../main/server-app-state');
 const { getJWTSecret } = require('../main/routes/auth');
@@ -447,11 +451,43 @@ async function main() {
         );
       }
 
-      // When server_app_bill_printing_enabled is 'true', requests forward to main API (returns 400 when no default printer configured)
       db.prepare(
         `UPDATE settings SET value = 'true', updated_at = ? WHERE key = 'server_app_bill_printing_enabled'`,
       ).run(now());
 
+      db.prepare(
+        "UPDATE order_items SET status = 'served', served_confirmed_at = NULL WHERE order_id = ?",
+      ).run(orderId);
+      for (const token of [serverToken, managerToken, ownerToken]) {
+        const res = await postJson(
+          serverAppBaseUrl,
+          '/api/printers/print-bill',
+          { orderId },
+          token,
+        );
+        assertEqualOrThrow(res.status, 409, 'Serving alone does not allow a Server App bill');
+        assertEqualOrThrow(
+          res.body?.code,
+          'served_unconfirmed',
+          'The refusal explains the missing confirmation',
+        );
+      }
+      const directPrint = await postJson(
+        `http://127.0.0.1:${getServerPort()}`,
+        '/api/printers/print-bill',
+        { orderId, preview: true },
+        serverToken,
+      );
+      assertEqualOrThrow(
+        directPrint.status,
+        409,
+        'Direct API calls by a server also require confirmation',
+      );
+
+      db.prepare('UPDATE order_items SET served_confirmed_at = ? WHERE order_id = ?').run(
+        now(),
+        orderId,
+      );
       for (const [roleName, token] of [
         ['server', serverToken],
         ['manager', managerToken],
@@ -466,7 +502,7 @@ async function main() {
         assertEqualOrThrow(
           res.status,
           400,
-          `Server App POST /api/printers/print-bill forwards to main API for ${roleName} when server_app_bill_printing_enabled is true`,
+          `Server App reaches printer selection for ${roleName} after service confirmation`,
         );
       }
     } finally {

@@ -661,7 +661,7 @@ test('an item switched to take-away still rings the ready bell and is announced 
   expect((await sounds(page)).__bells).toBe(start.__bells + 1);
 });
 
-test('a spoken order on a POS-computer voice first wakes the speaker so it does not swallow "Table"', async ({
+test('the POS voice wakes the speaker and reads new items when the browser voice stalls', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -716,7 +716,7 @@ test('a spoken order on a POS-computer voice first wakes the speaker so it does 
           body: Buffer.from('RIFF-e2e-audio'),
         })
       : route.fulfill({
-          json: { engine: 'local', voices: [{ id: 'e2e-voice', name: 'E2E voice' }] },
+          json: { engine: 'system', voices: [] },
         }),
   );
 
@@ -751,4 +751,36 @@ test('a spoken order on a POS-computer voice first wakes the speaker so it does 
   expect((await starts())[seen]).toBeGreaterThanOrEqual(0.7);
   // A quiet hum plays during that lead, since silence alone does not wake a sleeping speaker.
   expect((await sounds(page)).__hums).toBe(humsBefore + 1);
+
+  await page.clock.install();
+  await page.evaluate(() => {
+    localStorage.removeItem('flocafe:kds-voice');
+    window.speechSynthesis.speak = (utterance) => {
+      if (utterance.volume > 0) {
+        (window as unknown as SoundLog).__spoken.push(utterance.text);
+      } else {
+        utterance.onend?.(new Event('end') as SpeechSynthesisEvent);
+      }
+    };
+    window.speechSynthesis.cancel = () => {};
+  });
+  const nextOrder = await page.request.post(`${E2E_BASE_URL}/api/orders`, {
+    headers,
+    data: {
+      type: 'takeaway',
+      items: [{ product_id: (await product.json()).product.id, quantity: 2 }],
+    },
+  });
+  expect(nextOrder.status()).toBe(201);
+  const announcement = `New order: 2 Rice ${run}`;
+  await expect.poll(async () => (await sounds(page)).__spoken).toContain(announcement);
+  const fallback = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/api/kds/speech') &&
+      request.method() === 'POST' &&
+      request.postDataJSON().text === announcement,
+  );
+  await page.clock.fastForward(20_000);
+  await fallback;
+  await expect.poll(async () => (await starts()).length).toBe(seen + 2);
 });

@@ -622,37 +622,91 @@ is the relay above. `integrated` runs a Cloud connector inside the backend proce
 ([`main/services/qr-cloud/`](../../main/services/qr-cloud/)): no second executable, service, listener or
 startup script.
 
-**Inbox only.** The connector polls `GET {cloud_url}/api/v1/connectors/events` with a bearer token,
-stores each event in a durable SQLite inbox, and does nothing else. It never creates a POS order,
-never sends an ACK, never changes a Cloud price and never maps a table or product. Those steps need
-the Cloud-side contract that does not exist yet.
+**Cloud Inbox.** The connector polls `GET {cloud_url}/api/v1/connectors/events` with a bearer token
+and stores events in a durable SQLite inbox. The feed pages through pending deliveries so applied
+local events do not permanently occupy the first page. Polling only stores events. Staff with
+`settings.manage` and `orders.create` can review an order in Settings → OrderFlow → Cloud QR Ordering.
+The POS fetches the order through the connector-authenticated `GET /api/v1/connectors/events/:id/order`,
+which verifies the event, tenant, branch, and pending delivery. A Cloud menu item's `external_id`
+must be the ID of an active POS product sold by the piece. Staff choose the POS table and explicitly
+confirm the order. The POS uses its own prices and taxes, and can append the items to an open order
+on that table. The Cloud order ID is the POS idempotency key, and the inbox records the resulting
+POS order number and the staff member who confirmed. OrderFlow defaults to staff confirmation.
+Administrators can explicitly switch to automatic acceptance when the authenticated connector has
+receipt permission. Only new events for an open, linked table with matching POS items and prices
+qualify. Older or blocked events stay available for staff review. After POS commit, the inbox saves
+a receipt and retries `POST /api/v1/connectors/ack-receipt` independently of POS placement. The
+Cloud commits delivery and order status together and replays the same receipt safely.
+
+**Cloud table stickers.** Settings → OrderFlow → Cloud QR Ordering lists every POS table and shows
+which tables are inactive. Staff can open an active POS table for three hours. The scoped
+connector API registers the POS table ID and returns a stable, public sticker
+identifier. The customer site exchanges that identifier for a short-lived table session only while
+the table is open. Closing Cloud ordering for that table revokes its Cloud guest sessions. Cloud
+orders for mapped tables can only be accepted into their linked POS table. The local Server App
+stickers use their own local table sessions. Set `QR_ORDERING_PUBLIC_ORIGIN` on the Cloud API to
+the HTTPS origin serving the customer site. The customer site's proxy must forward
+`POST /api/v1/table-qr/session` alongside the existing customer menu and order routes.
+
+**Cloud menu.** The catalog publisher replaces the branch's customer menu after explicit staff
+confirmation. It exports eligible POS items and variants in THB with their stable identifiers,
+linked add-on groups, selection limits, and add-on prices. Zero-priced entries direct customers to
+staff and cannot be ordered. The publish request carries its base revision. Cloud locks the branch
+during publication and rejects stale revisions. A customer order includes the menu revision and
+the selected add-on IDs and quantities. Cloud validates the selections against that revision and
+stores the resolved prices. The integrated connector passes selections through the POS order API
+so POS applies its catalog and stock rules before sending the items to the kitchen.
 
 **Storage.** The inbox is a separate file from the POS database, at
-`<userData>/qr-cloud/inbox.db` (`FLO_QR_CLOUD_DIR` overrides it for tests). Keeping it out of
+`<userData>/qr-cloud/inbox.db` (`FLO_QR_CLOUD_DIR` overrides it for tests). Poll diagnostics use the
+same database. Keeping it out of
 `flo.db` means Cloud payloads never enter POS exports or backups, and a damaged inbox cannot touch
 orders. Schema version is tracked with `PRAGMA user_version`; `inbox_events.event_id` is the primary
-key, so a replayed poll stores nothing twice. `POST /api/qr-cloud/inbox/import` copies an existing
-standalone `connector.db` after writing a byte copy beside it: the source is opened read-only,
-event ids are preserved, and re-running imports nothing new. Import is never automatic.
+key, so a replayed poll stores nothing twice. `POST /api/qr-cloud/inbox/import` opens a standalone
+`connector.db` read-only and writes an integrity-checked SQLite snapshot beside it. The snapshot
+includes committed WAL rows and retains the source poll history. Inbox events are copied in one
+transaction with their IDs, statuses, and timestamps. Re-importing an event leaves the existing row
+in place. Import requires confirmation and does not run at startup.
 
 **Lifecycle.** Startup calls `startQrCloudConnector()` after `initDatabase()` and its migrations, so
 the connector only ever runs against a migrated store. Shutdown registers `QR cloud connector`
 ahead of the database in the shutdown coordinator, which cancels an in-flight request and closes the
-inbox. One loop exists per process: `start()` cancels the previous generation, every scheduled step
-checks its generation, and settings saves are serialised by a revision counter.
+inbox. One loop exists per process. Settings updates are synchronous, and each restart cancels the
+previous generation. Selecting Legacy Relay or disabling the integrated connector stops its loop.
 
 **State machine.** `DISABLED`, `NOT_CONFIGURED`, `CONNECTING`, `CONNECTED_POLLING`, `DEGRADED`,
 `AUTH_FAILED`, `TLS_FAILED`, `OFFLINE`, `STOPPING`, plus `CONNECTED_WEBSOCKET` reserved for the
 Cloud WSS contract that is not deployed. HTTP 401/403 maps to `AUTH_FAILED`, certificate and
 handshake errors to `TLS_FAILED`, DNS/connection/timeout failures to `OFFLINE`, and 5xx or malformed
-responses to `DEGRADED`. Reaching `retryMax` failures stays `DEGRADED` and settles onto the
-reconciliation interval. Status never reports `CONNECTED` because a URL is reachable: only a
-successful authenticated poll sets `CONNECTED_POLLING`.
+responses to `DEGRADED`. Reaching `retryMax` failures moves polling to the reconciliation interval.
+Authentication and TLS failures retain their specific states. A successful authenticated poll
+sets `CONNECTED_POLLING`. Settings reports Cloud authentication separately based on the latest
+accepted or rejected credentials observed by a poll or connection test. Both transport settings
+use HTTPS polling, and WebSocket is shown as unavailable.
 
-**Credentials.** The token is written through `writeProtectedSetting()` (`safeStorage` in a packaged
-app plus a `safe-storage:v1` marker row). `GET /api/qr-cloud` reports `has_token` only; the value is
-never returned, is not logged, and is redacted from database exports. A stored token is explicitly
-not proof of authentication.
+**Credentials.** Packaged builds and the Windows checkout app encrypt the token with Electron
+`safeStorage` in the application data directory and store only a storage marker in settings. If
+protected storage is unavailable, a replacement fails. The app migrates an older plaintext token only when it can encrypt it
+successfully. The API returns `has_token` and the result of authentication separately.
+
+**Legacy configuration import.** On the Windows POS, open Cloud QR Ordering in Settings → OrderFlow
+and inspect the legacy files. Preview reads `C:\\QRConnector\\config\\connector.env` and, when present,
+`C:\\QRConnector\\certs\\root.crt`. It reports the URL, polling interval, credential presence,
+certificate metadata including Basic Constraints, and conflicts. A confirmed import selects
+integrated mode and replaces the URL, interval, and credential. Replacing an existing credential
+requires its own confirmation.
+The new encrypted file is staged before SQLite commits the settings and actor-attributed audit
+event. A failed transaction leaves the previous settings and credential active.
+
+In OrderFlow, choose the Cloud server, set up the token and CA, then test and start polling. The
+legacy import can approve the staging CA in the same action after you confirm its fingerprint
+against an independent trusted source. Before starting polling after import, verify that the
+legacy process has stopped and will stay stopped. Confirm that in OrderFlow. The final action
+tests the connection, lifts the cutover hold if present, and starts polling on success. To return
+to the legacy Connector after cutover, disable FloCafe
+polling before restarting the legacy process. The original files remain available. If the import
+replaced earlier FloCafe settings, re-enter the previous URL, interval, and credential from your
+approved records to restore that configuration.
 
 **TLS trust.** The staging Cloud uses a Caddy private root CA. `POST /api/qr-cloud/ca/inspect`
 parses a certificate and reports subject, issuer, validity and SHA-256 fingerprint without trusting

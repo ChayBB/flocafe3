@@ -8,6 +8,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { tenantCan } from '@/lib/permissions';
 import { playKdsAlert, unlockKdsAlertSound } from '@/lib/kds-alert-sound';
+import { extractPrinterErrorMessage, formatKotErrorToast } from '@/lib/printer/warnings';
 
 const POLL_MS = 5000;
 
@@ -62,8 +63,10 @@ export default function UnprintedKotAlerts() {
         retryStation: entry.station,
       });
       toast.success(t('unprintedKotReprinted'));
-    } catch {
-      toast.error(t('unprintedKotReprintFailed'));
+    } catch (error) {
+      toast.error(
+        formatKotErrorToast(extractPrinterErrorMessage(error), t('unprintedKotReprintFailed')),
+      );
     } finally {
       setBusyId(null);
       await load();

@@ -16,11 +16,19 @@ test('a kitchen ticket that did not print waits on the POS until it is reprinted
     },
   ];
   let reprintBody: unknown;
+  let printerReady = false;
   await page.route('**/api/printers/unprinted-kots', (route) =>
     route.fulfill({ json: { unprinted } }),
   );
   await page.route('**/api/printers/print-kot', async (route) => {
     reprintBody = route.request().postDataJSON();
+    if (!printerReady) {
+      await route.fulfill({
+        status: 502,
+        json: { detail: 'Timed out connecting to 192.0.2.1:9100' },
+      });
+      return;
+    }
     unprinted = [];
     await route.fulfill({ json: { success: true, warnings: [] } });
   });
@@ -36,6 +44,15 @@ test('a kitchen ticket that did not print waits on the POS until it is reprinted
   await expect(alert).toContainText('Kitchen ticket not printed');
   await expect(alert).toContainText('Table 5 · Kitchen station');
 
+  await alert.getByRole('button', { name: 'Reprint' }).click();
+  await expect(
+    page.getByText(
+      'Still could not print the kitchen ticket: Timed out connecting to 192.0.2.1:9100',
+    ),
+  ).toBeVisible();
+  await expect(alert).toBeVisible();
+
+  printerReady = true;
   await alert.getByRole('button', { name: 'Reprint' }).click();
   await expect(page.getByText('Kitchen ticket printed')).toBeVisible();
   expect(reprintBody).toEqual({ orderId: 41, retryStation: 'Kitchen' });
