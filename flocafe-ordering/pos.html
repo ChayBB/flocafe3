@@ -8,8 +8,17 @@
   <title>สั่งอาหาร | FloCafe</title>
   <link rel="stylesheet" href="./styles.css">
   <script type="module" src="./order.js"></script>
+  <style>
+    .boot { padding: 12px; font-family: system-ui, sans-serif; color: #737373; }
+    .boot-bar, .boot-card { background: #ececec; border-radius: 8px; animation: boot 1.2s ease-in-out infinite alternate; }
+    .boot-row { display: flex; gap: 8px; margin: 8px 0 16px; overflow: hidden; }
+    .boot-row .boot-bar { flex: 0 0 72px; height: 28px; border-radius: 999px; }
+    .boot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+    .boot-card { aspect-ratio: 1; }
+    @keyframes boot { to { opacity: .45; } }
+  </style>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root"><div class="boot" role="status">กำลังโหลดเมนู…<div class="boot-row"><div class="boot-bar"></div><div class="boot-bar"></div><div class="boot-bar"></div><div class="boot-bar"></div><div class="boot-bar"></div></div><div class="boot-grid"><div class="boot-card"></div><div class="boot-card"></div><div class="boot-card"></div><div class="boot-card"></div></div></div></div>
 </body>
 </html>

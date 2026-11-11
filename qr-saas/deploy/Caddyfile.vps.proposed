@@ -49,12 +49,16 @@ order.aiwittaya.com {
     encode zstd gzip
 
     header {
-        >Cache-Control "no-store"
         X-Content-Type-Options nosniff
         Referrer-Policy no-referrer
         X-Frame-Options DENY
         -Server
     }
+    # Each deploy publishes into a new /menu-ui/<release>/ folder, so its files never change in place.
+    @versionedAssets path /menu-ui/*
+    header @versionedAssets >Cache-Control "public, max-age=31536000, immutable"
+    @unversioned not path /menu-ui/*
+    header @unversioned >Cache-Control "no-store"
 
     @customerMenu {
         method GET
@@ -80,7 +84,15 @@ order.aiwittaya.com {
     }
     handle @orderingAssets {
         root * /data/flo-ordering
-        file_server
+        @presentation path /menu-ui/*/menu-presentation.json
+        handle @presentation {
+            file_server
+        }
+        handle {
+            file_server {
+                precompressed br gzip
+            }
+        }
     }
     handle {
         respond 404
