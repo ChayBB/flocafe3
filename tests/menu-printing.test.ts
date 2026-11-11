@@ -205,10 +205,10 @@ test('menu thermal labels use the requested print language', () => {
   const profile = resolvePrinterProfile({ profile_id: 'epson-tm-series' });
   const rendered = renderMenuViaDocument(menuDocument(), {
     columns: 42,
-    language: 'es',
+    language: 'th',
     capabilities: capabilitiesForPrinter(profile, 'cols-42', false),
   });
-  assert.match(escPosToText(rendered.data), /Total de artículos: 1/);
+  assert.ok(rendered.lines.join('\n').includes('จำนวนรายการทั้งหมด: 1'));
   assert.doesNotMatch(escPosToText(rendered.data), /Total items/);
   assert.doesNotMatch(escPosToText(rendered.data), /Powered by/);
 });

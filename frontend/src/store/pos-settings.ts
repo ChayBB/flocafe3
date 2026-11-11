@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Language } from '@/lib/i18n';
+import { isLanguage, type Language } from '@/lib/i18n/languages';
 import { defaultPrintLanguagePolicy } from '@print/policy';
 import type { KotLanguagePolicy, ReceiptLanguagePolicy } from '@print/types';
 
@@ -370,8 +370,8 @@ export const usePosSettingsStore = create<PosSettingsState>()(
               k !== 'autoLockMinutes',
           ),
         ) as PosSettingsState,
-      // Migrates legacy store keys (GSTIN rename, removed A4/A5 paper sizes).
-      version: 5,
+      // Migrates legacy store keys (GSTIN rename, removed A4/A5 paper sizes, removed UI languages).
+      version: 6,
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (version < 1) {
@@ -408,6 +408,9 @@ export const usePosSettingsStore = create<PosSettingsState>()(
           state.receiptLogo ??= '';
           state.receiptLogoRaster ??= '';
           state.billShowLogo ??= false;
+        }
+        if (version < 6 && !isLanguage(state.language)) {
+          state.language = 'th';
         }
         return state as unknown as PosSettingsState;
       },

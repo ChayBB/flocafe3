@@ -1,13 +1,8 @@
 import { app, BrowserWindow } from 'electron';
-import {
-  getStatusMessage,
-  resolveStatusLanguage,
-  RTL_STATUS_LANGUAGES,
-  type StatusKey,
-} from './status-messages';
+import { getStatusMessage, resolveStatusLanguage, type StatusKey } from './status-messages';
 
-function buildPage(title: string, detail: string, dir: string): string {
-  return `<!doctype html><html dir="${dir}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><style>
+function buildPage(title: string, detail: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><style>
 :root{color-scheme:light dark;--bg:#fff;--fg:#1c1917;--muted:#78716c;--accent:#3646f5}
 @media (prefers-color-scheme:dark){:root{--bg:#1c1917;--fg:#fafaf9;--muted:#a8a29e;--accent:#7a86ff}}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-user-select:none;user-select:none;-webkit-app-region:drag}
@@ -17,7 +12,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
 h1{font-size:19px;font-weight:600;margin:0}
 p{font-size:13px;line-height:1.45;color:var(--muted);margin:0;max-width:340px}
 </style></head><body><div class="spinner"></div><h1 id="t">${escapeHtml(title)}</h1><p id="d">${escapeHtml(detail)}</p>
-<script>window.__setStatus=function(t,d,dir){document.documentElement.dir=dir;document.getElementById('t').textContent=t;document.getElementById('d').textContent=d||''}</script></body></html>`;
+<script>window.__setStatus=function(t,d){document.getElementById('t').textContent=t;document.getElementById('d').textContent=d||''}</script></body></html>`;
 }
 
 function escapeHtml(value: string): string {
@@ -100,10 +95,9 @@ export async function showStatus(key: StatusKey, alwaysOnTop = false): Promise<v
   try {
     const language = currentLanguage();
     const [title, detail] = getStatusMessage(key, language);
-    const dir = RTL_STATUS_LANGUAGES.has(language) ? 'rtl' : 'ltr';
     if (!isOpen()) {
       if (!opening) {
-        opening = openWindow(alwaysOnTop, buildPage(title, detail, dir)).finally(() => {
+        opening = openWindow(alwaysOnTop, buildPage(title, detail)).finally(() => {
           opening = null;
         });
         await opening;
@@ -116,7 +110,7 @@ export async function showStatus(key: StatusKey, alwaysOnTop = false): Promise<v
     await holdStatus(MIN_DWELL_MS);
     statusWindow?.setAlwaysOnTop(alwaysOnTop);
     await statusWindow?.webContents.executeJavaScript(
-      `window.__setStatus(${JSON.stringify(title)},${JSON.stringify(detail)},${JSON.stringify(dir)})`,
+      `window.__setStatus(${JSON.stringify(title)},${JSON.stringify(detail)})`,
     );
     messageAt = Date.now();
   } catch (error) {

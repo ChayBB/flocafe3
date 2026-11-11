@@ -3034,7 +3034,7 @@ async function run(): Promise<void> {
       );
 
       // #1480: WebUSB Turkish reprint/online-order banners, KOT headers, and stacked/compact financial rows rasterize
-      await fePrintDoc.ensurePrintLanguagesLoaded(['tr']);
+      await fePrintDoc.ensurePrintLanguagesLoaded(['th']);
       const turkishPaintedCells: Array<{ text: string; align: string }> = [];
       feWarnings.setBrowserRasterCanvasFactory(() => {
         const base = createMockCanvas(true);
@@ -3079,13 +3079,13 @@ async function run(): Promise<void> {
       const turkishClassicBytes = feReceipt.buildClassicReceiptBytes(
         turkishWebUsbBill as any,
         { ...webusbTenant, business_name: 'Güneş Börekçisi' } as any,
-        { paperWidth: 80, capabilities: webusbCaps, isReprint: true, languages: ['tr'] },
+        { paperWidth: 80, capabilities: webusbCaps, isReprint: true, languages: ['th'] },
         turkishClassicWarn,
       );
       assert.equal(feWarnings.hasFinancialPrintWarning(turkishClassicWarn), false);
       assert.ok(Buffer.from(turkishClassicBytes).includes(Buffer.from([0x1d, 0x76, 0x30])));
       assert.ok(
-        turkishPaintedCells.some((cell) => cell.text.includes('YENİDEN YAZDIRMA')),
+        turkishPaintedCells.some((cell) => cell.text.includes('พิมพ์ซ้ำ')),
         'buildClassicReceiptBytes rasterizes Turkish reprint banner',
       );
 
@@ -3094,13 +3094,13 @@ async function run(): Promise<void> {
       const turkishCompactBytes = feReceipt.buildCompactReceiptBytes(
         turkishWebUsbBill as any,
         { ...webusbTenant, business_name: 'Güneş Börekçisi' } as any,
-        { paperWidth: 58, capabilities: webusbCaps, isReprint: true, languages: ['tr'] },
+        { paperWidth: 58, capabilities: webusbCaps, isReprint: true, languages: ['th'] },
         turkishCompactWarn,
       );
       assert.equal(feWarnings.hasFinancialPrintWarning(turkishCompactWarn), false);
       assert.ok(Buffer.from(turkishCompactBytes).includes(Buffer.from([0x1d, 0x76, 0x30])));
       assert.ok(
-        turkishPaintedCells.some((cell) => cell.text.includes('YENİDEN YAZDIRMA')),
+        turkishPaintedCells.some((cell) => cell.text.includes('พิมพ์ซ้ำ')),
         'buildCompactReceiptBytes rasterizes Turkish reprint banner',
       );
       assert.ok(
@@ -3113,13 +3113,13 @@ async function run(): Promise<void> {
       const turkishDetailedBytes = feReceipt.buildDetailedReceiptBytes(
         turkishWebUsbBill as any,
         { ...webusbTenant, business_name: 'Güneş Börekçisi' } as any,
-        { paperWidth: 58, capabilities: webusbCaps, isReprint: true, languages: ['tr'] },
+        { paperWidth: 58, capabilities: webusbCaps, isReprint: true, languages: ['th'] },
         turkishDetailedWarn,
       );
       assert.equal(feWarnings.hasFinancialPrintWarning(turkishDetailedWarn), false);
       assert.ok(Buffer.from(turkishDetailedBytes).includes(Buffer.from([0x1d, 0x76, 0x30])));
       assert.ok(
-        turkishPaintedCells.some((cell) => cell.text.includes('YENİDEN YAZDIRMA')),
+        turkishPaintedCells.some((cell) => cell.text.includes('พิมพ์ซ้ำ')),
         'buildDetailedReceiptBytes rasterizes Turkish reprint banner',
       );
       assert.ok(
@@ -3152,7 +3152,7 @@ async function run(): Promise<void> {
         {
           paperWidth: 58,
           capabilities: webusbCaps,
-          language: 'tr',
+          language: 'th',
           stationName: 'Izgara & Şiş',
         },
         turkishKotWarn,
@@ -3205,7 +3205,7 @@ async function run(): Promise<void> {
           {
             paperWidth: 58,
             capabilities: webusbCaps,
-            language: 'tr',
+            language: 'th',
             stationName: 'Izgara & Şiş',
           },
           unavailableCanvasKotWarn,
@@ -3232,7 +3232,7 @@ async function run(): Promise<void> {
           {
             paperWidth: 58,
             capabilities: webusbCaps,
-            language: 'tr',
+            language: 'th',
             stationName: 'Izgara & Şiş',
           },
           failedCanvasKotWarn,
@@ -3250,7 +3250,7 @@ async function run(): Promise<void> {
       feReceipt.buildDetailedReceiptBytes(
         turkishWebUsbBill as any,
         webusbTenant as any,
-        { paperWidth: 80, capabilities: webusbCaps, languages: ['tr'] },
+        { paperWidth: 80, capabilities: webusbCaps, languages: ['th'] },
         failedDetailedWarn,
       );
       assert.equal(feWarnings.hasFinancialPrintWarning(failedDetailedWarn), true);
@@ -3262,18 +3262,12 @@ async function run(): Promise<void> {
   }
 
   // #1480: Shared normalizeThermalText preserves unrepresentable strings intact when raster is enabled
-  assert.equal(
-    normalizeSharedThermalText('Açılış kasası', generic80.capabilities),
-    'Açılış kasası',
-  );
+  assert.equal(normalizeSharedThermalText('เงินทุนเริ่มต้น', generic80.capabilities), 'เงินทุนเริ่มต้น');
   assert.equal(
     normalizeSharedThermalText('ÖDEME YÖNTEMLERİ', generic80.capabilities),
     'ÖDEME YÖNTEMLERİ',
   );
-  assert.equal(
-    normalizeSharedThermalText('Dönem başlangıcı:', generic80.capabilities),
-    'Dönem başlangıcı:',
-  );
+  assert.equal(normalizeSharedThermalText('วันที่เริ่มต้น:', generic80.capabilities), 'วันที่เริ่มต้น:');
   assert.equal(normalizeSharedThermalText('Müsli', generic80.capabilities), 'Muesli');
 
   // #1480: Turkish Z-report rasterization via printZReport, printPaymentTicket, and renderTestPage
@@ -3304,14 +3298,14 @@ async function run(): Promise<void> {
     counted_cash_cents: 46000,
     variance_cents: 0,
     closed_by_name: 'Çağrı Şahin',
-    __language: 'tr',
+    __language: 'th',
   };
 
   // Without raster capability, buildZReportBody refuses Turkish financial rows fail-closed
   const nativeOnlyZWarnings: any[] = [];
   const nativeOnlyZBody = buildZReportBody(
     turkishZSnapshot,
-    'tr',
+    'th',
     {
       columns: 42,
       capabilities: {
@@ -3411,8 +3405,8 @@ async function run(): Promise<void> {
     assert.ok(Buffer.isBuffer(zResult.bytes));
     assert.ok(zResult.bytes!.includes(Buffer.from([0x1d, 0x76, 0x30])));
     assert.deepEqual(Array.from(zResult.bytes!.slice(-5)), [0x1b, 0x70, 0x00, 0x19, 0xfa]);
-    assert.ok(zRasterRequests.some((req) => req.text.includes('Açılış kasası') && req.financial));
-    assert.ok(zRasterRequests.some((req) => req.text.includes('Ödeme yöntemine göre satışlar')));
+    assert.ok(zRasterRequests.some((req) => req.text.includes('เงินทุนเริ่มต้น') && req.financial));
+    assert.ok(zRasterRequests.some((req) => req.text.includes('ยอดขายตามวิธีการชำระเงิน')));
     assert.ok(
       zRasterRequests.some(
         (req) =>
@@ -3421,7 +3415,7 @@ async function run(): Promise<void> {
           req.layout?.kind === 'financial-summary',
       ),
     );
-    assert.ok(zRasterRequests.some((req) => req.text.includes('Sayılan nakit') && req.financial));
+    assert.ok(zRasterRequests.some((req) => req.text.includes('เงินสดที่นับได้') && req.financial));
 
     // printPaymentTicket rasterizes Turkish item rows cleanly
     const ticketRasterRequests: any[] = [];
@@ -3502,7 +3496,7 @@ async function run(): Promise<void> {
         (req) =>
           req.financial === false &&
           req.layout?.kind === 'financial-summary' &&
-          req.layout?.columns?.[0]?.text === 'Dönem başlangıcı:' &&
+          req.layout?.columns?.[0]?.text === 'วันที่เริ่มต้น:' &&
           req.layout?.columns?.[1]?.align === 'right',
       ),
     );
@@ -3521,16 +3515,14 @@ async function run(): Promise<void> {
     const trTestBytes = await renderTestPage(
       '80mm',
       'full',
-      'tr',
+      'th',
       'Europe/Istanbul',
       generic80.capabilities,
     );
     assert.ok(trTestBytes.includes(Buffer.from([0x1d, 0x76, 0x30])));
-    assert.ok(zRasterRequests.some((req) => req.text.includes('Flo Yazıcı Testi')));
+    assert.ok(zRasterRequests.some((req) => req.text.includes('ทดสอบเครื่องพิมพ์ Flo')));
     assert.ok(
-      zRasterRequests.some((req) =>
-        req.text.includes('Bu metni okuyabiliyorsanız yazıcınız başarıyla çalışıyor!'),
-      ),
+      zRasterRequests.some((req) => req.text.includes('หากคุณอ่านข้อความนี้ได้ แสดงว่าเครื่องพิมพ์ทำงานปกติ!')),
     );
   } finally {
     destroySharedRasterRenderer();

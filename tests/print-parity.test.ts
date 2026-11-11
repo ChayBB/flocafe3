@@ -1549,12 +1549,12 @@ function run(): void {
   );
 
   // ------------------------------------------------------------------
-  // 5. Receipt/KOT language routing (#443): fa/es/fr tenants get localized
-  //    labels end-to-end through the resolved policy; the KOT kitchen
-  //    policy resolves independently of the receipt language.
+  // 5. Receipt/KOT language routing (#443): a Thai receipt on a generic
+  //    thermal profile refuses its unprintable financial labels; the KOT
+  //    kitchen policy resolves independently of the receipt language.
   // ------------------------------------------------------------------
   section('Localized receipt labels end-to-end');
-  for (const language of ['fa', 'es', 'fr'] as const) {
+  for (const language of ['th'] as const) {
     for (const template of ['classic', 'compact'] as const) {
       const label = `${template}/${language}`;
       const warnings: Warnings = [];
@@ -1575,14 +1575,14 @@ function run(): void {
         ),
       );
       const totalLabel = printLabel(language, 'print.grandTotal');
-      if (language === 'fr') {
+      if (language === 'th') {
         warn(
           text.length === 0,
-          `${label}: unsupported accented financial labels refuse before transport`,
+          `${label}: unsupported Thai financial labels refuse before transport`,
         );
         warn(
           warnings.some((warning) => warning.kind === 'financial'),
-          `${label}: refusal identifies the accented financial label`,
+          `${label}: refusal identifies the Thai financial label`,
         );
         continue;
       }
@@ -1594,28 +1594,28 @@ function run(): void {
 
   section('KOT language policy independence');
   {
-    // Store language fa + inherit KOT policy → kitchen tickets follow the store.
+    // Store language th + inherit KOT policy → kitchen tickets follow the store.
     const inherited = resolveKotLanguage(
       { primary: { mode: 'inherit' }, additional: [] as const },
-      'fa',
+      'th',
     );
-    warn(inherited === 'fa', 'KOT inherit policy follows the store language');
+    warn(inherited === 'th', 'KOT inherit policy follows the store language');
     // Fixed kitchen policy overrides the store language independently.
     const fixedEn = resolveKotLanguage(
       { primary: { mode: 'fixed', language: 'en' }, additional: [] as const },
-      'fa',
+      'th',
     );
     warn(fixedEn === 'en', 'KOT fixed policy overrides the store language');
     // Receipt policy with an additional language resolves primary first.
     const receiptLangs = resolveReceiptLanguages(
-      { primary: { mode: 'inherit' }, additional: ['es'] as const },
-      'fa',
+      { primary: { mode: 'inherit' }, additional: ['en'] as const },
+      'th',
     );
     warn(
-      receiptLangs[0] === 'fa' && receiptLangs[1] === 'es',
+      receiptLangs[0] === 'th' && receiptLangs[1] === 'en',
       'receipt policy resolves primary + additional',
     );
-    // A fixed-en KOT ticket stays English even for a fa store (#443).
+    // A fixed-en KOT ticket stays English even for a th store (#443).
     const kotTextEn = escPosToText(
       formatKOT(
         kotOrder,

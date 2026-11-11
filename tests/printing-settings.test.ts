@@ -32,9 +32,9 @@ const { settingsRoutes } = require('../main/routes/settings');
 
 const basePayload = {
   printer_trim_decimals: true,
-  bill_language_policy: { primary: { mode: 'fixed', language: 'de' }, additional: ['fa'] },
-  kot_language_policy: { primary: { mode: 'fixed', language: 'tr' }, additional: [] },
-  z_report_language_policy: { primary: { mode: 'fixed', language: 'fr' }, additional: [] },
+  bill_language_policy: { primary: { mode: 'fixed', language: 'th' }, additional: ['en'] },
+  kot_language_policy: { primary: { mode: 'fixed', language: 'th' }, additional: [] },
+  z_report_language_policy: { primary: { mode: 'fixed', language: 'en' }, additional: [] },
   bill_show_name: false,
   bill_show_address: false,
   bill_show_phone: true,
@@ -87,19 +87,19 @@ async function main() {
     assertPersisted(
       db,
       'bill_language_policy',
-      JSON.stringify({ primary: { mode: 'fixed', language: 'de' }, additional: ['fa'] }),
+      JSON.stringify({ primary: { mode: 'fixed', language: 'th' }, additional: ['en'] }),
       'receipt policy is normalized and persisted',
     );
     assertPersisted(
       db,
       'kot_language_policy',
-      JSON.stringify({ primary: { mode: 'fixed', language: 'tr' }, additional: [] }),
+      JSON.stringify({ primary: { mode: 'fixed', language: 'th' }, additional: [] }),
       'KOT policy is normalized and persisted',
     );
     assertPersisted(
       db,
       'z_report_language_policy',
-      JSON.stringify({ primary: { mode: 'fixed', language: 'fr' }, additional: [] }),
+      JSON.stringify({ primary: { mode: 'fixed', language: 'en' }, additional: [] }),
       'Z-report policy is normalized and persisted',
     );
     const zReportRead = await api(baseUrl, '/api/settings/z_report_language_policy', {
@@ -108,7 +108,7 @@ async function main() {
     assertEqual(zReportRead.status, 200, 'Z-report policy can be read through the settings API');
     assertEqual(
       zReportRead.data.setting.value,
-      JSON.stringify({ primary: { mode: 'fixed', language: 'fr' }, additional: [] }),
+      JSON.stringify({ primary: { mode: 'fixed', language: 'en' }, additional: [] }),
       'settings API returns the persisted Z-report policy',
     );
     assertPersisted(db, 'bill_show_name', 'false', 'bill name visibility is persisted');

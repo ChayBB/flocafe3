@@ -7,7 +7,7 @@
  * 2. Tenant timezone (e.g. America/Argentina/Buenos_Aires), calendar system, and digit
  *    preferences remain backend-authoritative and respected regardless of UI locale.
  * 3. Browser thermal receipts (web-print.ts / generateBillHtml) format receipt dates
- *    in the active UI language (including Albanian, Thai, and Urdu) for an Argentina tenant.
+ *    in the active UI language (English and Thai) for an Argentina tenant.
  * 4. WhatsApp share messages (whatsapp-share.ts) respect the active UI locale for date/amounts.
  * 5. React useFormatDate hook correctly provides localized formatting based on useLocale().
  * 6. Reviewer-visible visual evidence artifacts (HTML & PNG screenshots) are generated
@@ -375,48 +375,12 @@ async function runTests() {
   };
 
   const receiptLanguages: Array<{
-    lang:
-      | 'en'
-      | 'es'
-      | 'fr'
-      | 'pt'
-      | 'ru'
-      | 'fa'
-      | 'ur'
-      | 'ja'
-      | 'hi'
-      | 'ne'
-      | 'pa'
-      | 'te'
-      | 'sq'
-      | 'th'
-      | 'ha'
-      | 'jv'
-      | 'mr'
-      | 'sw'
-      | 'ta';
+    lang: 'en' | 'th';
     label: string;
     filePrefix: string;
   }> = [
     { lang: 'en', label: 'English UI', filePrefix: 'receipt-argentina-english-ui' },
-    { lang: 'es', label: 'Spanish UI', filePrefix: 'receipt-argentina-spanish-ui' },
-    { lang: 'fr', label: 'French UI', filePrefix: 'receipt-argentina-french-ui' },
-    { lang: 'pt', label: 'Portuguese UI', filePrefix: 'receipt-argentina-portuguese-ui' },
-    { lang: 'ru', label: 'Russian UI', filePrefix: 'receipt-argentina-russian-ui' },
-    { lang: 'fa', label: 'Persian UI', filePrefix: 'receipt-argentina-persian-ui' },
-    { lang: 'ur', label: 'Urdu UI', filePrefix: 'receipt-argentina-urdu-ui' },
-    { lang: 'ja', label: 'Japanese UI', filePrefix: 'receipt-argentina-japanese-ui' },
-    { lang: 'hi', label: 'Hindi UI', filePrefix: 'receipt-argentina-hindi-ui' },
-    { lang: 'ne', label: 'Nepali UI', filePrefix: 'receipt-argentina-nepali-ui' },
-    { lang: 'pa', label: 'Punjabi UI', filePrefix: 'receipt-argentina-punjabi-ui' },
-    { lang: 'te', label: 'Telugu UI', filePrefix: 'receipt-argentina-telugu-ui' },
-    { lang: 'sq', label: 'Albanian UI', filePrefix: 'receipt-argentina-albanian-ui' },
     { lang: 'th', label: 'Thai UI', filePrefix: 'receipt-argentina-thai-ui' },
-    { lang: 'ha', label: 'Hausa UI', filePrefix: 'receipt-argentina-hausa-ui' },
-    { lang: 'jv', label: 'Javanese UI', filePrefix: 'receipt-argentina-javanese-ui' },
-    { lang: 'mr', label: 'Marathi UI', filePrefix: 'receipt-argentina-marathi-ui' },
-    { lang: 'sw', label: 'Swahili UI', filePrefix: 'receipt-argentina-swahili-ui' },
-    { lang: 'ta', label: 'Tamil UI', filePrefix: 'receipt-argentina-tamil-ui' },
   ];
 
   const receiptResults: Record<string, { html: string; htmlPath: string; pngPath: string }> = {};
@@ -448,84 +412,10 @@ async function runTests() {
         receiptHtml.includes('Bill #'),
         `Receipt in English UI must contain English labels`,
       );
-    } else if (lang === 'es') {
+    } else {
       assert.ok(
-        receiptHtml.includes('ago') || receiptHtml.includes('Factura'),
-        `Receipt in Spanish UI must contain Spanish labels and date`,
-      );
-    } else if (lang === 'sq') {
-      assert.ok(
-        receiptHtml.includes('Dëftesë nr.') || receiptHtml.includes('Nëntotali'),
-        `Receipt in Albanian UI must contain Albanian labels and date`,
-      );
-    } else if (lang === 'ur') {
-      assert.ok(
-        receiptHtml.includes('بل #') && receiptHtml.includes('کل رقم'),
-        `Receipt in Urdu UI must contain Urdu labels`,
-      );
-      assert.ok(
-        receiptHtml.includes('اگست') || receiptHtml.includes('ستمبر'),
-        `Receipt in Urdu UI must contain an Urdu month name`,
-      );
-    } else if (lang === 'ne') {
-      assert.ok(
-        receiptHtml.includes('बिल #') && receiptHtml.includes('कुल जम्मा'),
-        `Receipt in Nepali UI must contain Devanagari labels`,
-      );
-      assert.ok(
-        receiptHtml.includes('अगस्ट'),
-        `Receipt in Nepali UI must contain a Nepali month name, got: ${receiptHtml}`,
-      );
-    } else if (lang === 'ha') {
-      assert.ok(
-        receiptHtml.includes('Lambar lissafi #') && receiptHtml.includes('Jimillar ƙasa'),
-        `Receipt in Hausa UI must contain Hausa labels, got: ${receiptHtml}`,
-      );
-    } else if (lang === 'jv') {
-      assert.ok(
-        receiptHtml.includes('Tagihan #') && receiptHtml.includes('Gunggung Akhir'),
-        `Receipt in Javanese UI must contain Javanese labels, got: ${receiptHtml}`,
-      );
-    } else if (lang === 'mr') {
-      assert.ok(
-        receiptHtml.includes('बिल #') && receiptHtml.includes('एकूण रक्कम'),
-        `Receipt in Marathi UI must contain Devanagari labels`,
-      );
-      assert.ok(
-        receiptHtml.includes('ऑग'),
-        `Receipt in Marathi UI must contain a Marathi month name, got: ${receiptHtml}`,
-      );
-    } else if (lang === 'sw') {
-      assert.ok(
-        receiptHtml.includes('Bili #') && receiptHtml.includes('Jumla Kuu'),
-        `Receipt in Swahili UI must contain Swahili labels`,
-      );
-    } else if (lang === 'pa') {
-      assert.ok(
-        receiptHtml.includes('ਬਿੱਲ #') && receiptHtml.includes('ਕੁੱਲ ਜੋੜ'),
-        `Receipt in Punjabi UI must contain Gurmukhi labels`,
-      );
-      assert.ok(
-        receiptHtml.includes('ਅਗ'),
-        `Receipt in Punjabi UI must contain a Punjabi month name, got: ${receiptHtml}`,
-      );
-    } else if (lang === 'te') {
-      assert.ok(
-        receiptHtml.includes('బిల్లు #') && receiptHtml.includes('మొత్తం'),
-        `Receipt in Telugu UI must contain Telugu labels`,
-      );
-      assert.ok(
-        receiptHtml.includes('ఆగ') || receiptHtml.includes('ఆగస్టు'),
-        `Receipt in Telugu UI must contain a Telugu month name, got: ${receiptHtml}`,
-      );
-    } else if (lang === 'ta') {
-      assert.ok(
-        receiptHtml.includes('பில் #') && receiptHtml.includes('மொத்தத் தொகை'),
-        `Receipt in Tamil UI must contain Tamil labels`,
-      );
-      assert.ok(
-        receiptHtml.includes('ஆக'),
-        `Receipt in Tamil UI must contain a Tamil month name, got: ${receiptHtml}`,
+        receiptHtml.includes('เลขบิล#') && receiptHtml.includes('ยอดรวมทั้งสิ้น'),
+        `Receipt in Thai UI must contain Thai labels, got: ${receiptHtml}`,
       );
     }
 
@@ -785,7 +675,7 @@ async function runTests() {
   }
 
   assert.ok(ssrRenderedLocales['en'].includes('Aug'), 'React hook in English UI must render Aug');
-  assert.ok(ssrRenderedLocales['es'].includes('ago'), 'React hook in Spanish UI must render ago');
+  assert.ok(ssrRenderedLocales['th'].includes('ส.ค.'), 'React hook in Thai UI must render ส.ค.');
 
   // -------------------------------------------------------------------------
   // 5. Generate Master Visual Comparison Dashboard Artifact

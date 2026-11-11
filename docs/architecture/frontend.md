@@ -553,7 +553,7 @@ a financial document, not a cosmetic bug.
 ## Internationalization: 32 locales
 
 [`frontend/src/lib/i18n/languages.ts`](../../frontend/src/lib/i18n/languages.ts) is the renderer's
-registry. It holds 32 entries, and
+registry. It holds two entries, `en` and `th`, and
 [`frontend/src/lib/i18n/messages/`](../../frontend/src/lib/i18n/messages) holds one JSON file per
 entry. Each registry entry carries the BCP-47 locale tag, the native name, the text direction, the
 `selectable` flag, and a dynamic chunk loader.
@@ -566,17 +566,15 @@ deduplicated, and an unregistered locale key falls back to English.
 when a later load fails, so a broken chunk leaves the screen in the language it had rather than in
 none.
 
-Direction is applied rather than assumed: `getLanguageDirection` feeds `HtmlLangSync`, the `Ltr`
-island wrapper, and `DirectionalToaster`, so a right-to-left locale mirrors the chrome and leaves
-numeric and Latin runs isolated.
+Both registered languages are left-to-right; `getLanguageDirection` still feeds `HtmlLangSync`,
+which sets `<html dir>` from the registry entry.
 
 Backend enums reach the interface through
 [`frontend/src/lib/i18n-enums.ts`](../../frontend/src/lib/i18n-enums.ts), which maps each enum value
 to a message key rather than carrying English text.
 
-Adding a locale is a scripted procedure with its own verification commands, documented in
-[Adding a language](../guides/adding-a-language.md). `npm run i18n:check` is the gate: leaf parity
-against `en.json`, the derived print-label table, and a `tsc` pass over the frontend.
+`npm run i18n:check` is the translation gate: leaf parity against `en.json`, the derived print-label
+table, and a `tsc` pass over the frontend.
 
 ## Customer display
 

@@ -1765,23 +1765,6 @@ async function main() {
       fallbackEnReceipt.includes('Thank you!'),
       'EN fallback footer matches the pre-#445 hardcoded default',
     );
-    const fallbackEsReceipt = renderLabeled('in.gst.label-fallback.v1', {}, 'es');
-    assert(
-      fallbackEsReceipt.includes('FACTURA'),
-      'built-in fallbacks localize through the canonical catalog (es title)',
-    );
-    assert(
-      fallbackEsReceipt.includes('Subtotal'),
-      'built-in fallbacks localize through the canonical catalog (es subtotal)',
-    );
-    // The legacy unsupported-script filter drops non-ASCII footer lines
-    // ("¡Gracias!") before they reach the printer, so the localized-footer
-    // assertion uses the ASCII-safe pt catalog entry instead.
-    const fallbackPtReceipt = renderLabeled('in.gst.label-fallback.v1', {}, 'pt');
-    assert(
-      fallbackPtReceipt.includes('Obrigado!'),
-      'built-in fallbacks localize through the canonical catalog (pt footer)',
-    );
     const fallbackUnknownLangReceipt = renderLabeled('in.gst.label-fallback.v1', {}, 'xx');
     assert(
       fallbackUnknownLangReceipt.includes('INVOICE'),

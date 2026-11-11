@@ -83,7 +83,6 @@ npm run audit:db
 npm run i18n:check
 npm run docs:check      # Markdown lint, relative links, index completeness, doc policy
 npm run test:e2e:browser # E2E tests (runs Playwright from frontend/)
-npm run i18n:add -- de   # scaffold an approved new language locally
 ```
 
 ## Verification

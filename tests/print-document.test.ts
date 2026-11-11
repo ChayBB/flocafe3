@@ -506,7 +506,7 @@ console.log('\n▶ Backend PrintData normalization (main layer)');
   ok('payment_details JSON string parsed; flags mapped');
 
   assert.equal(detectPrintLanguageDirection('en'), 'ltr');
-  assert.equal(detectPrintLanguageDirection('fa'), 'rtl', 'fa labels carry RTL script');
+  assert.equal(detectPrintLanguageDirection('th'), 'ltr', 'th labels carry LTR script');
   assert.equal(
     detectPrintLanguageDirection('unknown-lang'),
     'ltr',

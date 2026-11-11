@@ -85,7 +85,7 @@ export { getJWTSecret, clearJWTSecretCache } from '../security/jwt-secret';
 
 // The demo/express fixture data likewise belongs to no router. Re-exported
 // here for one release, on the same terms as the secret above.
-export { seedSetupProfile, ENGLISH_IDENTICAL_SEED_LANGUAGES } from '../setup/seed-data';
+export { seedSetupProfile } from '../setup/seed-data';
 
 /** Build synthetic tenant object from local settings for frontend routing. */
 function buildLocalTenant(db: ReturnType<typeof getDatabase>, userId: string, userRole: string) {

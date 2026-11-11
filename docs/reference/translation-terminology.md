@@ -5,7 +5,7 @@ message catalogues in `frontend/src/lib/i18n/messages/` are the authoritative ar
 this page covers the constraints behind them.
 
 Word-list glossaries are deliberately not kept here. They are translator working material for the
-pull request that fills `messages/<lang>.json`, and a glossary held in documentation has no
+pull request that changes `messages/th.json`, and a glossary held in documentation has no
 enforcement mechanism and drifts on the first translation change.
 
 ## Measurement is by grapheme cluster, never by UTF-16 code unit
@@ -45,19 +45,17 @@ incorrectly.
 
 Pinned by `tests/print-kernel.test.ts` for both the segmented and the fallback segmenter.
 
-## NFC is required for Vietnamese
+## NFC is required for catalogue text
 
-Vietnamese values must be in Unicode NFC. A decomposed value, where the vowel carries a separate
-combining diacritic, measures as the same display width and wraps to the same lines, so the difference
+Catalogue values must be in Unicode NFC. A decomposed value, where a base letter carries a separate
+combining mark, measures as the same display width and wraps to the same lines, so the difference
 is invisible on screen and corrupts comparison, searching, and print labels.
 
 `tests/print-kernel.test.ts` asserts that the composed and decomposed forms of `Tiếng Việt` measure
 identically and wrap identically after normalisation, which is what makes NFC a requirement rather
-than a preference. `tests/translations.test.ts` rejects a `vi.json` value that is not already NFC.
+than a preference. `tests/translations.test.ts` rejects a `th.json` value that is not already NFC.
 
-The same NFC requirement is enforced for `ha.json`, `jv.json`, `mr.json`, `ne.json`, `pa.json`, `ru.json`, `sw.json`, `ta.json`, `te.json`, `th.json`, and `uk.json`.
-
-## Albanian and Vietnamese on thermal and impact printers
+## Latin-script text on thermal and impact printers
 
 `GENERIC_THERMAL_CAPABILITIES` (`scripts: ['ascii']`) in `shared/print/thermal-capabilities.ts`
 transliterates only through the fixed `LATIN_ASCII_MAP`, so Albanian `Ç`/`ç` and `Ë`/`ë` become
@@ -110,11 +108,8 @@ model.
 A message should not gain a `plural` selector to work around a language's word order. Restructure the
 sentence so the count reads correctly with a single form.
 
-Russian is the pinned example. `auth.attemptsRemaining` is `{count} attempt(s) remaining before
-lockout.` in English and `До блокировки осталось попыток: {count}` in Russian, and `pos.tableSeats`
-is `{count} seats` and `Мест: {count}`. Both are pinned by assertions in `tests/translations.test.ts`,
-which also enforces that the selector variables of a locale match the English message, so a new
-selector would fail the check for every other locale too.
+`tests/translations.test.ts` enforces that the selector variables of the Thai message match the
+English message, so a Thai message that adds or drops a selector fails the check.
 
 The pattern to follow: put the noun in a form that works with any number, and let the count follow as
 an argument.
@@ -122,105 +117,13 @@ an argument.
 ## An order-number placeholder is never welded to a word
 
 `{number}` names an order number, and the number must be introduced by punctuation or a space, never
-by a letter or combining mark. In a verb-final language the failure is silent and reads as a
-mangled word: English `Adding items to order #{number}` became
-`अर्डर # मा वस्तुहरू थप्दै{number}` in Nepali, which renders as
-`अर्डर # मा वस्तुहरू थप्दैA-12`.
+by a letter or combining mark. Otherwise the failure is silent: the number reads as part of the
+preceding word, so `ORD{number}` renders as `ORDA-12`.
 
 ICU argument parity cannot catch this. The placeholder is present, its name is unchanged, and
 `npm run i18n:check` passes; only the position is wrong. `tests/translations.test.ts` therefore
-asserts across every registered locale that the character before `{number}` is not a letter or
-combining mark, which covers this class for all locales rather than for one.
-
-A space before `{number}` is legitimate. Persian and Arabic use `شماره {number}`, and
-`№{number}` in Russian is also correct.
-
-## Devanagari spelling: the visarga in पुनः
-
-Nepali and Marathi spell "again" `पुनः` with the visarga, U+0903, not with an ASCII colon. `पुन:` looks
-close enough in a diff to be overlooked, and it renders as a visibly wrong glyph on a thermal
-receipt. The same applies to the matra in a trailing syllable, where a base consonant must keep
-the marks that attach to it.
-
-`tests/translations.test.ts` rejects a `ne.json` or `mr.json` value containing `पुन:` and requires at least one
-`पुनः`, so the spelling cannot silently regress.
-
-## POS terminology a translator would otherwise get wrong
-
-**Russian.** Orders are `Заказов` in the counter wording, not a pluralised noun. Refund and payment
-method are `Способы оплаты`. Cash movement, the drawer-variance screen, is `Движение наличных`, and
-the counted-versus-expected pair is `Фактические наличные` and `Ожидаемые наличные`. Use count-safe
-wording throughout, as above.
-
-**Albanian.** Takeaway is `Me vete` and dine-in is `Në lokal`; they are order types, not verbs, and
-"delivery" is `Dorëzim`, distinct from both. Payment methods is `Metodat e pagesës`. Cash movement is
-`Lëvizja e parave të gatshme`, and the counted-versus-expected pair is `Paratë e numëruara` and
-`Paratë e pritura`. Where a term must be abbreviated on a receipt, remember that `Ë` and `ë`
-transliterate to `E` and `e` on a generic thermal printer.
-
-**Nepali.** Subtotal `उप-जम्मा` and grand total `कुल जम्मा` are distinct labels and must stay
-distinct on the receipt. The vegetarian tags are `शाकाहारी` and the non-vegetarian tags
-`मासाहारी`, identical between `pos.*` and `products.*` so the two surfaces never disagree. Cash
-movement uses `नगद जम्मा` for pay-in and `नगद निकासी` for pay-out, identically on the dashboard and on
-the Z-report. Watch the visarga above, and note that Nepali keeps loanwords common in restaurant
-POS use: order is `अर्डर`, takeaway is `टेकअवे`, delivery is `डेलिभरी`, dine-in is
-`रेस्टुरेन्टमा खाने`, and a WebUSB or USB port is untranslated.
-
-**Hausa.** Cash received on a receipt is `Kuɗin hannu da aka karɓa`. The vegetarian tags are
-`Na ganyayyaki` and the non-vegetarian tags `Mai nama`, identical between `pos.*` and `products.*`.
-Takeaway is identical between `orders.takeaway` and `pos.orderTypeTakeaway`. Cash movement uses
-`Shigar da kuɗi` for pay-in and `Fitar da kuɗi` for pay-out, identically on the dashboard and on the
-Z-report.
-
-**Javanese.** Subtotal `Sub-gunggung` and grand total `Gunggung Akhir` (`GUNGGUNG` on thermal
-receipts) stay distinct from each other and from Indonesian `Subtotal` / `Total Akhir`. Order types
-use idiomatic Javanese: dine-in is `Mangan ing Kene`, takeaway is `Gawa Mulih`, and delivery is
-`Kiriman`. The vegetarian and non-vegetarian tags are `Nabati` and `Non-Nabati` across both
-`pos.*` and `products.*`. Cash movement uses `Lebokake Tunai` for pay-in and `Wetokake Tunai` for
-pay-out across both the dashboard and the Z-report, and cash received on a receipt is
-`Tunai Ditampa`.
-
-**Marathi.** Subtotal `उप-एकूण` and grand total `एकूण रक्कम` are distinct labels and must stay
-distinct on the receipt. The vegetarian tags are `शाकाहारी` and the non-vegetarian tags
-`मांसाहारी`, identical between `pos.*` and `products.*`. Cash movement uses `रोख जमा` for pay-in
-and `रोख काढणे` for pay-out, identically on the dashboard and on the Z-report. Reprint is
-`पुनःमुद्रण` with the visarga (U+0903), and standard restaurant POS loanwords remain natural:
-order is `ऑर्डर`, takeaway is `टेकअवे`, delivery is `डिलिव्हरी`, and dine-in is `डाइन-इन`.
-
-**Swahili.** Subtotal `Jumla Ndogo` and grand total `JUMLA KUU` (`Jumla Kuu` on browser receipts) are
-distinct labels and must stay distinct on the receipt. Vegetarian tags are `Mboga` and non-vegetarian
-tags `Isiyo ya Mboga`, identical between `pos.*` and `products.*`. Takeaway is `Kuchukua`, dine-in is
-`Kula Hapa`, and delivery is `Uwasilishaji`. Cash movement uses `Uwekaji pesa` for pay-in and
-`Utoaji pesa` for pay-out, identically on the dashboard and on the Z-report.
-
-**Punjabi.** Subtotal `ਉਪ-ਜੋੜ` and grand total `ਕੁੱਲ ਜੋੜ` stay distinct on the receipt, and cash
-received is `ਪ੍ਰਾਪਤ ਨਕਦ`. The vegetarian and non-vegetarian tags are `ਸ਼ਾਕਾਹਾਰੀ` and `ਮਾਸਾਹਾਰੀ` across
-both `pos.*` and `products.*`. Cash movement uses `ਨਕਦ ਜਮ੍ਹਾਂ` for pay-in and `ਨਕਦ ਨਿਕਾਸੀ` for
-pay-out on both the dashboard and the Z-report, and takeaway is `ਟੇਕਅਵੇ` across `orders.*` and
-`pos.*`. Gurmukhi virama conjuncts (`ਪ੍ਰ`, `ਸ੍ਰ`) and combining signs (`ੰ` tippi, `ਂ` bindi, `ੱ`
-addak, `਼` nukta) must remain NFC-normalized and attached to their base consonant.
-
-**Telugu.** Subtotal `ఉప మొత్తం` and grand total `మొత్తం` are distinct labels and must stay
-distinct on the receipt. The vegetarian tags are `శాకాహారం` and the non-vegetarian tags
-`మాంసాహారం`, identical between `pos.*` and `products.*`. Cash movement uses `నగదు జమ` for pay-in
-and `నగదు ఉపసంహరణ` for pay-out, identically on the dashboard and on the Z-report. Takeaway is
-`టేక్అవే` and delivery is `డెలివరీ`.
-
-**Tamil.** Subtotal `துணை மொத்தம்` and grand total `மொத்தத் தொகை` are distinct labels and must stay
-distinct on the receipt. The vegetarian tags are `சைவம்` and the non-vegetarian tags `அசைவம்`,
-identical between `pos.*` and `products.*`. Cash movement uses `ரொக்க வரவு` for pay-in and `ரொக்க செலவு`
-for pay-out across the dashboard and the Z-report. Takeaway is `பார்சல்` across `orders.takeaway` and
-`pos.orderTypeTakeaway`, distinct from delivery `டெலிவரி` and dine-in `உணவகத்தில் சாப்பிட`.
-
-**Ukrainian.** Takeaway is `З собою` and dine-in is `У закладі`; "delivery" is `Доставка`. Subtotal
-`Проміжний підсумок` and grand total `РАЗОМ` (or `Загальна сума` on browser receipts) stay distinct,
-and cash received on a receipt is `Отримано готівкою`. The dietary tags are `Вегетаріанське`,
-`Не вегетаріанське`, and `Без молочних продуктів` (dairy-free, not lactose-free) across both `pos.*`
-and `products.*`. Store-credit refund is `Баланс гаманця клієнта`, and waiving a charge is
-`Не стягувати`. Cash movement is `Внесення готівки` for pay-in, `Видача готівки` for pay-out, and
-`Інкасація` for safe drop, identically on the dashboard and on the Z-report, and the
-counted-versus-expected pair is `Фактична готівка` and `Очікувана готівка`. Use count-safe wording
-throughout where the English catalogue has no plural selector.
+asserts across both locales that the character before `{number}` is not a letter or combining
+mark. A space, `#`, or other punctuation before `{number}` is legitimate.
 
 ## Verification
 

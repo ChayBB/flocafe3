@@ -204,15 +204,14 @@ FloCafe runs on real business data that must survive software upgrades.
 
 ## Translations and i18n
 
-FloCafe currently provides translations for English (`en`), Spanish (`es`), French (`fr`), Brazilian Portuguese (`pt`), Russian (`ru`), Filipino (`fil`), Turkish (`tr`), Persian (`fa`, including RTL support), Arabic (`ar`, including RTL support), Urdu (`ur`, including RTL support), German (`de`), Italian (`it`), Japanese (`ja`), Simplified Chinese (`zh`), Traditional Chinese for Taiwan (`zh-tw`), Korean (`ko`), Bahasa Indonesia (`id`), Dutch (`nl`), Hindi (`hi`), Bengali/Bangla (`bn`), Albanian (`sq`), Vietnamese (`vi`), Thai (`th`), Nepali (`ne`), Hausa (`ha`), Javanese (`jv`), Marathi (`mr`), Swahili (`sw`), Punjabi (`pa`), Telugu (`te`), Tamil (`ta`), and Ukrainian (`uk`).
+FloCafe provides translations for English (`en`) and Thai (`th`). New UI strings are added to both
+`frontend/src/lib/i18n/messages/en.json` and `th.json`.
 
-- **Existing languages:** Narrowly scoped fixes and improvements to existing translation strings are always welcome. Verify changes with `npm run i18n:check`.
-- **New languages:** Adding an entirely new language requires maintainer coordination through an issue first.
-- **Local scaffolding:** Once a new language is approved, run `npm run i18n:add -- <lang>` (or a canonical lowercase regional key such as `zh-tw`) to copy the English schema without overwriting an existing file. Add the generated language entry to `frontend/src/lib/i18n/languages.ts`, translate the copied leaves while preserving ICU placeholders/tags, then run `npm run i18n:check`.
+- **Existing strings:** Narrowly scoped fixes and improvements to translation strings are always welcome. Verify changes with `npm run i18n:check`.
 
-The validation command is fully offline and checks registry/file consistency, exact English key parity, string and ICU validity, placeholder/tag parity, maintained-language fallback safeguards, and frontend translation-key safety.
+The validation command is fully offline and checks registry/file consistency, exact English key parity, string and ICU validity, placeholder/tag parity, Thai fallback safeguards, and frontend translation-key safety.
 
-For complete authoring, scaffolding, RTL support, and verification instructions, see [Adding a language](docs/guides/adding-a-language.md) and the [internationalization architecture](docs/architecture/internationalization.md). Language-specific script and print constraints are in the [translation terminology reference](docs/reference/translation-terminology.md).
+For the loading and verification model, see the [internationalization architecture](docs/architecture/internationalization.md). Language-specific script and print constraints are in the [translation terminology reference](docs/reference/translation-terminology.md).
 
 ---
 

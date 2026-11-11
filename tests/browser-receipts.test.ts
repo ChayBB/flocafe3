@@ -1,7 +1,7 @@
 /**
  * Browser Receipts Testing and Visual Evidence Generator
- * Tests Persian (fa) RTL, Iran tenant preferences (Rial, Toman, Toman Short, digits, calendar),
- * LTR isolation islands, translations, and non-Persian regressions (EN, ES, FR, PT).
+ * Tests Thai (th) receipt labels, Iran tenant preferences (Rial, Toman, Toman Short, digits, calendar),
+ * translations, and the English regression.
  */
 
 import strictAssert from 'node:assert/strict';
@@ -86,7 +86,7 @@ function assert(label: string, cond: boolean, detail?: string) {
 
 async function run() {
   console.log('==================================================');
-  console.log('Browser/HTML Receipt Tests for Persian / Iran (Batch H)');
+  console.log('Browser/HTML Receipt Tests for an Iran store with a Thai UI');
   console.log('==================================================\n');
 
   if (!fs.existsSync(EVIDENCE_DIR)) {
@@ -281,10 +281,10 @@ async function run() {
     );
   }
 
-  console.log('Test Suite 1: Persian (fa) RTL Document Flow & Structure');
+  console.log('Test Suite 1: Thai (th) Document Flow & Structure');
   {
     const html = generateBillHtml(testIranBill, baseIranTenant, {
-      language: 'fa',
+      language: 'th',
       address: 'تهران، خیابان انقلاب، پلاک ۱۲',
       phone: '+98 21 6644 1234',
       taxRegistrationNumber: '411123456789',
@@ -292,8 +292,8 @@ async function run() {
     });
 
     assert(
-      'HTML contains lang="fa-IR" and dir="rtl"',
-      html.includes('<html lang="fa-IR" dir="rtl">'),
+      'HTML contains lang="th-TH" and dir="ltr"',
+      html.includes('<html lang="th-TH" dir="ltr">'),
     );
     assert(
       'CSS contains RTL logical properties and bidi styles',
@@ -304,10 +304,10 @@ async function run() {
     );
   }
 
-  console.log('\nTest Suite 2: Persian (fa) Translated Receipt Labels');
+  console.log('\nTest Suite 2: Thai (th) Translated Receipt Labels');
   {
     const html = generateBillHtml(testIranBill, baseIranTenant, {
-      language: 'fa',
+      language: 'th',
       address: 'تهران، خیابان انقلاب، پلاک ۱۲',
       phone: '+98 21 6644 1234',
       taxRegistrationNumber: '411123456789',
@@ -316,24 +316,27 @@ async function run() {
     });
 
     assert(
-      'Reprint banner shows Persian "چاپ مجدد"',
-      html.includes('<div class="reprint-banner">چاپ مجدد</div>'),
+      'Reprint banner shows Thai "พิมพ์ซ้ำ"',
+      html.includes('<div class="reprint-banner">พิมพ์ซ้ำ</div>'),
     );
-    assert('Phone prefix shows Persian "تلفن"', html.includes('تلفن:'));
-    assert('Tax ID label shows localized Iran "کد اقتصادی"', html.includes('کد اقتصادی:'));
-    assert('Bill number label shows Persian "رسید #"', html.includes('<strong>رسید #</strong>'));
-    assert('Date label shows Persian "تاریخ"', html.includes('<strong>تاریخ</strong>'));
-    assert('Table label shows Persian "میز"', html.includes('<strong>میز</strong>'));
-    assert('Customer label shows Persian "مشتری"', html.includes('<strong>مشتری</strong>'));
+    assert('Phone prefix shows Thai "โทร"', html.includes('โทร:'));
     assert(
-      'Customer No label shows Persian "شماره مشتری"',
-      html.includes('<strong>شماره مشتری</strong>'),
+      'Tax ID label shows the Iran economic code label in Thai',
+      html.includes('รหัสกิจกรรมเศรษฐกิจ:'),
+    );
+    assert('Bill number label shows Thai "เลขบิล#"', html.includes('<strong>เลขบิล#</strong>'));
+    assert('Date label shows Thai "วันที่"', html.includes('<strong>วันที่</strong>'));
+    assert('Table label shows Thai "โต๊ะ"', html.includes('<strong>โต๊ะ</strong>'));
+    assert('Customer label shows Thai "ลูกค้า"', html.includes('<strong>ลูกค้า</strong>'));
+    assert(
+      'Customer No label shows Thai "หมายเลขลูกค้า"',
+      html.includes('<strong>หมายเลขลูกค้า</strong>'),
     );
     assert(
       'items table has only item, qty and amount columns',
-      /<thead>\s*<tr>\s*<th>اقلام<\/th>\s*<th class="text-end">تعداد<\/th>\s*<th class="text-end">مبلغ<\/th>\s*<\/tr>/.test(
+      /<thead>\s*<tr>\s*<th>รายการ<\/th>\s*<th class="text-end">จำนวน<\/th>\s*<th class="text-end">รวม<\/th>\s*<\/tr>/.test(
         html,
-      ) && !html.includes('نرخ'),
+      ) && !html.includes('<th class="text-end">ราคา</th>'),
     );
     const details = html.slice(
       html.indexOf('<div class="bill-details">'),
@@ -343,13 +346,13 @@ async function run() {
       details.split('<tr>').findIndex((row) => row.startsWith('<td colspan="2"><strong>' + label));
     assert(
       'bill number, table, then date and time each sit on their own row',
-      rowOf('رسید #') > 0 &&
-        rowOf('میز') === rowOf('رسید #') + 1 &&
-        rowOf('تاریخ') === rowOf('میز') + 1,
+      rowOf('เลขบิล#') > 0 &&
+        rowOf('โต๊ะ') === rowOf('เลขบิล#') + 1 &&
+        rowOf('วันที่') === rowOf('โต๊ะ') + 1,
     );
     assert('no PromptPay QR is printed without one', !html.includes('class="payment-qr"'));
     const qrHtml = generateBillHtml(testIranBill, baseIranTenant, {
-      language: 'fa',
+      language: 'th',
       paymentQrDataUrl: 'data:image/png;base64,QUJD',
     });
     const footer = qrHtml.slice(qrHtml.indexOf('<div class="footer">'));
@@ -363,7 +366,7 @@ async function run() {
     );
     assert(
       'a large centred "scan to pay" line sits under the QR',
-      /<img class="payment-qr"[^>]*\/><p class="payment-qr-caption">Scan to pay<\/p>/.test(
+      /<img class="payment-qr"[^>]*\/><p class="payment-qr-caption">สแกนเพื่อชำระเงิน<\/p>/.test(
         footer,
       ) &&
         /\.payment-qr-caption \{[^}]*text-align: center;[^}]*font-size: 1\.6em;[^}]*font-weight: 700;/.test(
@@ -374,18 +377,18 @@ async function run() {
     assert(
       'a QR that is not an image data URL is not printed',
       !generateBillHtml(testIranBill, baseIranTenant, {
-        language: 'fa',
+        language: 'th',
         paymentQrDataUrl: 'javascript:alert(1)',
       }).includes('payment-qr" src'),
     );
     const namedQrHtml = generateBillHtml(testIranBill, baseIranTenant, {
-      language: 'fa',
+      language: 'th',
       paymentQrDataUrl: 'data:image/png;base64,QUJD',
       paymentQrAccountName: '  Flo <Cafe>  ',
     });
     strictAssert.ok(
       namedQrHtml.includes(
-        '<p class="payment-qr-caption">Scan to pay</p><p class="payment-qr-account">Flo &lt;Cafe&gt;</p><img class="payment-qr" src="data:image/png;base64,QUJD"',
+        '<p class="payment-qr-caption">สแกนเพื่อชำระเงิน</p><p class="payment-qr-account">Flo &lt;Cafe&gt;</p><img class="payment-qr" src="data:image/png;base64,QUJD"',
       ) && /\.payment-qr-account \{[^}]*font-size: 1\.4em;[^}]*font-weight: 700;/.test(namedQrHtml),
       'a named QR reads caption, then the larger bold holder name, then the QR',
     );
@@ -395,7 +398,7 @@ async function run() {
     );
     strictAssert.ok(
       !generateBillHtml(testIranBill, baseIranTenant, {
-        language: 'fa',
+        language: 'th',
         paymentQrAccountName: 'Flo Cafe',
       }).includes('payment-qr-account">'),
       'no account holder line without a QR',
@@ -405,19 +408,19 @@ async function run() {
       html.includes('.items-table th { background: transparent;'),
     );
     assert(
-      'Tax Details header shows Persian "جزئیات مالیات"',
-      html.includes('<th colspan="2">جزئیات مالیات</th>'),
+      'Tax Details header shows Thai "รายละเอียดภาษี"',
+      html.includes('<th colspan="2">รายละเอียดภาษี</th>'),
     );
-    assert('Grand Total row shows Persian "جمع کل"', html.includes('<strong>جمع کل</strong>'));
+    assert('Grand Total row shows Thai "ยอดรวมทั้งสิ้น"', html.includes('<strong>ยอดรวมทั้งสิ้น</strong>'));
     assert(
-      'Payments section header shows Persian "پرداخت‌ها"',
-      html.includes('<th colspan="2">پرداخت‌ها</th>'),
+      'Payments section header shows Thai "การชำระเงิน"',
+      html.includes('<th colspan="2">การชำระเงิน</th>'),
     );
     assert(
       'a single payment prints as net paid instead of its method',
       /<tbody>\s*<tr><td>[^<(]+<\/td><td class="text-end num">/.test(
         html.slice(html.indexOf('payments-table')),
-      ) && !html.includes('<td>کارت</td>'),
+      ) && !html.includes('<td>บัตร</td>'),
     );
     const splitHtml = generateBillHtml(
       {
@@ -428,9 +431,9 @@ async function run() {
         ],
       },
       baseIranTenant,
-      { language: 'fa' },
+      { language: 'th' },
     );
-    assert('split payments keep each method beside net paid', splitHtml.includes('(کارت)</td>'));
+    assert('split payments keep each method beside net paid', splitHtml.includes('(บัตร)</td>'));
     assert('special instructions stay off the bill', !html.includes('کم شیرین'));
     assert(
       'thermal item rows use a dashed divider and their column headings use a solid divider',
@@ -439,39 +442,12 @@ async function run() {
           '.items-table th, .tax-table th, .payments-table th { background: transparent; color: #000; border-bottom: 1px solid #000;',
         ),
     );
-    assert('Footer preserves Persian thank you text', html.includes('از بازدید شما سپاسگزاریم!'));
-    assert('Footer shows Persian tax notice', html.includes('مالیات در صورت اعمال، شامل شده است'));
-    assert('Print button shows Persian "چاپ رسید"', html.includes('چاپ رسید</button>'));
+    assert('Footer shows Thai thank you text', html.includes('ขอบคุณที่มาใช้บริการ!'));
+    assert('Footer shows Thai tax notice', html.includes('รวมภาษีแล้วในกรณีที่มีภาษี'));
+    assert('Print button shows Thai "พิมพ์บิล"', html.includes('พิมพ์บิล</button>'));
   }
 
-  console.log('\nTest Suite 3: Isolated LTR Islands for Naturally LTR Data in Persian RTL');
-  {
-    const html = generateBillHtml(testIranBill, baseIranTenant, {
-      language: 'fa',
-      phone: '+98 21 6644 1234',
-      taxRegistrationNumber: '411123456789',
-      includeTaxId: true,
-    });
-
-    assert(
-      'Bill number is wrapped in LTR island span',
-      html.includes('<span class="ltr" dir="ltr">BILL-IR-0089</span>'),
-    );
-    assert(
-      'Store phone is wrapped in LTR island span',
-      html.includes('<span class="ltr" dir="ltr">+98 21 6644 1234</span>'),
-    );
-    assert(
-      'Customer phone is wrapped in LTR island span',
-      html.includes('<span class="ltr" dir="ltr">+98 912 345 6789</span>'),
-    );
-    assert(
-      'Economic Code / Tax ID is wrapped in LTR island span',
-      html.includes('<span class="ltr" dir="ltr">411123456789</span>'),
-    );
-  }
-
-  console.log('\nTest Suite 4: Iran Amount / Number / Date Formatting Modes');
+  console.log('\nTest Suite 3: Iran Amount / Number / Date Formatting Modes');
   {
     // Mode 1: Rial + Persian Digits + Persian Calendar
     const rialHtml = generateBillHtml(
@@ -482,7 +458,7 @@ async function run() {
         number_digits: 'locale',
         calendar: 'persian',
       },
-      { language: 'fa', trimDecimals: true },
+      { language: 'th', trimDecimals: true },
     );
 
     assert(
@@ -507,7 +483,7 @@ async function run() {
         number_digits: 'locale',
         calendar: 'persian',
       },
-      { language: 'fa', trimDecimals: true },
+      { language: 'th', trimDecimals: true },
     );
 
     assert(
@@ -524,7 +500,7 @@ async function run() {
         number_digits: 'latin',
         calendar: 'gregorian',
       },
-      { language: 'fa', trimDecimals: true },
+      { language: 'th', trimDecimals: true },
     );
 
     assert('Toman Short + Latin digits displays "99,000T"', tomanShortHtml.includes('99,000T'));
@@ -539,7 +515,7 @@ async function run() {
 
     // Mode 4: useUnicode: false does NOT downgrade to IRR in browser printing
     const noUnicodeHtml = generateBillHtml(testIranBill, baseIranTenant, {
-      language: 'fa',
+      language: 'th',
       useUnicode: false,
     });
     assert(
@@ -548,7 +524,7 @@ async function run() {
     );
   }
 
-  console.log('\nTest Suite 5: Non-Persian UI Regressions (EN, ES, FR, PT)');
+  console.log('\nTest Suite 4: English UI Regression');
   {
     const sampleEnBill: Bill = {
       ...testIranBill,
@@ -576,298 +552,9 @@ async function run() {
         enHtml.includes('Thank you for your visit!'),
     );
     assert('EN currency displays $50.00', enHtml.includes('$50.00'));
-
-    // Spanish
-    const esTenant = {
-      business_name: 'Café Flo Madrid',
-      currency: 'EUR',
-      country: 'ES',
-      timezone: 'Europe/Madrid',
-    };
-    const esHtml = generateBillHtml(sampleEnBill, esTenant, { language: 'es', isReprint: true });
-    assert('ES receipt has lang="es" and dir="ltr"', esHtml.includes('<html lang="es" dir="ltr">'));
-    assert(
-      'ES labels are Spanish',
-      esHtml.includes('REIMPRESIÓN') &&
-        esHtml.includes('Comprobante #') &&
-        esHtml.includes('Total general') &&
-        esHtml.includes('¡Gracias por su visita!'),
-    );
-
-    // French
-    const frTenant = {
-      business_name: 'Café Flo Paris',
-      currency: 'EUR',
-      country: 'FR',
-      timezone: 'Europe/Paris',
-    };
-    const frHtml = generateBillHtml(sampleEnBill, frTenant, { language: 'fr', isReprint: true });
-    assert(
-      'FR receipt has lang="fr-FR" and dir="ltr"',
-      frHtml.includes('<html lang="fr-FR" dir="ltr">'),
-    );
-    assert(
-      'FR labels are French',
-      frHtml.includes('RÉIMPRESSION') &&
-        frHtml.includes('N° de facture') &&
-        frHtml.includes('Total général') &&
-        frHtml.includes('Merci de votre visite !'),
-    );
-
-    // Portuguese
-    const ptTenant = {
-      business_name: 'Café Flo Lisboa',
-      currency: 'EUR',
-      country: 'PT',
-      timezone: 'Europe/Lisbon',
-    };
-    const ptHtml = generateBillHtml(sampleEnBill, ptTenant, { language: 'pt', isReprint: true });
-    assert(
-      'PT receipt has lang="pt-BR" and dir="ltr"',
-      ptHtml.includes('<html lang="pt-BR" dir="ltr">'),
-    );
-    assert(
-      'PT labels are Portuguese',
-      ptHtml.includes('REIMPRESSÃO') &&
-        ptHtml.includes('Conta #') &&
-        ptHtml.includes('Total geral') &&
-        ptHtml.includes('Obrigado pela sua visita!'),
-    );
-
-    // Urdu
-    const urTenant = {
-      business_name: 'Flo Cafe Lahore',
-      currency: 'PKR',
-      country: 'PK',
-      timezone: 'Asia/Karachi',
-    };
-    const urHtml = generateBillHtml(sampleEnBill, urTenant, { language: 'ur', isReprint: true });
-    assert(
-      'UR receipt has lang="ur-PK" and dir="rtl"',
-      urHtml.includes('<html lang="ur-PK" dir="rtl">'),
-    );
-    assert(
-      'UR labels are Urdu',
-      urHtml.includes('دوبارہ پرنٹ') &&
-        urHtml.includes('بل #') &&
-        urHtml.includes('کل رقم') &&
-        urHtml.includes('آپ کے تشریف لانے کا شکریہ!'),
-    );
-
-    const hiTenant = {
-      business_name: 'FloCafe Delhi',
-      currency: 'INR',
-      country: 'IN',
-      timezone: 'Asia/Kolkata',
-    };
-    const hiHtml = generateBillHtml(sampleEnBill, hiTenant, { language: 'hi', isReprint: true });
-    assert(
-      'HI receipt has lang="hi-IN" and dir="ltr"',
-      hiHtml.includes('<html lang="hi-IN" dir="ltr">'),
-    );
-    assert(
-      'HI labels are Devanagari',
-      hiHtml.includes('पुनर्मुद्रण') &&
-        hiHtml.includes('बिल #') &&
-        hiHtml.includes('कुल योग') &&
-        hiHtml.includes('धन्यवाद!'),
-    );
-
-    const sqTenant = {
-      business_name: 'FloCafe Tiranë',
-      currency: 'ALL',
-      country: 'AL',
-      timezone: 'Europe/Tirane',
-    };
-    const sqHtml = generateBillHtml(sampleEnBill, sqTenant, { language: 'sq', isReprint: true });
-    assert(
-      'SQ receipt has lang="sq-AL" and dir="ltr"',
-      sqHtml.includes('<html lang="sq-AL" dir="ltr">'),
-    );
-    assert(
-      'SQ labels are Albanian',
-      sqHtml.includes('PRINTIM PËRSËRI') &&
-        sqHtml.includes('Dëftesë nr.') &&
-        sqHtml.includes('Totali i përgjithshëm') &&
-        sqHtml.includes('Faleminderit për vizitën!'),
-    );
-
-    const neTenant = {
-      business_name: 'FloCafe Kathmandu',
-      currency: 'NPR',
-      country: 'NP',
-      timezone: 'Asia/Kathmandu',
-    };
-    const neHtml = generateBillHtml(sampleEnBill, neTenant, { language: 'ne', isReprint: true });
-    assert(
-      'NE receipt has lang="ne-NP" and dir="ltr"',
-      neHtml.includes('<html lang="ne-NP" dir="ltr">'),
-    );
-    assert(
-      'NE labels are Devanagari',
-      neHtml.includes('पुनः छाप्नुहोस्') &&
-        neHtml.includes('बिल #') &&
-        neHtml.includes('कुल जम्मा') &&
-        neHtml.includes('तपाईंको भ्रमणको लागि धन्यवाद!'),
-    );
-
-    const jvTenant = {
-      business_name: 'FloCafe Yogyakarta',
-      currency: 'IDR',
-      country: 'ID',
-      timezone: 'Asia/Jakarta',
-    };
-    const jvHtml = generateBillHtml(sampleEnBill, jvTenant, { language: 'jv', isReprint: true });
-    assert(
-      'JV receipt has lang="jv-ID" and dir="ltr"',
-      jvHtml.includes('<html lang="jv-ID" dir="ltr">'),
-    );
-    assert(
-      'JV labels are Javanese',
-      jvHtml.includes('CETAK MANEH') &&
-        jvHtml.includes('Tagihan #') &&
-        jvHtml.includes('Gunggung Akhir') &&
-        jvHtml.includes('Matur nuwun rawuhipun!'),
-    );
-
-    const mrTenant = {
-      business_name: 'FloCafe Pune',
-      currency: 'INR',
-      country: 'IN',
-      timezone: 'Asia/Kolkata',
-    };
-    const mrHtml = generateBillHtml(sampleEnBill, mrTenant, { language: 'mr', isReprint: true });
-    assert(
-      'MR receipt has lang="mr-IN" and dir="ltr"',
-      mrHtml.includes('<html lang="mr-IN" dir="ltr">'),
-    );
-    assert(
-      'MR labels are Devanagari',
-      mrHtml.includes('पुनःमुद्रण') &&
-        mrHtml.includes('बिल #') &&
-        mrHtml.includes('एकूण रक्कम') &&
-        mrHtml.includes('तुमच्या भेटीबद्दल धन्यवाद!'),
-    );
-
-    const swTenant = {
-      business_name: 'FloCafe Nairobi',
-      currency: 'KES',
-      country: 'KE',
-      timezone: 'Africa/Nairobi',
-    };
-    const swHtml = generateBillHtml(sampleEnBill, swTenant, { language: 'sw', isReprint: true });
-    assert(
-      'SW receipt has lang="sw-KE" and dir="ltr"',
-      swHtml.includes('<html lang="sw-KE" dir="ltr">'),
-    );
-    assert(
-      'SW labels are Swahili',
-      swHtml.includes('CHAPISHO LA MARUDIO') &&
-        swHtml.includes('Bili #') &&
-        swHtml.includes('Jumla Kuu') &&
-        swHtml.includes('Asante kwa kututembelea!'),
-    );
-
-    const paTenant = {
-      business_name: 'FloCafe Amritsar',
-      currency: 'INR',
-      country: 'IN',
-      timezone: 'Asia/Kolkata',
-    };
-    const paHtml = generateBillHtml(sampleEnBill, paTenant, { language: 'pa', isReprint: true });
-    assert(
-      'PA receipt has lang="pa-IN" and dir="ltr"',
-      paHtml.includes('<html lang="pa-IN" dir="ltr">'),
-    );
-    assert(
-      'PA labels are Gurmukhi',
-      paHtml.includes('ਮੁੜ-ਪ੍ਰਿੰਟ') &&
-        paHtml.includes('ਬਿੱਲ #') &&
-        paHtml.includes('ਕੁੱਲ ਜੋੜ') &&
-        paHtml.includes('ਤੁਹਾਡੇ ਆਉਣ ਲਈ ਧੰਨਵਾਦ!'),
-    );
-
-    const taTenant = {
-      business_name: 'FloCafe Chennai',
-      currency: 'INR',
-      country: 'IN',
-      timezone: 'Asia/Kolkata',
-    };
-    const taHtml = generateBillHtml(sampleEnBill, taTenant, { language: 'ta', isReprint: true });
-    assert(
-      'TA receipt has lang="ta-IN" and dir="ltr"',
-      taHtml.includes('<html lang="ta-IN" dir="ltr">'),
-    );
-    assert(
-      'TA labels are Tamil',
-      taHtml.includes('மறுஅச்சு') &&
-        taHtml.includes('பில் #') &&
-        taHtml.includes('மொத்தத் தொகை') &&
-        taHtml.includes('உங்கள் வருகைக்கு நன்றி!'),
-    );
-    assert(
-      'TA receipt declares the Tamil font families',
-      taHtml.includes("'Noto Sans Tamil', 'Latha', 'Tamil Sangam MN'"),
-    );
-
-    const ukTenant = {
-      business_name: 'FloCafe Київ',
-      currency: 'UAH',
-      country: 'UA',
-      timezone: 'Europe/Kyiv',
-    };
-    const ukHtml = generateBillHtml(sampleEnBill, ukTenant, { language: 'uk', isReprint: true });
-    assert(
-      'UK receipt has lang="uk-UA" and dir="ltr"',
-      ukHtml.includes('<html lang="uk-UA" dir="ltr">'),
-    );
-    assert(
-      'UK labels are Ukrainian Cyrillic',
-      ukHtml.includes('ПОВТОРНИЙ ДРУК') &&
-        ukHtml.includes('Рахунок №') &&
-        ukHtml.includes('Загальна сума') &&
-        ukHtml.includes('Дякуємо за ваш візит!'),
-    );
-
-    // The browser receipt is the primary print path, and its body stack was
-    // extended per language by hand, so Bengali was the one merged locale left
-    // without a declared family here. Assert the families the order-slip and
-    // raster stacks already carry.
-    const bnHtml = generateBillHtml(
-      sampleEnBill,
-      { ...neTenant, currency: 'BDT', country: 'BD' },
-      { language: 'bn', isReprint: true },
-    );
-    assert(
-      'BN receipt declares the Bengali font families in the order-slip position',
-      bnHtml.includes(
-        "'Noto Naskh Arabic', 'Noto Sans Bengali', 'Vrinda', 'Bangla Sangam MN', 'Noto Sans Devanagari'",
-      ),
-    );
-
-    const teHtml = generateBillHtml(
-      sampleEnBill,
-      { ...neTenant, currency: 'INR', country: 'IN', timezone: 'Asia/Kolkata' },
-      { language: 'te', isReprint: true },
-    );
-    assert(
-      'TE receipt has lang="te-IN" and dir="ltr"',
-      teHtml.includes('<html lang="te-IN" dir="ltr">'),
-    );
-    assert(
-      'TE receipt declares the Telugu font families',
-      teHtml.includes("'Noto Sans Telugu', 'Kohinoor Telugu', 'Telugu Sangam MN'"),
-    );
-    assert(
-      'TE labels are Telugu',
-      teHtml.includes('రీప్రింట్') &&
-        teHtml.includes('బిల్లు #') &&
-        teHtml.includes('మొత్తం') &&
-        teHtml.includes('మీ సందర్శనకు ధన్యవాదాలు!'),
-    );
   }
 
-  console.log('\nTest Suite 6: Canonical semantic labels and unknown-language fallback');
+  console.log('\nTest Suite 5: Canonical semantic labels and unknown-language fallback');
   {
     const canonicalBill: Bill = {
       ...testIranBill,
@@ -880,27 +567,27 @@ async function run() {
     };
     const canonicalTenant = { ...baseIranTenant, currency_display: 'rial' as const };
     const expectedLabels = {
-      billNumber: 'رسید #',
-      date: 'تاریخ',
-      table: 'میز',
-      customer: 'مشتری',
-      customerNo: 'شماره مشتری',
-      item: 'اقلام',
-      quantity: 'تعداد',
-      amount: 'مبلغ',
-      subtotal: 'جمع جزء',
-      tax: 'مالیات کل',
-      delivery: 'هزینه ارسال',
-      total: 'جمع کل',
-      payments: 'پرداخت‌ها',
-      thankYou: 'از بازدید شما سپاسگزاریم!',
+      billNumber: 'เลขบิล#',
+      date: 'วันที่',
+      table: 'โต๊ะ',
+      customer: 'ลูกค้า',
+      customerNo: 'หมายเลขลูกค้า',
+      item: 'รายการ',
+      quantity: 'จำนวน',
+      amount: 'รวม',
+      subtotal: 'ยอดรวมย่อย',
+      tax: 'ภาษีรวม',
+      delivery: 'ค่าจัดส่ง',
+      total: 'ยอดรวมทั้งสิ้น',
+      payments: 'การชำระเงิน',
+      thankYou: 'ขอบคุณที่มาใช้บริการ!',
     };
-    const faHtml = generateBillHtml(canonicalBill, canonicalTenant, {
-      language: 'fa',
+    const thHtml = generateBillHtml(canonicalBill, canonicalTenant, {
+      language: 'th',
       showTaxBreakdown: false,
     });
     for (const [name, label] of Object.entries(expectedLabels)) {
-      assert(`fa canonical ${name} label renders`, faHtml.includes(label));
+      assert(`th canonical ${name} label renders`, thHtml.includes(label));
     }
 
     // Supplying an unknown policy language must retain the resolver's English
@@ -917,7 +604,7 @@ async function run() {
     );
   }
 
-  console.log('\nTest Suite 7: Tableside order-slip locale and direction contract');
+  console.log('\nTest Suite 6: Tableside order-slip locale and direction contract');
   {
     const orderSlipLabels = {
       title: 'فاتورة الطلب',

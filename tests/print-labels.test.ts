@@ -113,68 +113,7 @@ function buildBusiness(extra: Record<string, unknown> = {}): any {
 function run(): void {
   console.log('\n✅ Test 1: printLabel language selection and fallback');
   assert('en resolves grand total to TOTAL', printLabel('en', 'print.grandTotal') === 'TOTAL');
-  assert('fa resolves grand total to Persian', printLabel('fa', 'print.grandTotal') === 'جمع کل');
-  assert('ur resolves grand total to Urdu', printLabel('ur', 'print.grandTotal') === 'کل رقم');
-  assert('it resolves grand total to Italian', printLabel('it', 'print.grandTotal') === 'TOTALE');
-  assert('ja resolves grand total to Japanese', printLabel('ja', 'print.grandTotal') === '合計');
-  assert(
-    'zh resolves grand total to Simplified Chinese',
-    printLabel('zh', 'print.grandTotal') === '合计',
-  );
-  assert(
-    'zh-tw resolves grand total to Traditional Chinese',
-    printLabel('zh-tw', 'print.grandTotal') === '合計',
-  );
-  assert('ko resolves grand total to Korean', printLabel('ko', 'print.grandTotal') === '합계');
-  assert(
-    'tr resolves grand total to Turkish',
-    printLabel('tr', 'print.grandTotal') === 'GENEL TOPLAM',
-  );
-  assert(
-    'fil resolves grand total to Filipino',
-    printLabel('fil', 'print.grandTotal') === 'KABUUAN',
-  );
-  assert(
-    'de resolves grand total to German',
-    printLabel('de', 'print.grandTotal') === 'GESAMTSUMME',
-  );
-  assert('ru resolves grand total to Russian', printLabel('ru', 'print.grandTotal') === 'ИТОГО');
-  assert(
-    'ru resolves subtotal to Russian',
-    printLabel('ru', 'print.subtotalExclTax') === 'Подытог (без налога)',
-  );
-  assert(
-    'ru resolves cash received from the canonical receipt key',
-    printLabel('ru', 'receipt.cashReceived') === 'Получено наличными',
-  );
-  assert(
-    'es resolves grand total',
-    typeof printLabel('es', 'print.grandTotal') === 'string' &&
-      printLabel('es', 'print.grandTotal').length > 0,
-  );
-  assert('fr resolves grand total to French', printLabel('fr', 'print.grandTotal') === 'TOTAL');
   assert('id resolves grand total to Indonesian', printLabel('id', 'print.grandTotal') === 'TOTAL');
-  assert('nl resolves grand total to Dutch', printLabel('nl', 'print.grandTotal') === 'TOTAAL');
-  assert('hi resolves grand total to Hindi', printLabel('hi', 'print.grandTotal') === 'कुल योग');
-  assert('bn resolves grand total to Bengali', printLabel('bn', 'print.grandTotal') === 'মোট');
-  assert('sq resolves grand total to Albanian', printLabel('sq', 'print.grandTotal') === 'TOTALI');
-  assert(
-    'sq resolves invoice and KOT labels',
-    printLabel('sq', 'print.invoiceNumber') === 'Fatura nr.:' &&
-      printLabel('sq', 'print.kot.banner') === 'POROSI E KUZHINËS',
-  );
-  assert(
-    'vi resolves grand total to Vietnamese',
-    printLabel('vi', 'print.grandTotal') === 'TỔNG CỘNG',
-  );
-  assert(
-    'vi resolves kitchen ticket to Vietnamese',
-    printLabel('vi', 'print.kot.banner') === 'PHIẾU BẾP',
-  );
-  assert(
-    'vi resolves cash received from the canonical receipt key',
-    printLabel('vi', 'receipt.cashReceived') === 'Tiền mặt đã nhận',
-  );
   assert('th resolves grand total to Thai', printLabel('th', 'print.grandTotal') === 'ยอดรวมทั้งสิ้น');
   assert(
     'th resolves kitchen ticket to Thai',
@@ -185,11 +124,6 @@ function run(): void {
     printLabel('th', 'receipt.cashReceived') === 'รับเงิน',
   );
   assert(
-    'pt resolves grand total',
-    typeof printLabel('pt', 'print.grandTotal') === 'string' &&
-      printLabel('pt', 'print.grandTotal').length > 0,
-  );
-  assert(
     'unknown language falls back to English',
     printLabel('xx', 'print.grandTotal') === 'TOTAL',
   );
@@ -198,13 +132,6 @@ function run(): void {
     'borrowed key resolves from its own namespace',
     printLabel('en', 'pos.subtotal') === 'Subtotal',
   );
-  assert('tr resolves borrowed pos.subtotal', printLabel('tr', 'pos.subtotal') === 'Ara Toplam');
-  assert('fil resolves borrowed pos.subtotal', printLabel('fil', 'pos.subtotal') === 'Subtotal');
-  assert('de resolves borrowed pos.subtotal', printLabel('de', 'pos.subtotal') === 'Zwischensumme');
-  assert('nl resolves borrowed pos.subtotal', printLabel('nl', 'pos.subtotal') === 'Subtotaal');
-  assert('hi resolves borrowed pos.subtotal', printLabel('hi', 'pos.subtotal') === 'उप-योग');
-  assert('bn resolves borrowed pos.subtotal', printLabel('bn', 'pos.subtotal') === 'সাবটোটাল');
-  assert('sq resolves borrowed pos.subtotal', printLabel('sq', 'pos.subtotal') === 'Nëntotali');
   const localeCodes = Object.keys(LANGUAGES);
   assert(
     'generated print locales derive from the canonical registry',
@@ -217,189 +144,6 @@ function run(): void {
       totalLabel.length > 0 && totalLabel !== 'print.grandTotal',
     );
   }
-  assert(
-    'Arabic bill number label is invoice-specific',
-    printLabel('ar', 'receipt.billNumber') === 'رقم الفاتورة',
-  );
-  assert(
-    'Arabic phone label is readable on receipts',
-    printLabel('ar', 'receipt.phone') === 'هاتف',
-  );
-  assert(
-    'Arabic receipt rate is translated as price',
-    printLabel('ar', 'receipt.rate') === 'السعر',
-  );
-  assert('Arabic print-test amount is localized', printLabel('ar', 'printTest.amt') === 'المبلغ');
-  assert(
-    'Arabic takeaway is distinct from delivery',
-    printLabel('ar', 'pos.orderTypeTakeaway') === 'سفري' &&
-      printLabel('ar', 'pos.orderTypeDelivery') === 'توصيل',
-  );
-  assert('Urdu bill number label is localized', printLabel('ur', 'receipt.billNumber') === 'بل #');
-  assert('Urdu amount label is localized', printLabel('ur', 'printTest.amt') === 'رقم');
-  assert(
-    'Urdu takeaway is distinct from delivery',
-    printLabel('ur', 'pos.orderTypeTakeaway') === 'ٹیک اوے' &&
-      printLabel('ur', 'pos.orderTypeDelivery') === 'ڈیلیوری',
-  );
-  assert(
-    'Russian takeaway is distinct from delivery',
-    printLabel('ru', 'pos.orderTypeTakeaway') === 'С собой' &&
-      printLabel('ru', 'pos.orderTypeDelivery') === 'Доставка',
-  );
-  assert('Nepali grand total is localized', printLabel('ne', 'print.grandTotal') === 'कुल जम्मा');
-  assert(
-    'Nepali bill number label is localized',
-    printLabel('ne', 'receipt.billNumber') === 'बिल #',
-  );
-  assert('Nepali print-test amount is localized', printLabel('ne', 'printTest.amt') === 'रकम');
-  assert(
-    'Nepali takeaway is distinct from delivery',
-    printLabel('ne', 'pos.orderTypeTakeaway') === 'टेकअवे' &&
-      printLabel('ne', 'pos.orderTypeDelivery') === 'डेलिभरी',
-  );
-  assert(
-    'Nepali subtotal stays distinct from grand total',
-    printLabel('ne', 'pos.subtotal') === 'उप-जम्मा' &&
-      printLabel('ne', 'print.grandTotal') !== printLabel('ne', 'pos.subtotal'),
-  );
-  assert(
-    'Hausa grand total is localized',
-    printLabel('ha', 'print.grandTotal') === 'BABBAR JIMILLA',
-  );
-  assert(
-    'Hausa bill number label is localized',
-    printLabel('ha', 'receipt.billNumber') === 'Lambar lissafi #',
-  );
-  assert('Hausa print-test amount is localized', printLabel('ha', 'printTest.amt') === 'Kuɗi');
-  assert(
-    'Hausa takeaway is distinct from delivery',
-    printLabel('ha', 'pos.orderTypeTakeaway') === 'Tafi da shi' &&
-      printLabel('ha', 'pos.orderTypeDelivery') === 'Isarwa',
-  );
-  assert(
-    'Hausa subtotal stays distinct from grand total',
-    printLabel('ha', 'pos.subtotal') === 'Jimillar ƙasa' &&
-      printLabel('ha', 'print.grandTotal') !== printLabel('ha', 'pos.subtotal'),
-  );
-  assert('Javanese grand total is localized', printLabel('jv', 'print.grandTotal') === 'GUNGGUNG');
-  assert(
-    'Javanese KOT banner is localized',
-    printLabel('jv', 'print.kot.banner') === 'TIKET PESENAN PAWON',
-  );
-  assert(
-    'Javanese takeaway is distinct from delivery',
-    printLabel('jv', 'pos.orderTypeTakeaway') === 'Gawa Mulih' &&
-      printLabel('jv', 'pos.orderTypeDelivery') === 'Kiriman',
-  );
-  assert(
-    'Javanese subtotal stays distinct from grand total',
-    printLabel('jv', 'pos.subtotal') === 'Sub-gunggung' &&
-      printLabel('jv', 'print.grandTotal') !== printLabel('jv', 'pos.subtotal'),
-  );
-  assert('Marathi grand total is localized', printLabel('mr', 'print.grandTotal') === 'एकूण रक्कम');
-  assert(
-    'Marathi bill number label is localized',
-    printLabel('mr', 'receipt.billNumber') === 'बिल #',
-  );
-  assert('Marathi print-test amount is localized', printLabel('mr', 'printTest.amt') === 'रक्कम');
-  assert(
-    'Marathi takeaway is distinct from delivery',
-    printLabel('mr', 'pos.orderTypeTakeaway') === 'टेकअवे' &&
-      printLabel('mr', 'pos.orderTypeDelivery') === 'डिलिव्हरी',
-  );
-  assert(
-    'Marathi subtotal stays distinct from grand total',
-    printLabel('mr', 'pos.subtotal') === 'उप-एकूण' &&
-      printLabel('mr', 'print.grandTotal') !== printLabel('mr', 'pos.subtotal'),
-  );
-  assert('Swahili grand total is localized', printLabel('sw', 'print.grandTotal') === 'JUMLA KUU');
-  assert(
-    'Swahili bill number label is localized',
-    printLabel('sw', 'receipt.billNumber') === 'Bili #',
-  );
-  assert('Swahili print-test amount is localized', printLabel('sw', 'printTest.amt') === 'Kiasi');
-  assert(
-    'Swahili takeaway is distinct from delivery',
-    printLabel('sw', 'pos.orderTypeTakeaway') === 'Kuchukua' &&
-      printLabel('sw', 'pos.orderTypeDelivery') === 'Uwasilishaji',
-  );
-  assert(
-    'Swahili subtotal stays distinct from grand total',
-    printLabel('sw', 'pos.subtotal') === 'Jumla Ndogo' &&
-      printLabel('sw', 'print.grandTotal') !== printLabel('sw', 'pos.subtotal'),
-  );
-  assert('Punjabi grand total is localized', printLabel('pa', 'print.grandTotal') === 'ਕੁੱਲ ਜੋੜ');
-  assert(
-    'Punjabi bill number label is localized',
-    printLabel('pa', 'receipt.billNumber') === 'ਬਿੱਲ #',
-  );
-  assert('Punjabi print-test amount is localized', printLabel('pa', 'printTest.amt') === 'ਰਕਮ');
-  assert(
-    'Punjabi takeaway is distinct from delivery',
-    printLabel('pa', 'pos.orderTypeTakeaway') === 'ਟੇਕਅਵੇ' &&
-      printLabel('pa', 'pos.orderTypeDelivery') === 'ਡਿਲੀਵਰੀ',
-  );
-  assert(
-    'Punjabi subtotal stays distinct from grand total',
-    printLabel('pa', 'pos.subtotal') === 'ਉਪ-ਜੋੜ' &&
-      printLabel('pa', 'print.grandTotal') !== printLabel('pa', 'pos.subtotal'),
-  );
-  assert('Telugu grand total is localized', printLabel('te', 'print.grandTotal') === 'మొత్తం');
-  assert(
-    'Telugu bill number label is localized',
-    printLabel('te', 'receipt.billNumber') === 'బిల్లు #',
-  );
-  assert('Telugu print-test amount is localized', printLabel('te', 'printTest.amt') === 'మొత్తం');
-  assert(
-    'Telugu takeaway is distinct from delivery',
-    printLabel('te', 'pos.orderTypeTakeaway') === 'టేక్అవే' &&
-      printLabel('te', 'pos.orderTypeDelivery') === 'డెలివరీ',
-  );
-  assert(
-    'Telugu subtotal stays distinct from grand total',
-    printLabel('te', 'pos.subtotal') === 'ఉప మొత్తం' &&
-      printLabel('te', 'print.grandTotal') !== printLabel('te', 'pos.subtotal'),
-  );
-  assert('Tamil grand total is localized', printLabel('ta', 'print.grandTotal') === 'மொத்தத் தொகை');
-  assert(
-    'Tamil bill number label is localized',
-    printLabel('ta', 'receipt.billNumber') === 'பில் #',
-  );
-  assert('Tamil print-test amount is localized', printLabel('ta', 'printTest.amt') === 'தொகை');
-  assert(
-    'Tamil takeaway is distinct from delivery',
-    printLabel('ta', 'pos.orderTypeTakeaway') === 'பார்சல்' &&
-      printLabel('ta', 'pos.orderTypeDelivery') === 'டெலிவரி',
-  );
-  assert(
-    'Tamil subtotal stays distinct from grand total',
-    printLabel('ta', 'pos.subtotal') === 'துணை மொத்தம்' &&
-      printLabel('ta', 'print.grandTotal') !== printLabel('ta', 'pos.subtotal'),
-  );
-  assert(
-    'Tamil cash received resolves from the canonical receipt key',
-    printLabel('ta', 'receipt.cashReceived') === 'பெற்ற ரொக்கம்',
-  );
-  assert('Ukrainian grand total is localized', printLabel('uk', 'print.grandTotal') === 'РАЗОМ');
-  assert(
-    'Ukrainian bill number label is localized',
-    printLabel('uk', 'receipt.billNumber') === 'Рахунок №',
-  );
-  assert(
-    'Ukrainian cash received resolves from the canonical receipt key',
-    printLabel('uk', 'receipt.cashReceived') === 'Отримано готівкою',
-  );
-  assert(
-    'Ukrainian takeaway is distinct from delivery',
-    printLabel('uk', 'pos.orderTypeTakeaway') === 'З собою' &&
-      printLabel('uk', 'pos.orderTypeDelivery') === 'Доставка',
-  );
-  assert(
-    'Ukrainian subtotal stays distinct from grand total',
-    printLabel('uk', 'pos.subtotal') === 'Проміжний підсумок' &&
-      printLabel('uk', 'print.grandTotal') !== printLabel('uk', 'pos.subtotal'),
-  );
 
   console.log('\n✅ Test 2: classic receipt honors language');
   {
@@ -410,71 +154,20 @@ function run(): void {
       'default language keeps English labels',
       text.includes('Bill # ') && text.includes('TOTAL') && text.includes('Subtotal'),
     );
-    // Persian script requires a printer profile with arabicShaping (#437);
-    // label selection itself is independent of that capability.
-    const faText = escPosToText(
-      formatReceipt(
-        buildOrder(),
-        buildBill(),
-        buildBusiness(),
-        'classic',
-        48,
-        false,
-        false,
-        undefined,
-        [],
-        true,
-        'fa',
-      ),
-    );
-    assert('fa classic renders Persian bill number label', faText.includes('رسید #'));
-    assert('fa classic renders Persian grand total', faText.includes('جمع کل'));
+    const thText = renderClassicReceiptViaDocument(buildOrder(), buildBill(), buildBusiness(), {
+      columns: 48,
+      language: 'th',
+      isReprint: false,
+      useUnicode: true,
+      arabicShaping: false,
+      cutMode: 'full',
+    }).lines.join('\n');
+    assert('th classic renders Thai bill number label', thText.includes('เลขบิล#'));
+    assert('th classic renders Thai grand total', thText.includes('ยอดรวมทั้งสิ้น'));
     assert(
-      'fa classic renders Persian subtotal (borrowed pos.subtotal)',
-      faText.includes('جمع جزء'),
+      'th classic renders Thai subtotal (borrowed pos.subtotal)',
+      thText.includes('ยอดรวมย่อย'),
     );
-    assert('fa classic localizes cash payment method', faText.includes('نقدی'));
-    assert('fa classic translates table prefix', faText.includes('میز '));
-    const urText = escPosToText(
-      formatReceipt(
-        buildOrder(),
-        buildBill(),
-        buildBusiness(),
-        'classic',
-        48,
-        false,
-        false,
-        undefined,
-        [],
-        true,
-        'ur',
-      ),
-    );
-    assert('ur classic renders Urdu bill number label', urText.includes('بل #'));
-    assert('ur classic renders Urdu grand total', urText.includes('کل رقم'));
-    assert('ur classic renders Urdu subtotal', urText.includes('ذیلی رقم'));
-    assert('ur classic localizes cash payment method', urText.includes('نقد'));
-    const deText = escPosToText(
-      formatReceipt(
-        buildOrder(),
-        buildBill(),
-        buildBusiness(),
-        'classic',
-        48,
-        false,
-        false,
-        undefined,
-        [],
-        false,
-        'de',
-      ),
-    );
-    assert(
-      'de classic renders German invoice title label',
-      deText.includes('Rechnungsnr.:') || deText.includes('Rechnung'),
-    );
-    assert('de classic renders German grand total', deText.includes('GESAMTSUMME'));
-    assert('de classic renders German subtotal', deText.includes('Zwischensumme'));
     assert(
       'unknown language keeps English output',
       escPosToText(
@@ -503,7 +196,7 @@ function run(): void {
           language: locale,
           isReprint: false,
           useUnicode: false,
-          arabicShaping: locale === 'fa' || locale === 'ur',
+          arabicShaping: false,
           cutMode: 'full',
         },
       ).lines.join('\n');
@@ -520,34 +213,16 @@ function run(): void {
       formatReceipt(buildOrder(), buildBill(), buildBusiness(), 'compact', 48),
     );
     assert('default language keeps Bill # label', text.includes('Bill #:'));
-    const esText = escPosToText(
-      formatReceipt(
-        buildOrder(),
-        buildBill(),
-        buildBusiness(),
-        'compact',
-        48,
-        false,
-        false,
-        undefined,
-        [],
-        false,
-        'es',
-      ),
-    );
-    assert('es compact localizes bill number label', esText.includes('Comprobante #'));
-    assert('es compact localizes date label', esText.includes('Fecha:'));
-    const frResult = renderCompactReceiptViaDocument(buildOrder(), buildBill(), buildBusiness(), {
+    const thText = renderCompactReceiptViaDocument(buildOrder(), buildBill(), buildBusiness(), {
       columns: 48,
-      language: 'fr',
+      language: 'th',
       isReprint: false,
-      useUnicode: false,
+      useUnicode: true,
       arabicShaping: false,
       cutMode: 'full',
-    });
-    const frLines = frResult.lines.join('\n');
-    assert('fr compact localizes bill number label', frLines.includes('N° de facture:'));
-    assert('fr compact localizes item label', frLines.includes('Article'));
+    }).lines.join('\n');
+    assert('th compact localizes bill number label', thText.includes('เลขบิล#'));
+    assert('th compact localizes date label', thText.includes('วันที่'));
   }
 
   console.log('\n✅ Test 4: KOT honors language');
@@ -556,59 +231,6 @@ function run(): void {
     const text = escPosToText(formatKOT(order, order.items, 'Grill', 48));
     assert('default KOT banner stays English', text.includes('KITCHEN ORDER TICKET'));
     assert('default KOT type label stays English', text.includes('Type: Dine in'));
-    const faText = escPosToText(
-      formatKOT(order, order.items, 'Grill', 48, false, 'full', 'en-US', undefined, [], true, 'fa'),
-    );
-    assert('fa KOT banner translated', faText.includes('برگ سفارش آشپزخانه'));
-    assert('fa KOT station label translated', faText.includes('ایستگاه:'));
-    assert('fa KOT type label translated', faText.includes('نوع: خوردن در محل'));
-    assert('fa KOT time label translated', faText.includes('ساعت:'));
-    const urText = escPosToText(
-      formatKOT(order, order.items, 'Grill', 48, false, 'full', 'ur-PK', undefined, [], true, 'ur'),
-    );
-    assert('ur KOT banner translated', urText.includes('کچن آرڈر ٹکٹ'));
-    assert('ur KOT station label translated', urText.includes('اسٹیشن:'));
-    assert('ur KOT type label translated', urText.includes('قسم:'));
-    assert('ur KOT time label translated', urText.includes('وقت:'));
-    const deWarnings: Array<{ field: string; text: string; message: string }> = [];
-    const deText = escPosToText(
-      formatKOT(
-        order,
-        order.items,
-        'Grill',
-        48,
-        false,
-        'full',
-        'de-DE',
-        undefined,
-        deWarnings,
-        false,
-        'de',
-      ),
-    );
-    assert(
-      'de KOT banner survives generic thermal output',
-      deText.includes('KUECHENBESTELLSCHEIN'),
-    );
-    assert('de KOT umlaut fallback emits no warning', deWarnings.length === 0);
-    const sqWarnings: Array<{ field: string; text: string; message: string }> = [];
-    const sqText = escPosToText(
-      formatKOT(
-        order,
-        order.items,
-        'Grill',
-        48,
-        false,
-        'full',
-        'sq-AL',
-        undefined,
-        sqWarnings,
-        false,
-        'sq',
-      ),
-    );
-    assert('sq KOT banner survives generic thermal fallback', sqText.includes('POROSI E KUZHINES'));
-    assert('sq KOT fallback emits no warning for Albanian diacritics', sqWarnings.length === 0);
     assert(
       'Albanian Ë/ë and Ç/ç normalize for ASCII thermal output',
       normalizeThermalText('Ëmbëlsirë Çaj', GENERIC_THERMAL_CAPABILITIES) === 'Embelsire Caj',
@@ -649,31 +271,21 @@ function run(): void {
     const text80 = buf80.toString('utf8');
     assert('en test page title unchanged', text80.includes('Flo Printer Test'));
     assert('en test page reports columns', text80.includes('Columns: 48'));
-    const esText = buildTestPage('80mm', 'full', 'es').toString('utf8');
-    assert('es test page title translated', esText.includes('Prueba de impresora Flo'));
-    assert('es test page columns label translated', esText.includes('Columnas: 48'));
-    assert('technical ruler literal stays verbatim', /[1234567890]/.test(esText));
+    assert('technical ruler literal stays verbatim', /[1234567890]/.test(text80));
   }
 
   console.log('\n✅ Test 6: payment method resolution');
   {
     const bill = { ...buildBill(), payment_details: [{ method: 'card', amount: 250 }] };
-    const faText = escPosToText(
-      formatReceipt(
-        buildOrder(),
-        bill,
-        buildBusiness(),
-        'compact',
-        48,
-        false,
-        false,
-        undefined,
-        [],
-        true,
-        'fa',
-      ),
-    );
-    assert('card localizes in fa', faText.includes('کارت'));
+    const thText = renderCompactReceiptViaDocument(buildOrder(), bill, buildBusiness(), {
+      columns: 48,
+      language: 'th',
+      isReprint: false,
+      useUnicode: true,
+      arabicShaping: false,
+      cutMode: 'full',
+    }).lines.join('\n');
+    assert('card localizes in th', thText.includes('บัตร'));
     const voucherBill = { ...buildBill(), payment_details: [{ method: 'voucher', amount: 250 }] };
     const text = escPosToText(
       formatReceipt(buildOrder(), voucherBill, buildBusiness(), 'compact', 48),

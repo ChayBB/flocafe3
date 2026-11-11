@@ -1876,7 +1876,7 @@ async function main() {
           db.prepare(
             `INSERT INTO settings (key, value, updated_at) VALUES ('z_report_language_policy', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
           ).run(
-            JSON.stringify({ primary: { mode: 'fixed', language: 'fa' }, additional: ['en'] }),
+            JSON.stringify({ primary: { mode: 'fixed', language: 'th' }, additional: ['en'] }),
             now(),
           );
           capturedSnapshots.length = 0;
@@ -1891,7 +1891,7 @@ async function main() {
           );
           assertEqual(
             capturedSnapshots[0]?.__language,
-            'fa',
+            'th',
             'print: route resolves configured Z primary language',
           );
           assertEqual(
@@ -2538,33 +2538,8 @@ async function main() {
         JSON.stringify(directTail) === JSON.stringify([0x1b, 0x70, 0x00, 0x19, 0xfa]),
         `F4 direct: forced drawer pulse tail (got ${JSON.stringify(directTail)})`,
       );
-      const { GENERIC_THERMAL_CAPABILITIES } = require('../shared/print/thermal-capabilities');
-      const shapingCapabilities = {
-        ...GENERIC_THERMAL_CAPABILITIES,
-        shaping: { arabic: true },
-      };
-      const bilingualBody = thermalModule.buildZReportBody(
-        {
-          ...z,
-          __language: 'fa',
-          __additionalLanguage: 'en',
-        },
-        undefined,
-        { columns: 48, capabilities: shapingCapabilities },
-        [],
-      );
-      const bilingualPreview = thermalModule.escPosToText(bilingualBody);
-      assert(
-        bilingualPreview.includes('اختلاف') && bilingualPreview.includes('Variance'),
-        'F4 direct: bilingual variance renders both configured languages',
-      );
-      assert(
-        bilingualPreview.includes('امضای اپراتور') &&
-          bilingualPreview.includes('Operator signature'),
-        'F4 direct: bilingual operator signature renders both configured languages',
-      );
 
-      const unsupported = await realPrintZ({ ...z, __language: 'fa' }, undefined, webusbPrinter);
+      const unsupported = await realPrintZ({ ...z, __language: 'th' }, undefined, webusbPrinter);
       assertEqual(
         unsupported.ok,
         false,

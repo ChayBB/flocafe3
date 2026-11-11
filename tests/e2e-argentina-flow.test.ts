@@ -7,7 +7,7 @@
  *
  * Verifies that:
  *  - Onboarding with country=AR persists the country profile (es-AR, CUIT, IVA, Comprobante)
- *  - Argentina demo seed swaps in the hamburger menu and Spanish customer names with +54
+ *  - Argentina demo seed follows the UI language, not the store country
  *  - Settings save/load round-trips the country and its derived fiscal fields
  *  - Non-Argentina onboarding still gets the legacy India demo (regression guard)
  *  - Tax engine runs the AR path without error
@@ -24,14 +24,22 @@ const os = require('os');
 const path = require('path');
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-e2e-ar-'));
 Module._load = function (request, parent, isMain) {
-  if (request === 'electron') return { app: { isPackaged: true, getPath: () => testDir, getVersion: () => 'test' } };
+  if (request === 'electron')
+    return { app: { isPackaged: true, getPath: () => testDir, getVersion: () => 'test' } };
   return originalLoad.apply(this, arguments);
 };
 
 const {
-  initTestDb, createApp, startServer,
-  seedOwnerUser, api, assert, assertEqual, assertIncludes,
-  getResults, closeDatabase,
+  initTestDb,
+  createApp,
+  startServer,
+  seedOwnerUser,
+  api,
+  assert,
+  assertEqual,
+  assertIncludes,
+  getResults,
+  closeDatabase,
 } = require('./helpers/test-setup');
 
 const { authRoutes } = require('../main/routes/auth');
@@ -61,11 +69,14 @@ async function main() {
     await runArgentinaSettings(baseUrl, db);
     await runArgentinaTaxAndCustomers(baseUrl, db);
     await runArgentinaTranslations(db);
-
   } finally {
     if (server) server.close();
     closeDatabase();
-    try { fs.rmSync(testDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 
   // Run the regression in a fresh DB so the AR hamburger from earlier does not
@@ -74,7 +85,11 @@ async function main() {
   try {
     await runLegacyOnboardingInIsolation(legacyTestDir);
   } finally {
-    try { fs.rmSync(legacyTestDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      fs.rmSync(legacyTestDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 
   const { passed, failed, total } = getResults();
@@ -88,7 +103,8 @@ async function runLegacyOnboardingInIsolation(legacyTestDir) {
   const Module2 = require('module');
   const originalLoad2 = Module2._load;
   Module2._load = function (request, parent, isMain) {
-    if (request === 'electron') return { app: { isPackaged: true, getPath: () => legacyTestDir, getVersion: () => 'test' } };
+    if (request === 'electron')
+      return { app: { isPackaged: true, getPath: () => legacyTestDir, getVersion: () => 'test' } };
     return originalLoad2.apply(this, arguments);
   };
 
@@ -100,7 +116,9 @@ async function runLegacyOnboardingInIsolation(legacyTestDir) {
     seedSetupProfile(db2, 'demo', 'finedine', 'en', 'IN');
     const india = db2.prepare("SELECT id FROM products WHERE id = 'prod-demo-paneer-tikka'").get();
     assert(!!india, 'legacy India demo seeds paneer tikka');
-    const burger = db2.prepare("SELECT id FROM products WHERE id = 'prod-demo-hamburguesa-clasica'").get();
+    const burger = db2
+      .prepare("SELECT id FROM products WHERE id = 'prod-demo-hamburguesa-clasica'")
+      .get();
     assert(!burger, 'legacy India demo does NOT seed the Argentina hamburger menu');
   } finally {
     closeDatabase();
@@ -123,7 +141,7 @@ async function runArgentinaOnboarding(baseUrl, db) {
       country: 'AR',
       currency: 'ARS',
       timezone: 'America/Argentina/Buenos_Aires',
-      language: 'es',
+      language: 'en',
       terms_accepted: true,
       owner_approval_pin: '5678',
       owner_approval_pin_confirmation: '5678',
@@ -136,25 +154,18 @@ async function runArgentinaOnboarding(baseUrl, db) {
   assertEqual(tenant.currency, 'ARS', 'tenant.currency = ARS');
   assertEqual(tenant.currency_symbol, '$', 'tenant.currency_symbol = $ (not ARS)');
   assertEqual(tenant.timezone, 'America/Argentina/Buenos_Aires', 'tenant.timezone = AR');
-  assertEqual(tenant.language, 'es', 'tenant.language = es');
+  assertEqual(tenant.language, 'en', 'tenant.language = en');
 
   const curSymbol = db.prepare("SELECT value FROM settings WHERE key = 'currency_symbol'").get();
   assertEqual(curSymbol.value, '$', 'DB currency_symbol = $ for ARS');
 
-  const burger = db.prepare("SELECT id FROM products WHERE id = 'prod-demo-hamburguesa-clasica'").get();
-  assert(!!burger, 'Argentina demo seeds the hamburger menu');
-  const indiaMenu = db.prepare("SELECT id FROM products WHERE id = 'prod-demo-butter-chicken'").get();
-  assert(!indiaMenu, 'Argentina demo does NOT seed the legacy India menu');
-
-  const sofia = db.prepare("SELECT id, name, country_code FROM customers WHERE id = 'cust-demo-1'").get();
-  assert(!!sofia, 'Argentina demo seeds a demo customer');
-  assertEqual(sofia.country_code, '+54', 'demo customer uses +54 country code');
+  const customer = db
+    .prepare("SELECT id, country_code FROM customers WHERE id = 'cust-demo-1'")
+    .get();
+  assert(!!customer, 'Argentina demo seeds a demo customer');
 
   const staffName = db.prepare("SELECT name FROM users WHERE id = 'user-demo-manager'").get();
-  assertEqual(staffName.name, 'Gerente Demo', 'demo staff localized to es');
-
-  const cuisine = db.prepare("SELECT name FROM categories WHERE id = 'cat-demo-burger'").get();
-  assertEqual(cuisine.name, 'Hamburguesas', 'demo category localized to es');
+  assertEqual(staffName.name, 'Demo Manager', 'demo staff follows the English UI language');
 }
 
 async function runArgentinaSettings(baseUrl, db) {
@@ -212,29 +223,33 @@ async function runArgentinaTranslations(db) {
   console.log('\n4. i18n has matching keys for both languages and every t() reference resolves');
   const i18nDir = path.join(__dirname, '../frontend/src/lib/i18n/messages');
   const enSrc = fs.readFileSync(path.join(i18nDir, 'en.json'), 'utf8');
-  const esSrc = fs.readFileSync(path.join(i18nDir, 'es.json'), 'utf8');
+  const thSrc = fs.readFileSync(path.join(i18nDir, 'th.json'), 'utf8');
 
   const enKeys = extractJsonKeys(enSrc);
-  const esKeys = extractJsonKeys(esSrc);
-  assert(enKeys.size > 0 && esKeys.size > 0, 'i18n defines both en and es blocks');
-  if (enKeys.size === 0 || esKeys.size === 0) return;
+  const thKeys = extractJsonKeys(thSrc);
+  assert(enKeys.size > 0 && thKeys.size > 0, 'i18n defines both en and th blocks');
+  if (enKeys.size === 0 || thKeys.size === 0) return;
 
-  assertEqual(enKeys.size, esKeys.size, `en and es have the same number of keys (en=${enKeys.size}, es=${esKeys.size})`);
-  const missingInEs = [...enKeys].filter((k) => !esKeys.has(k));
-  const missingInEn = [...esKeys].filter((k) => !enKeys.has(k));
-  assertEqual(missingInEs.length, 0, `es is missing keys: ${missingInEs.join(', ') || 'none'}`);
+  const missingInTh = [...enKeys].filter((k) => !thKeys.has(k));
+  const missingInEn = [...thKeys].filter((k) => !enKeys.has(k));
+  assertEqual(missingInTh.length, 0, `th is missing keys: ${missingInTh.join(', ') || 'none'}`);
   assertEqual(missingInEn.length, 0, `en is missing keys: ${missingInEn.join(', ') || 'none'}`);
-
-  assert(esSrc.includes("'CUIT'") || esSrc.includes("Comprobante") || esSrc.includes("es-AR"), 'i18n includes Argentina-context translations');
 
   // Walk the entire frontend src tree and assert every `t('key')` reference
   // resolves to a known key. Catches wiring gaps: a developer adds
   // `t('foo.bar')` and forgets to define the key.
   const referenced = collectCalledKeys(path.join(__dirname, '../frontend/src'));
   console.log(`    found ${referenced.size} unique t() keys referenced in frontend`);
-  assert(referenced.size >= 20, `at least 20 translation keys should be wired in (found ${referenced.size})`);
+  assert(
+    referenced.size >= 20,
+    `at least 20 translation keys should be wired in (found ${referenced.size})`,
+  );
   const unknownRefs = [...referenced].filter((k) => !enKeys.has(k));
-  assertEqual(unknownRefs.length, 0, `t() calls reference unknown keys: ${unknownRefs.join(', ') || 'none'}`);
+  assertEqual(
+    unknownRefs.length,
+    0,
+    `t() calls reference unknown keys: ${unknownRefs.join(', ') || 'none'}`,
+  );
 }
 
 function extractJsonKeys(jsonSrc) {

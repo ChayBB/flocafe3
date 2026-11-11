@@ -194,7 +194,7 @@ Both scripts ask whether to keep application data. Do not choose their data-purg
 
 - **Offline-first architecture:** Local SQLite storage with auto-migrating schema and fail-closed safety.
 - **Granular roles & permissions:** Owner, Manager, Cashier, Server, and Chef roles with context-aware access policies.
-- **Multi-language support:** 32 localized languages with full bidirectional RTL rendering (Arabic, Persian, Urdu).
+- **Two UI languages:** English and Thai.
 - **131 Country profiles:** 109 world currencies with localized phone parsing, number formatting, and timezone handling.
 - **Country tax packs:** Signed regional tax pack integration and manual rule engine.
 - **Automated database backups:** Pre-migration automatic snapshots, manual exports, and optional Google Drive sync.
@@ -217,42 +217,9 @@ Core POS operation and local data are offline-first. Order entry, billing, KDS c
 
 ## Languages and regional support
 
-FloCafe includes UI translations for:
+FloCafe includes UI translations for English and Thai.
 
-- English
-- Spanish
-- French
-- Brazilian Portuguese
-- Russian
-- Filipino
-- Turkish
-- Persian (Farsi), including RTL support
-- Arabic, including RTL support
-- Urdu, including RTL support
-- German
-- Italian
-- Japanese
-- Simplified Chinese
-- Traditional Chinese (Taiwan)
-- Korean
-- Bahasa Indonesia
-- Dutch
-- Hindi
-- Bengali/Bangla
-- Albanian
-- Vietnamese
-- Thai
-- Nepali
-- Hausa
-- Javanese
-- Marathi
-- Swahili
-- Punjabi
-- Telugu
-- Tamil
-- Ukrainian
-
-UI language is independent of store country and regional settings, and tax calculation rules remain a separate concern. For details on contributing translations or adding languages, see the [Internationalization and translation guide](docs/architecture/internationalization.md).
+UI language is independent of store country and regional settings, and tax calculation rules remain a separate concern. For details on contributing translations, see the [Internationalization and translation guide](docs/architecture/internationalization.md).
 
 FloCafe ships with 131 country profiles covering 109 currencies. Each profile sets a default currency, locale, and setup timezone; store owners can override the timezone during setup or later in Settings.
 

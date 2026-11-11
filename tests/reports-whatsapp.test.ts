@@ -284,7 +284,7 @@ async function main(): Promise<void> {
     const localeFiles = fs.readdirSync(messageDir).filter((file) => file.endsWith('.json'));
     assert.equal(
       localeFiles.length,
-      32,
+      2,
       'the full-report localization test covers all supported locales',
     );
     for (const localeFile of localeFiles) {
@@ -396,7 +396,7 @@ async function main(): Promise<void> {
       },
       tenant,
       'en-US',
-      getLocalizedLabels('fr.json'),
+      getLocalizedLabels('th.json'),
     );
     assert.match(
       customPaymentMessage,

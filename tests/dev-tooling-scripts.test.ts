@@ -10,7 +10,6 @@ const YAML = require('js-yaml') as { load: (text: string) => unknown };
 
 const rootDir = path.resolve(__dirname, '..');
 const resetScript = path.join(rootDir, 'scripts/dev/nuclear-reset.sh');
-const i18nAddScript = path.join(rootDir, 'scripts/i18n-add.cjs');
 const buildFrontendScript = path.join(rootDir, 'scripts/build-frontend.cjs');
 
 function mkdirp(target: string) {
@@ -31,60 +30,6 @@ function runReset(platform: string, env: NodeJS.ProcessEnv) {
 }
 
 function runTest() {
-  console.log('Testing i18n:add scaffolding validation...');
-  const existingLanguage = spawnSync(process.execPath, [i18nAddScript, 'en'], {
-    encoding: 'utf8',
-    cwd: rootDir,
-  });
-  assert.strictEqual(
-    existingLanguage.status,
-    1,
-    'i18n:add must refuse to overwrite an existing language file',
-  );
-  assert.match(
-    existingLanguage.stderr,
-    /Refusing to overwrite existing messages file/,
-    'i18n:add must explain why an existing language file was not overwritten',
-  );
-
-  const regionalLanguage = spawnSync(process.execPath, [i18nAddScript, 'zh-tw'], {
-    encoding: 'utf8',
-    cwd: rootDir,
-  });
-  assert.strictEqual(
-    regionalLanguage.status,
-    1,
-    'i18n:add must accept a regional key before refusing an existing file',
-  );
-  assert.doesNotMatch(
-    regionalLanguage.stderr,
-    /Invalid language code/,
-    'i18n:add must accept a canonical lowercase regional key',
-  );
-
-  const invalidLanguage = spawnSync(process.execPath, [i18nAddScript, 'EN'], {
-    encoding: 'utf8',
-    cwd: rootDir,
-  });
-  assert.strictEqual(
-    invalidLanguage.status,
-    1,
-    'i18n:add must reject non-canonical language codes',
-  );
-  assert.match(invalidLanguage.stderr, /Invalid language code/);
-
-  const extensionLanguage = spawnSync(process.execPath, [i18nAddScript, 'en-u-nu-latn'], {
-    encoding: 'utf8',
-    cwd: rootDir,
-  });
-  assert.strictEqual(
-    extensionLanguage.status,
-    1,
-    'i18n:add must reject Unicode-extension locale keys',
-  );
-  assert.match(extensionLanguage.stderr, /Invalid language code/);
-  console.log('✓ i18n:add validation, regional keys, and no-overwrite guard verified');
-
   console.log('Testing build:frontend dependency validation...');
   const buildFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-build-frontend-test-'));
   try {

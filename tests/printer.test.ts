@@ -1027,7 +1027,7 @@ console.log('\n✅ Test 1c: Unsupported financial receipt text refuses before tr
         'full',
         warnings,
         false,
-        'fa',
+        'th',
       );
       assert(
         `${template}/${cols}: unsupported financial rows are identified`,

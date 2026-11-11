@@ -1,57 +1,42 @@
 # Internationalization
 
-FloCafe supports 32 UI languages. This page describes how a language is declared, loaded, and
-validated, and how the UI language stays separate from a store's regional settings.
+FloCafe has two UI languages: English (`en`) and Thai (`th`). This page describes how a language is
+declared, loaded, and validated, and how the UI language stays separate from a store's regional
+settings.
 
 ## Source of truth and the parity rule
 
-`frontend/src/lib/i18n/messages/en.json` is the canonical message catalogue. The store runs in
-English and Thai, so new strings are written in `en.json` and `th.json` only. `th.json` must match
-`en.json` exactly: zero missing keys and zero orphan keys. Every other catalogue under
-`frontend/src/lib/i18n/messages/` may lag behind `en.json` but must not carry orphan keys.
+`frontend/src/lib/i18n/messages/en.json` is the canonical message catalogue, and `th.json` is the
+only other one. New strings are written in both. `th.json` must match `en.json` exactly: zero
+missing keys and zero orphan keys.
 
-The loader fills any key a catalogue has not translated with the English text, so a lagging
-language shows English for new strings instead of nothing. `npm run i18n:check` runs
-`tests/translations.test.ts`, which enforces registry and file consistency, key parity (complete
-for `th`, no orphans anywhere), ICU validity, placeholder and tag parity, per-language completeness
-of the keys a catalogue does carry, and frontend key safety. The set of complete locales is
-`FULLY_MAINTAINED_LOCALES` in that test.
-
-The 32 committed catalogues are: `ar`, `bn`, `de`, `en`, `es`, `fa`, `fil`, `fr`, `ha`, `hi`, `id`,
-`it`, `ja`, `jv`, `ko`, `mr`, `ne`, `nl`, `pa`, `pt`, `ru`, `sq`, `sw`, `ta`, `te`, `th`, `tr`, `uk`, `ur`, `vi`, `zh`, `zh-tw`.
+The loader fills any key a catalogue has not translated with the English text, so a missing Thai
+string shows English instead of nothing. `npm run i18n:check` runs `tests/translations.test.ts`,
+which enforces registry and file consistency, key parity, ICU validity, placeholder and tag parity,
+Thai completeness (no untranslated, placeholder, malformed, or non-NFC values outside a documented
+allowlist), and frontend key safety. The set of complete locales is `FULLY_MAINTAINED_LOCALES` in
+that test.
 
 ## The registry
 
 `frontend/src/lib/i18n/languages.ts` exports `LANGUAGES`, the single source for everything about a
 language. Each entry carries:
 
-| Field        | Meaning                                                                                                           |
-| ------------ | ----------------------------------------------------------------------------------------------------------------- |
-| key          | The object key in `LANGUAGES`, and the language code used in settings, print policies, and message filenames.     |
-| `locale`     | The canonical BCP-47 tag passed to `Intl`. It is the tag, not the key: `de` has locale `de-DE`, `pt` has `pt-BR`. |
-| `nativeName` | The endonym shown in the language picker. It is written in the language itself.                                   |
-| `direction`  | `ltr` or `rtl`.                                                                                                   |
-| `selectable` | Whether the language may be chosen by an end user.                                                                |
-| `load`       | A lazy dynamic import returning that language's message catalogue.                                                |
+| Field        | Meaning                                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------- |
+| key          | The object key in `LANGUAGES`, and the language code used in settings, print policies, and message filenames. |
+| `locale`     | The canonical BCP-47 tag passed to `Intl`. It is the tag, not the key: `th` has locale `th-TH`.               |
+| `nativeName` | The endonym shown in the language picker. It is written in the language itself.                               |
+| `direction`  | `ltr` for both registered languages.                                                                          |
+| `selectable` | Whether the language may be chosen by an end user.                                                            |
+| `load`       | A lazy dynamic import returning that language's message catalogue.                                            |
 
-Because the registry is the only place a language is declared, adding a language means adding an
-entry here and nothing else structural. The registry also exports `isLanguage()`,
-`getLanguageFromLocale()`, `getLanguageDirection()`, and `getLanguageLocale()`; the reverse map
-from BCP-47 tag to key is derived from `locale`, so the tag and the key cannot drift apart.
+The registry also exports `isLanguage()`, `getLanguageFromLocale()`, `getLanguageDirection()`, and
+`getLanguageLocale()`; the reverse map from BCP-47 tag to key is derived from `locale`, so the tag
+and the key cannot drift apart.
 
-The registry key must be a canonical lowercase BCP-47 identifier, which is why a regional variant
-gets a key such as `zh-tw` and a `locale` of `zh-TW`. See [adding a language](../guides/adding-a-language.md).
-
-### Right-to-left languages
-
-Exactly three registered languages are right-to-left: `fa` (Persian, `fa-IR`), `ar` (Arabic,
-`ar-SA`), and `ur` (Urdu, `ur-PK`). There is no Hebrew locale.
-
-Direction is applied to the document by `HtmlLangSync` in
-`frontend/src/components/layout/HtmlLangSync.tsx`, which sets `<html lang>` to the language's
-`locale` and `<html dir>` to its `direction`. Toasts flip separately through `DirectionalToaster`.
-Direction is a property of the registry entry and of nothing else, so a new RTL language needs no
-layout code.
+`HtmlLangSync` in `frontend/src/components/layout/HtmlLangSync.tsx` sets `<html lang>` to the
+language's `locale` and `<html dir>` to its `direction`.
 
 ## Loading
 
@@ -59,9 +44,8 @@ layout code.
 
 - English is imported statically at module load and pre-seeded into the cache, so a cold boot always
   has a complete catalogue and never waits on the network.
-- Every other catalogue is merged over English when it loads, so a key it lacks renders in English.
-- Every other language is a dynamic import, one chunk per catalogue, declared by the registry's
-  `load` function.
+- Thai is a dynamic import in its own chunk, declared by the registry's `load` function, and is
+  merged over English when it loads, so a key it lacks renders in English.
 - Concurrent requests for the same language are deduplicated. The second caller receives the same
   in-flight promise rather than starting a second import.
 - A language resolves from the cache synchronously once loaded, through `getCachedMessages()` and
@@ -86,6 +70,12 @@ catalogue the store no longer names. A partially loaded catalogue is never rende
 
 The result is written to the store, so browser detection runs only when there is nothing persisted.
 
+A device that persisted a UI language other than `en` or `th` is moved to `th` by the version 6
+migration of the `pos-settings` store in `frontend/src/store/pos-settings.ts`. A tenant language or
+print policy that still names another language is ignored on read: `isLanguage()` rejects the
+tenant language, so the device keeps its own language, and the print-policy parsers fall back to the
+default policy.
+
 ## Browser detection
 
 `frontend/src/lib/i18n/browser-language.ts` matches `navigator.languages` (plus
@@ -96,20 +86,19 @@ subtag.
 Resolution for a candidate tag, in order:
 
 1. An exact `baseName` match against a registered locale.
-2. A maximized `baseName` match, so a bare `de` reaches `de-DE`.
+2. A maximized `baseName` match, so a bare `th` reaches `th-TH`.
 3. A same-script, same-language match, and only when exactly one candidate exists.
 
-Step 3 deliberately never crosses a script boundary. A `zh-TW` tag resolves to `zh-tw` and must not
-silently select `zh-CN`; a tag whose script has no unique registered candidate falls through to the
-next preference and ultimately to `en`. A malformed tag is skipped rather than thrown on. When
+Step 3 never crosses a script boundary. A tag with no registered candidate falls through to the next
+preference and ultimately to `en`. A malformed tag is skipped rather than thrown on. When
 `navigator` is unavailable, the result is `en`.
 
 ## Message format and key safety
 
 Messages are ICU MessageFormat, parsed by `use-intl`. `tests/translations.test.ts` checks, across
-every locale, that each message parses as valid ICU and that argument names and `plural` and
-`select` selector variables match the English message exactly. A locale that renames an argument or
-drops a plural branch fails the check.
+both locales, that each message parses as valid ICU and that argument names and `plural` and
+`select` selector variables match the English message exactly. A Thai message that renames an
+argument or drops a plural branch fails the check.
 
 Key safety is compile-time. `frontend/src/lib/i18n/messages.d.ts` augments `use-intl`'s `AppConfig`
 with `Messages = typeof en` and `Locale`, so a `t()` call with a key that does not exist in
@@ -122,12 +111,10 @@ the frontend, which is why the command reports anything it finds beyond translat
 The interface language and the store's regional identity are separate domains and are configured
 separately. The UI language chooses message catalogues, `Intl` locale tags, and the endonym in the
 picker. The tenant's regional settings choose the business timezone, number and currency
-formatting, digit shape, and calendar. Neither derives from the other: a Persian speaker running an
-Iranian store sees Persian text and Iranian number formatting, and a Persian speaker running a
-different store sees Persian text with that store's formatting. Changing one does not change the
-other. `tests/decoupled-ui-locale.test.ts` pins this, including that an RTL locale formats decimals
-with a comma and non-breaking space grouping and renders month names in its own script while
-keeping Latin digits.
+formatting, digit shape, and calendar. Neither derives from the other: a Thai UI on an Iranian store
+shows Thai labels with Iranian currency, digits, and calendar, and changing one does not change the
+other. Country packs, currencies, and tax packs for other countries stay available with either UI
+language. `tests/decoupled-ui-locale.test.ts` and `tests/browser-receipts.test.ts` pin this.
 
 Print output has its own language settings, separate from both; see
 [printing](printing.md).
@@ -146,8 +133,7 @@ of borrowed keys from other namespaces, for every committed language, in registr
   regenerate.
 - A concept with no translation in a language falls back to English, so a receipt always renders a
   real label rather than a raw key.
-- `PRINT_LABEL_LANGUAGES` in the generated module is the registry's language list, so adding a
-  language adds its print labels with no separate registration.
+- `PRINT_LABEL_LANGUAGES` in the generated module is the registry's language list.
 - Drift is gated by `npm run generate:print-labels -- --check`, which regenerates in memory and
   byte-compares against the committed file. The check is wired into both `npm run i18n:check` and
   `tests/print-labels.test.ts`.
@@ -165,11 +151,10 @@ a worse outcome than a visible error.
 An unparseable or missing print policy is not an error: it resolves to the default policy, which
 falls back to the store language.
 
-## Adding or changing a language
+## Script contracts
 
-`[adding a language](../guides/adding-a-language.md)` is the procedure. The script-level contracts a
-translator and implementer must not violate, such as conjunct handling and printer code-page
-representability, are in
+The script-level contracts a translator and implementer must not violate, such as grapheme
+measurement and printer code-page representability, are in
 [translation terminology](../reference/translation-terminology.md).
 
 ## Verification

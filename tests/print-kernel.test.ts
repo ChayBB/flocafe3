@@ -118,18 +118,18 @@ assert.ok(valid.ok);
 assert.deepEqual(valid.policy, { primary: { mode: 'inherit' }, additional: [] });
 
 const fixedWithAdditional = parsePrintLanguagePolicy(
-  { primary: { mode: 'fixed', language: 'fa' }, additional: ['es'] },
+  { primary: { mode: 'fixed', language: 'th' }, additional: ['en'] },
   FACTS,
 );
 assert.ok(fixedWithAdditional.ok);
 const fixedTaiwan = parsePrintLanguagePolicy(
-  { primary: { mode: 'fixed', language: 'zh-tw' }, additional: [] },
+  { primary: { mode: 'fixed', language: 'th' }, additional: [] },
   FACTS,
 );
 assert.ok(fixedTaiwan.ok);
 assert.equal(fixedTaiwan.ok ? fixedTaiwan.policy.primary.mode : '', 'fixed');
 if (fixedWithAdditional.ok) {
-  assert.deepEqual(resolveReceiptLanguages(fixedWithAdditional.policy, 'en'), ['fa', 'es']);
+  assert.deepEqual(resolveReceiptLanguages(fixedWithAdditional.policy, 'en'), ['th', 'en']);
 }
 
 const badCases: Array<[unknown, RegExp]> = [
@@ -141,10 +141,10 @@ const badCases: Array<[unknown, RegExp]> = [
   [{ primary: { mode: 'fixed', language: '' } }, /non-empty string/],
   [{ primary: { mode: 'fixed', language: 'xx' } }, /not a registered selectable language/],
   [{ primary: { mode: 'inherit' }, additional: ['xx'] }, /not a registered selectable language/],
-  [{ primary: { mode: 'inherit' }, additional: ['fa', 'es'] }, /at most 1 entry/],
-  [{ primary: { mode: 'inherit' }, additional: ['fa', 'fa'] }, /at most 1 entry/],
+  [{ primary: { mode: 'inherit' }, additional: ['th', 'en'] }, /at most 1 entry/],
+  [{ primary: { mode: 'inherit' }, additional: ['th', 'th'] }, /at most 1 entry/],
   [
-    { primary: { mode: 'fixed', language: 'fa' }, additional: ['fa'] },
+    { primary: { mode: 'fixed', language: 'th' }, additional: ['th'] },
     /duplicates the fixed primary/,
   ],
   [{ primary: { mode: 'inherit' }, extra: true }, /unknown policy key "extra"/],
@@ -158,11 +158,11 @@ for (const [payload, pattern] of badCases) {
 
 // KOT policies are single-primary: any additional entry is rejected.
 const kotValid = parseKotLanguagePolicy(
-  { primary: { mode: 'fixed', language: 'fa' }, additional: [] },
+  { primary: { mode: 'fixed', language: 'th' }, additional: [] },
   FACTS,
 );
 assert.ok(kotValid.ok);
-const kotBad = parseKotLanguagePolicy({ primary: inherit(), additional: ['es'] }, FACTS);
+const kotBad = parseKotLanguagePolicy({ primary: inherit(), additional: ['en'] }, FACTS);
 assert.ok(!kotBad.ok);
 assert.match(kotBad.ok ? '' : kotBad.error, /at most 0 entries/);
 
