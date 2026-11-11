@@ -158,6 +158,25 @@ export function isOrderCustomerEditLocked(
   );
 }
 
+/** A member who joins after paying can still be attached so the visit counts in their history. */
+export function canLinkMemberToOrder(
+  order: Pick<
+    Order,
+    'status' | 'customer' | 'customer_id' | 'scheduled_for' | 'release_status' | 'bill' | 'bills'
+  >,
+): boolean {
+  if (order.customer || order.customer_id || order.status === 'cancelled') return false;
+  if (!isOrderCustomerEditLocked(order)) return true;
+  return (
+    order.status === 'completed' ||
+    getOrderBills(order).some(
+      (bill) =>
+        ['paid', 'partial'].includes(String(bill.payment_status || '')) ||
+        Number(bill.paid_amount || 0) > 0,
+    )
+  );
+}
+
 export function isOrderItemEditLocked(
   order: Pick<Order, 'status' | 'scheduled_for' | 'release_status' | 'bill' | 'bills'>,
 ): boolean {

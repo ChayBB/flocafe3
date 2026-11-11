@@ -54,6 +54,7 @@ import {
   canCheckoutOrder,
   getRefundEligibleBills,
   isOrderCustomerEditLocked,
+  canLinkMemberToOrder,
   isOrderItemEditLocked,
   orderHasCollectedFunds,
   resolveOrderPaymentStatus,
@@ -290,6 +291,7 @@ export function OrderCard({
   const hasEligibleRefund = paidBills.length > 0;
   const hasCollectedFunds = orderHasCollectedFunds(order);
   const customerEditLocked = isOrderCustomerEditLocked(order);
+  const canLinkMember = canLinkMemberToOrder(order);
   const itemEditLocked = isOrderItemEditLocked(order);
   const canCheckout = canCheckoutOrder(order);
   const canAddItems = !isPaid && !itemEditLocked;
@@ -514,7 +516,7 @@ export function OrderCard({
       )}
 
       {/* ── CUSTOMER STRIP ───────────────────────────────────────────────────── */}
-      {isLinkingCustomer && !customerEditLocked ? (
+      {isLinkingCustomer && (!customerEditLocked || canLinkMember) ? (
         <div className="px-4 py-2.5 bg-orange-50/80 dark:bg-orange-950/40 border-b border-orange-100 dark:border-orange-900/40 space-y-2">
           <div className="flex items-center gap-2">
             <input
@@ -616,7 +618,7 @@ export function OrderCard({
             </button>
           )}
 
-          {!order.customer && !customerEditLocked && (
+          {canLinkMember && (
             <button
               type="button"
               onClick={() => onLinkCustomer(order.id)}

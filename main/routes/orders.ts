@@ -4173,11 +4173,43 @@ router.patch(
         if (!currentOrder) {
           throw Object.assign(new Error('Order not found'), { statusCode: 404 });
         }
-        if (['completed', 'cancelled'].includes(currentOrder.status)) {
-          throw Object.assign(
-            new Error('Cannot update customer on a completed or cancelled order'),
-            { statusCode: 400 },
+        if (currentOrder.status === 'cancelled') {
+          throw Object.assign(new Error('Cannot update customer on a cancelled order'), {
+            statusCode: 400,
+          });
+        }
+        const settledBill = db
+          .prepare(
+            `SELECT id FROM bills
+             WHERE order_id = ?
+               AND (payment_status IN ('paid', 'partial', 'partially_paid') OR COALESCE(paid_amount, 0) > 0)
+             LIMIT 1`,
+          )
+          .get(req.params.id);
+        // A member may join after paying: attach them for history only, leaving totals and bills as paid.
+        if (currentOrder.status === 'completed' || settledBill) {
+          if (!customer_id || currentOrder.customer_id) {
+            throw Object.assign(
+              new Error('A paid order can only gain a member, not change or lose one'),
+              { statusCode: 409 },
+            );
+          }
+          db.prepare('UPDATE orders SET customer_id = ?, updated_at = ? WHERE id = ?').run(
+            customer_id,
+            nowStr,
+            req.params.id,
           );
+          if (actorId) {
+            recordOrderAudit(db, {
+              orderId: req.params.id as string,
+              actorUserId: actorId,
+              action: 'customer_updated',
+              details: { previous_customer_id: null, customer_id, after_payment: true },
+            });
+          }
+          return parseRowJson(
+            db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id),
+          ) as any;
         }
         assertScheduledOrderUnpaidForEdit(db, req.params.id as string, currentOrder);
 
