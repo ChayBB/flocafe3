@@ -166,6 +166,9 @@ async function main() {
   };
   upsertSetting('server_app_enabled', 'true');
   upsertSetting('kds_enabled', 'true');
+  // A finished setup has a store country; Server App sessions end by its local time.
+  upsertSetting('country', 'TH');
+  upsertSetting('timezone', 'Asia/Bangkok');
 
   await startServer();
   await startKdsServer();

@@ -423,7 +423,7 @@ async function run() {
   const createCashierRes = await request(app).post('/api/staff').set(managerAuth).send({
     name: 'Charlie Cashier',
     email: 'cashier@test.local',
-    password: 'CashierPass1!',
+    password: '7351', // Cashier, server and chef passwords are exactly 4 digits.
     role: 'cashier',
     pin: '2468', // Same PIN as owner-1!
   });
