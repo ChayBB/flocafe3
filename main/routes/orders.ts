@@ -4191,9 +4191,7 @@ router.patch(
               details: { previous_customer_id: null, customer_id, after_payment: true },
             });
           }
-          return parseRowJson(
-            db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id),
-          ) as any;
+          return parseRowJson(db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id));
         }
         assertScheduledOrderUnpaidForEdit(db, req.params.id as string, currentOrder);
 
