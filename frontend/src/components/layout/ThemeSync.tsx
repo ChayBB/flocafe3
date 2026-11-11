@@ -34,6 +34,8 @@ export function ThemeSync() {
   const darkVariant = useThemeMode((s) => s.darkVariant);
   const setDarkVariant = useThemeMode((s) => s.setDarkVariant);
   const [variantHydrated, setVariantHydrated] = useState(false);
+  // Bumped by the single auth-changed listener so the palette reloads after login too.
+  const [authEpoch, setAuthEpoch] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,15 +64,10 @@ export function ThemeSync() {
       if (!cancelled) setVariantHydrated(true);
     };
     void load();
-    const onAuthChanged = () => {
-      void load();
-    };
-    window.addEventListener(THEME_REHYDRATION_EVENT, onAuthChanged);
     return () => {
       cancelled = true;
-      window.removeEventListener(THEME_REHYDRATION_EVENT, onAuthChanged);
     };
-  }, [setDarkVariant]);
+  }, [setDarkVariant, authEpoch]);
 
   useEffect(() => {
     if (!variantHydrated) return;
@@ -203,6 +200,7 @@ export function ThemeSync() {
     boot();
     // Theme store boots pre-auth; re-hydrate once a token exists (post-login).
     const onAuthChanged = () => {
+      setAuthEpoch((epoch) => epoch + 1);
       void boot();
     };
     window.addEventListener(THEME_REHYDRATION_EVENT, onAuthChanged);
