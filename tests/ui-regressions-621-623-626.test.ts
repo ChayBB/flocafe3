@@ -67,12 +67,27 @@ assert.match(
 );
 
 const kds = source('frontend/src/hooks/useKdsConnection.ts');
+// KDS stage colours come from palette variables that the KDS night theme redefines.
 assert.match(
   kds,
-  /bg-yellow-50 dark:bg-yellow-950\/60/,
-  'waiting KDS cards use a dark-mode background',
+  /bg-\(--kds-pending-tint\)/,
+  'waiting KDS cards use the pending palette background',
 );
-assert.match(kds, /text-yellow-700 dark:text-yellow-300/, 'waiting KDS labels use dark-mode text');
+assert.match(kds, /text-\(--kds-pending-text\)/, 'waiting KDS labels use the pending palette text');
+const globalsCss = source('frontend/src/app/globals.css');
+const cssVar = (selector: string, name: string): string | undefined => {
+  const escaped = selector.replace(/\./g, '\\.');
+  const block = globalsCss.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`));
+  return block?.[1].match(new RegExp(`${name}:\\s*([^;]+);`))?.[1].trim();
+};
+for (const name of ['--kds-pending-tint', '--kds-pending-text']) {
+  const day = cssVar('.theme-kds', name);
+  const night = cssVar('.theme-kds.dark', name);
+  assert.ok(
+    day && night && day !== night,
+    `${name} has its own dark-mode value, got day=${day} night=${night}`,
+  );
+}
 
 const customers = source('frontend/src/app/(dashboard)/customers/page.tsx');
 assert.match(
@@ -468,7 +483,7 @@ try {
   );
   assert.match(
     cartMarkup,
-    /<div class="flex flex-wrap gap-2"><button[^>]*class="[^"]*shrink-0 px-3"[^>]*>[\s\S]*?<span class="truncate">Hold<\/span>[\s\S]*?<button[^>]*class="[^"]*flex-1 min-w-0 px-3"[^>]*><span class="truncate">Place Order<\/span>/,
+    /<div class="flex flex-wrap gap-2"><button[^>]*class="[^"]*shrink-0 px-3"[^>]*>[\s\S]*?<span class="truncate">Hold<\/span>[\s\S]*?<button[^>]*class="[^"]*\bflex-1 min-w-0\b[^"]*\bpx-3\b[^"]*"[^>]*><span class="truncate">Place Order<\/span>/,
     'rendered CartPanel footer keeps Hold compact (shrink-0 px-3) and gives Place Order the remaining width (flex-1 min-w-0 px-3)',
   );
   assert.match(
