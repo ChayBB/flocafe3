@@ -5,6 +5,14 @@ export const PAYMENT_METHODS = Object.freeze([
   { key: 'card' as const, labelKey: 'pos.methodCard', icon: CreditCard },
 ]);
 
+export type BuiltInPaymentKey = 'cash' | 'card' | 'wallet';
+
+export const BUILT_IN_PAYMENT_SETTING: Record<BuiltInPaymentKey, string> = {
+  cash: 'payment_cash_enabled',
+  card: 'payment_card_enabled',
+  wallet: 'payment_wallet_enabled',
+};
+
 export interface CustomPaymentMethod {
   id: number;
   name: string;

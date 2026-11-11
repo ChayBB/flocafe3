@@ -2452,6 +2452,46 @@ async function main() {
         '#1339: owner enables one_shift_per_staff (200)',
       );
 
+      for (const key of [
+        'payment_cash_enabled',
+        'payment_card_enabled',
+        'payment_wallet_enabled',
+      ]) {
+        const readDefault = await request(app)
+          .get(`/api/settings/${key}`)
+          .set('Authorization', `Bearer ${s11CashierAToken}`);
+        assert(
+          readDefault.status === 200 && readDefault.body?.setting?.value === 'true',
+          `${key}: checkout staff read the tender as shown by default`,
+        );
+        const cashierToggle = await request(app)
+          .put(`/api/settings/${key}`)
+          .set('Authorization', `Bearer ${s11CashierAToken}`)
+          .send({ value: false });
+        assert(cashierToggle.status === 403, `${key}: cashier cannot hide the tender (403)`);
+        const invalidToggle = await request(app)
+          .put(`/api/settings/${key}`)
+          .set('Authorization', `Bearer ${s11OwnerToken}`)
+          .send({ value: 'maybe' });
+        assert(invalidToggle.status === 400, `${key}: non-boolean value returns 400`);
+        const hide = await request(app)
+          .put(`/api/settings/${key}`)
+          .set('Authorization', `Bearer ${s11OwnerToken}`)
+          .send({ value: false });
+        const readHidden = await request(app)
+          .get(`/api/settings/${key}`)
+          .set('Authorization', `Bearer ${s11CashierAToken}`);
+        assert(
+          hide.status === 200 && readHidden.body?.setting?.value === 'false',
+          `${key}: owner hides the tender and checkout staff see it off`,
+        );
+        await request(app)
+          .put(`/api/settings/${key}`)
+          .set('Authorization', `Bearer ${s11OwnerToken}`)
+          .send({ value: true });
+        assert(getSettingValue(key) === 'true', `${key}: owner shows the tender again`);
+      }
+
       // 3) Concurrent shifts for User A and User B on 2026-11-10
       let shiftAId = 0;
       let shiftBId = 0;

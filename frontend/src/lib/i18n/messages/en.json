@@ -2501,7 +2501,7 @@
     "paymentMethodMerged": "Payment methods merged",
     "paymentMethodName": "Payment method name",
     "paymentMethods": "Payments",
-    "paymentMethodsHint": "Cash, Card, and Loyalty Wallet are always available. Add any other manual payment names used by your restaurant.",
+    "paymentMethodsHint": "Turn Cash, Card, or Loyalty Wallet off to hide it at checkout. Add any other manual payment names used by your restaurant.",
     "percentDownloaded": "{percent}% downloaded",
     "percentMaximum": "Maximum 100%",
     "percentZeroNoLimit": "% (0 = no limit)",

@@ -20,6 +20,7 @@ import { useTranslations, type AppConfig } from 'use-intl';
 import TaxBreakdown from '@/components/pos/TaxBreakdown';
 import toast from 'react-hot-toast';
 import { PAYMENT_METHODS, type CustomPaymentMethod } from '@/lib/payment-methods';
+import { useHiddenBuiltInPayments } from '@/hooks/useHiddenBuiltInPayments';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { useFormatNumber } from '@/hooks/useFormatNumber';
 import { useCurrencyUnitAdapter } from '@/hooks/useCurrencyUnitAdapter';
@@ -135,6 +136,7 @@ export default function PrepaidCheckoutModal({
 
   const [loyaltySettings, setLoyaltySettings] = useState<LoyaltySettings | null>(null);
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const hiddenBuiltIns = useHiddenBuiltInPayments();
   const [walletLoadFailed, setWalletLoadFailed] = useState(false);
   const [walletAmount, setWalletAmount] = useState('');
   const [processing, setProcessing] = useState(false);
@@ -939,6 +941,13 @@ export default function PrepaidCheckoutModal({
           {/* Every method has one compact amount row; clicking its label fills the unallocated balance. */}
           <div className="space-y-2">
             {payments.map((payment, idx) => {
+              if (
+                payment.payment_method_id === undefined &&
+                (payment.method === 'cash' || payment.method === 'card') &&
+                hiddenBuiltIns.has(payment.method) &&
+                !((parseFloat(payment.amount) || 0) > 0)
+              )
+                return null;
               const builtIn = PAYMENT_METHODS.find(
                 (method) =>
                   method.key === payment.method && payment.payment_method_id === undefined,
@@ -1008,70 +1017,73 @@ export default function PrepaidCheckoutModal({
           </div>
 
           {/* Loyalty Wallet Section */}
-          {loyaltySettings?.loyalty_enabled && customer && walletBalance !== null && (
-            <div className="space-y-1">
-              <div className="flex min-h-12">
-                <button
-                  type="button"
-                  disabled={walletBalance <= 0}
-                  onClick={() => {
-                    const allocatedElsewhere = payments.reduce(
-                      (sum, payment) => sum + toStoredUnit(parseFloat(payment.amount) || 0),
-                      0,
-                    );
-                    const maxWalletStored = Math.floor(walletBalance / LOYALTY_REDEMPTION_RATE);
-                    const dueStored = Math.min(
-                      maxWalletStored,
-                      Math.max(0, remaining - allocatedElsewhere),
-                    );
-                    const dueDisplay = toDisplayUnit(dueStored);
-                    setWalletAmount(dueDisplay > 0 ? String(dueDisplay) : '');
-                    setAmountTarget({ kind: 'wallet' });
-                  }}
-                  className={`touch-target w-36 shrink-0 justify-start rounded-s-xl border px-3 gap-2 text-sm font-semibold ${walletAmt > 0 ? 'bg-purple-600 text-white border-purple-600' : 'bg-purple-50 text-purple-800 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/40 disabled:bg-muted disabled:text-muted-foreground disabled:border-border'}`}
-                >
-                  <Wallet size={15} />
-                  <span className="truncate">{t('loyaltyWallet')}</span>
-                </button>
-                <div className="flex flex-1 items-center border border-s-0 border-purple-200 dark:border-purple-800/40 rounded-e-xl bg-card focus-within:ring-2 focus-within:ring-purple-400">
-                  <span className="ps-3 text-muted-foreground text-xs">{inputCurrencyLabel}</span>
-                  <input
-                    type="number"
-                    value={walletAmount}
-                    onFocus={() => setAmountTarget({ kind: 'wallet' })}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      const maxWalletCurrencyStored = Math.floor(
-                        walletBalance / LOYALTY_REDEMPTION_RATE,
-                      );
-                      const maxDisplay = toDisplayUnit(
-                        Math.min(maxWalletCurrencyStored, remaining),
-                      );
-                      const clamped = parseFloat(v) > maxDisplay ? String(maxDisplay) : v;
-                      setWalletAmount(clamped);
-                    }}
-                    placeholder="0.00"
+          {loyaltySettings?.loyalty_enabled &&
+            customer &&
+            walletBalance !== null &&
+            (!hiddenBuiltIns.has('wallet') || walletAmt > 0) && (
+              <div className="space-y-1">
+                <div className="flex min-h-12">
+                  <button
+                    type="button"
                     disabled={walletBalance <= 0}
-                    inputMode="decimal"
-                    className="min-w-0 flex-1 px-2 py-2 text-end text-base font-semibold outline-none rounded-e-xl disabled:bg-muted"
-                    step={inputCurrencyStep}
-                    min="0"
-                    max={toDisplayUnit(
-                      Math.min(Math.floor(walletBalance / LOYALTY_REDEMPTION_RATE), remaining),
-                    )}
-                  />
+                    onClick={() => {
+                      const allocatedElsewhere = payments.reduce(
+                        (sum, payment) => sum + toStoredUnit(parseFloat(payment.amount) || 0),
+                        0,
+                      );
+                      const maxWalletStored = Math.floor(walletBalance / LOYALTY_REDEMPTION_RATE);
+                      const dueStored = Math.min(
+                        maxWalletStored,
+                        Math.max(0, remaining - allocatedElsewhere),
+                      );
+                      const dueDisplay = toDisplayUnit(dueStored);
+                      setWalletAmount(dueDisplay > 0 ? String(dueDisplay) : '');
+                      setAmountTarget({ kind: 'wallet' });
+                    }}
+                    className={`touch-target w-36 shrink-0 justify-start rounded-s-xl border px-3 gap-2 text-sm font-semibold ${walletAmt > 0 ? 'bg-purple-600 text-white border-purple-600' : 'bg-purple-50 text-purple-800 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/40 disabled:bg-muted disabled:text-muted-foreground disabled:border-border'}`}
+                  >
+                    <Wallet size={15} />
+                    <span className="truncate">{t('loyaltyWallet')}</span>
+                  </button>
+                  <div className="flex flex-1 items-center border border-s-0 border-purple-200 dark:border-purple-800/40 rounded-e-xl bg-card focus-within:ring-2 focus-within:ring-purple-400">
+                    <span className="ps-3 text-muted-foreground text-xs">{inputCurrencyLabel}</span>
+                    <input
+                      type="number"
+                      value={walletAmount}
+                      onFocus={() => setAmountTarget({ kind: 'wallet' })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const maxWalletCurrencyStored = Math.floor(
+                          walletBalance / LOYALTY_REDEMPTION_RATE,
+                        );
+                        const maxDisplay = toDisplayUnit(
+                          Math.min(maxWalletCurrencyStored, remaining),
+                        );
+                        const clamped = parseFloat(v) > maxDisplay ? String(maxDisplay) : v;
+                        setWalletAmount(clamped);
+                      }}
+                      placeholder="0.00"
+                      disabled={walletBalance <= 0}
+                      inputMode="decimal"
+                      className="min-w-0 flex-1 px-2 py-2 text-end text-base font-semibold outline-none rounded-e-xl disabled:bg-muted"
+                      step={inputCurrencyStep}
+                      min="0"
+                      max={toDisplayUnit(
+                        Math.min(Math.floor(walletBalance / LOYALTY_REDEMPTION_RATE), remaining),
+                      )}
+                    />
+                  </div>
                 </div>
+                <p className="px-1 text-[11px] text-muted-foreground text-end">
+                  {walletBalance > 0
+                    ? t('pointsApproxValue', {
+                        count: fmtNum(walletBalance),
+                        value: currencyFmt(Math.floor(walletBalance / LOYALTY_REDEMPTION_RATE)),
+                      })
+                    : t('noBalance')}
+                </p>
               </div>
-              <p className="px-1 text-[11px] text-muted-foreground text-end">
-                {walletBalance > 0
-                  ? t('pointsApproxValue', {
-                      count: fmtNum(walletBalance),
-                      value: currencyFmt(Math.floor(walletBalance / LOYALTY_REDEMPTION_RATE)),
-                    })
-                  : t('noBalance')}
-              </p>
-            </div>
-          )}
+            )}
 
           {/* Loyalty Info Strip (staff reference) */}
           {loyaltySettings?.loyalty_enabled && customer && !walletLoadFailed && (

@@ -9,8 +9,10 @@ import { SettingsTabShell } from '@/components/settings/SettingsTabShell';
 import { useTranslations } from 'use-intl';
 import { useFormatDate } from '@/hooks/useFormatDate';
 import {
+  BUILT_IN_PAYMENT_SETTING,
   isBankAccountMethod,
   isQrCodeMethod,
+  type BuiltInPaymentKey,
   type CustomPaymentMethod,
 } from '@/lib/payment-methods';
 
@@ -33,6 +35,11 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
     { key: 'card', labelKey: 'methodCard' },
     { key: 'wallet', labelKey: 'loyaltyWallet' },
   ] as const;
+  const [builtInEnabled, setBuiltInEnabled] = useState<Record<BuiltInPaymentKey, boolean>>({
+    cash: true,
+    card: true,
+    wallet: true,
+  });
   const [methods, setMethods] = useState<CustomPaymentMethod[]>([]);
   const [names, setNames] = useState<Record<number, string>>({});
   const [newName, setNewName] = useState('');
@@ -114,6 +121,35 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
     setSplitChecksEnabled(splitRes.data?.setting?.value === 'true');
     setRequireOpenShift(requireShiftRes.data?.setting?.value === 'true');
     setOneShiftPerStaff(perStaffShiftRes.data?.setting?.value === 'true');
+  };
+
+  useEffect(() => {
+    let active = true;
+    for (const key of Object.keys(BUILT_IN_PAYMENT_SETTING) as BuiltInPaymentKey[]) {
+      api
+        .get(`/settings/${BUILT_IN_PAYMENT_SETTING[key]}`)
+        .then((res) => {
+          if (active)
+            setBuiltInEnabled((current) => ({
+              ...current,
+              [key]: res.data?.setting?.value !== 'false',
+            }));
+        })
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const toggleBuiltIn = async (key: BuiltInPaymentKey, enabled: boolean) => {
+    setBuiltInEnabled((current) => ({ ...current, [key]: enabled }));
+    try {
+      await api.put(`/settings/${BUILT_IN_PAYMENT_SETTING[key]}`, { value: String(enabled) });
+    } catch {
+      setBuiltInEnabled((current) => ({ ...current, [key]: !enabled }));
+      toast.error(t('saveFailed'));
+    }
   };
 
   useEffect(() => {
@@ -212,9 +248,28 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
         <p className="text-sm text-muted-foreground mb-5">{t('paymentMethodsHint')}</p>
         <div className="rounded-lg border border-border divide-y">
           {builtInMethods.map((method) => (
-            <div key={method.key} className="px-3 py-2 flex justify-between text-sm">
-              <span>{tPos(method.labelKey)}</span>
-              <span className="text-xs text-gray-400">{t('builtIn')}</span>
+            <div
+              key={method.key}
+              className="px-3 py-2 flex items-center justify-between gap-3 text-sm"
+            >
+              <span className={builtInEnabled[method.key] ? '' : 'text-muted-foreground'}>
+                {tPos(method.labelKey)}
+              </span>
+              <span className="flex items-center gap-3">
+                <span className="text-xs text-gray-400">{t('builtIn')}</span>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    className="size-5"
+                    aria-label={tPos(method.labelKey)}
+                    disabled={!isAdmin}
+                    checked={builtInEnabled[method.key]}
+                    onChange={(e) => void toggleBuiltIn(method.key, e.target.checked)}
+                    data-testid={`builtin-payment-${method.key}`}
+                  />{' '}
+                  {t('active')}
+                </label>
+              </span>
             </div>
           ))}
         </div>

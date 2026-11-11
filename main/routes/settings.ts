@@ -209,6 +209,9 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   scheduled_orders_enabled: 'false',
   require_open_shift: 'false',
   one_shift_per_staff: 'false',
+  payment_cash_enabled: 'true',
+  payment_card_enabled: 'true',
+  payment_wallet_enabled: 'true',
   // Print language policies (#441) — inherit store language, no second
   // language. Defaults preserve pre-policy behavior for existing tenants.
   [BILL_LANGUAGE_POLICY_KEY]: defaultLanguagePolicySettingJson(),
@@ -2158,6 +2161,9 @@ const ALLOWED_WILDCARD_KEYS = new Set([
   'pos_item_sort',
   'require_open_shift',
   'one_shift_per_staff',
+  'payment_cash_enabled',
+  'payment_card_enabled',
+  'payment_wallet_enabled',
   'auto_lock_minutes',
 ]);
 
@@ -2471,7 +2477,10 @@ router.put(
         req.params.key === 'one_shift_per_staff' ||
         req.params.key === 'card_transaction_id_required' ||
         req.params.key === 'multi_counter_enabled' ||
-        req.params.key === 'scheduled_orders_enabled'
+        req.params.key === 'scheduled_orders_enabled' ||
+        req.params.key === 'payment_cash_enabled' ||
+        req.params.key === 'payment_card_enabled' ||
+        req.params.key === 'payment_wallet_enabled'
       ) {
         if (req.params.key === 'multi_counter_enabled') {
           const callerUser = (req as Request & { user?: { role?: string } }).user;
