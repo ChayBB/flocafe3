@@ -165,7 +165,11 @@ async function verifyOrderAcceptance() {
   inbox.storeEvents([{ id: eventId, kind: 'order.created', payload: { order_id: orderId } }]);
   inbox.openInbox().exec('DROP TABLE order_acceptances; PRAGMA user_version = 1');
   inbox.closeInbox();
-  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 4);
+  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 5);
+  assert.ok(
+    inbox.openInbox().prepare("SELECT 1 FROM sqlite_master WHERE name = 'open_table_qr'").get(),
+    'an upgraded inbox gains the open table QR ledger',
+  );
   assert.equal(
     inbox.openInbox().prepare('SELECT status FROM inbox_events WHERE event_id = ?').get(eventId)
       .status,

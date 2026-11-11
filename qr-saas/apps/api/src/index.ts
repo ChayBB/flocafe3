@@ -155,6 +155,18 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
   addon_groups:t.Optional(AddonGroups),
  }),{minItems:1,maxItems:1000}),
 })})
+.get('/api/v1/connectors/guest-settings',async({request})=>{
+ const scope=await authorizeConnector(request,'catalog.write');
+ if(!scope)return err(401,'unauthorized');
+ const [row]=await sql`SELECT guest_scroll_percent AS scroll_percent FROM branches WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId}`;
+ return row ?? err(404,'branch not found');
+})
+.post('/api/v1/connectors/guest-settings',async({request,body})=>{
+ const scope=await authorizeConnector(request,'catalog.write');
+ if(!scope)return err(401,'unauthorized');
+ const [row]=await sql`UPDATE branches SET guest_scroll_percent=${body.scroll_percent} WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId} RETURNING guest_scroll_percent AS scroll_percent`;
+ return row ?? err(404,'branch not found');
+},{body:t.Object({scroll_percent:t.Integer({minimum:50,maximum:100})})})
 .post('/api/v1/admin/table-sessions',async({request,body})=>{
  if(!isAdmin(request))return err(401,'unauthorized');
  return await createTableSession(body) ?? err(404,'table not found');
@@ -174,9 +186,9 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
              AND c.tenant_id=d.tenant_id AND c.branch_id=d.branch_id AND c.revoked_at IS NULL
          ))`;
   if(!scope)return secret ? err(401,'invalid session') : err(404,'table not found');
-  const [branch]=await tx`SELECT menu_revision FROM branches WHERE tenant_id=${scope.tenant_id} AND id=${scope.branch_id} FOR SHARE`;
+  const [branch]=await tx`SELECT menu_revision,guest_scroll_percent FROM branches WHERE tenant_id=${scope.tenant_id} AND id=${scope.branch_id} FOR SHARE`;
   const items=await tx`SELECT id,name,price_satang,category,addon_groups FROM menu_items WHERE tenant_id=${scope.tenant_id} AND branch_id=${scope.branch_id} AND available=true ORDER BY category,name,id`;
-  return Response.json({items,menu_revision:branch?.menu_revision??null},{headers:{'Cache-Control':'no-store'}});
+  return Response.json({items,menu_revision:branch?.menu_revision??null,scroll_percent:branch?.guest_scroll_percent??null},{headers:{'Cache-Control':'no-store'}});
  });
 })
 .post('/api/v1/orders',async({request,body})=>{

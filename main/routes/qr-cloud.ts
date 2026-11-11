@@ -21,10 +21,11 @@ import {
   startQrCloudConnector,
   testQrCloudConnection,
 } from '../services/qr-cloud/connector';
-import { inboxSummary, importLegacyInbox, InboxError } from '../services/qr-cloud/inbox';
+import { inboxSummary, importLegacyInbox, InboxError, openInbox } from '../services/qr-cloud/inbox';
 import {
   CONNECTOR_EVENT_ID,
   connectorCatalog,
+  connectorGuestSettings,
   manageConnectorTableQr,
   QrCloudClientError,
   readConnectorCapabilities,
@@ -231,6 +232,58 @@ router.post(
   },
 );
 
+function integratedConnectorOptions() {
+  const config = readConfig();
+  if (!config.enabled || config.mode !== 'integrated' || config.cutoverPending) return null;
+  return {
+    config,
+    token: readConnectorSetting(),
+    caPem: readApprovedCa()?.pem,
+    signal: AbortSignal.timeout(config.timeoutMs),
+  };
+}
+
+function scrollPercentOf(value: unknown): number | null | undefined {
+  const percent = (value as { scroll_percent?: unknown } | null)?.scroll_percent;
+  if (percent === null) return null;
+  return Number.isInteger(percent) && (percent as number) >= 50 && (percent as number) <= 100
+    ? (percent as number)
+    : undefined;
+}
+
+router.get('/guest-settings', requirePermission('settings.manage'), async (_req, res) => {
+  try {
+    const options = integratedConnectorOptions();
+    if (!options) return res.status(409).json({ code: 'connector_inactive' });
+    const percent = scrollPercentOf(await connectorGuestSettings(options));
+    if (percent === undefined) return res.status(502).json({ code: 'invalid_guest_settings' });
+    return res.json({ scroll_percent: percent });
+  } catch (error) {
+    return inboxOrderFailure(res, error);
+  }
+});
+
+router.put(
+  '/guest-settings',
+  requirePermission('settings.manage'),
+  testLimiter,
+  async (req, res) => {
+    const requested = scrollPercentOf(req.body);
+    if (requested == null) return res.status(400).json({ code: 'invalid_scroll_percent' });
+    try {
+      const options = integratedConnectorOptions();
+      if (!options) return res.status(409).json({ code: 'connector_inactive' });
+      const saved = scrollPercentOf(
+        await connectorGuestSettings(options, { scroll_percent: requested }),
+      );
+      if (saved !== requested) return res.status(502).json({ code: 'invalid_guest_settings' });
+      return res.json({ scroll_percent: saved });
+    } catch (error) {
+      return inboxOrderFailure(res, error);
+    }
+  },
+);
+
 router.post(
   '/table-qr',
   requirePermission('settings.manage'),
@@ -249,19 +302,19 @@ router.post(
     if (allTables === true && confirmed !== true)
       return res.status(400).json({ code: 'confirmation_required' });
     try {
-      type PosTable = { id: string; number: string };
+      type PosTable = { id: string; number: string; status: string | null };
       const db = getDatabase();
       const tables =
         allTables === true
           ? (db
               .prepare(
-                "SELECT id, number FROM tables WHERE ? = 'close' OR is_active = 1 ORDER BY number, id",
+                "SELECT id, number, status FROM tables WHERE ? = 'close' OR is_active = 1 ORDER BY number, id",
               )
               .all(action) as PosTable[])
           : [
               db
                 .prepare(
-                  "SELECT id, number FROM tables WHERE id = ? AND (? = 'close' OR is_active = 1)",
+                  "SELECT id, number, status FROM tables WHERE id = ? AND (? = 'close' OR is_active = 1)",
                 )
                 .get(tableId, action) as PosTable | undefined,
             ].filter((table): table is PosTable => table !== undefined);
@@ -284,7 +337,12 @@ router.post(
           { config, token, caPem, signal },
           { action, pos_table_id: table.id, name: table.number },
         )) as { closed?: unknown; url?: unknown; expires_at?: unknown } | null;
-        if (action === 'close' && result?.closed === true) return { closed: true };
+        if (action === 'close' && result?.closed === true) {
+          openInbox()
+            .prepare('DELETE FROM open_table_qr WHERE cloud_url = ? AND pos_table_id = ?')
+            .run(config.cloudUrl, table.id);
+          return { closed: true };
+        }
         const url = typeof result?.url === 'string' ? URL.parse(result.url) : null;
         if (
           action !== 'open' ||
@@ -306,6 +364,14 @@ router.post(
           margin: 4,
           errorCorrectionLevel: 'M',
         });
+        openInbox()
+          .prepare(
+            `INSERT INTO open_table_qr (cloud_url, pos_table_id, name, seen_occupied)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (cloud_url, pos_table_id) DO UPDATE SET name = excluded.name,
+               seen_occupied = MAX(open_table_qr.seen_occupied, excluded.seen_occupied), retry_at = 0`,
+          )
+          .run(config.cloudUrl, table.id, table.number, table.status === 'occupied' ? 1 : 0);
         return { data_url, url: url.href, expires_at: result.expires_at };
       }
       if (allTables !== true) return res.json(await apply(tables[0]));

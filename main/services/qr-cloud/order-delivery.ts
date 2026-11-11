@@ -2,6 +2,7 @@ import { getDatabase } from '../../db';
 import { isTerminalItemStatus } from '../../../shared/order-item-status';
 import {
   acknowledgeConnectorOrder,
+  manageConnectorTableQr,
   QrCloudClientError,
   reportConnectorKitchenStatus,
 } from './client';
@@ -124,6 +125,55 @@ export async function processCloudOrderDelivery(config: QrCloudConfig, signal: A
 
   // Kitchen progress is informational for guests; it must never fail order delivery.
   await syncKitchenStatus(config, signal).catch(() => undefined);
+  await closeSettledTableQr(config, signal).catch(() => undefined);
+}
+
+/**
+ * A table's Cloud QR stays open until the bill is settled: once the POS table has been occupied
+ * and is free again, its QR ordering is closed.
+ */
+async function closeSettledTableQr(config: QrCloudConfig, signal: AbortSignal) {
+  const db = openInbox();
+  const rows = db
+    .prepare(
+      'SELECT pos_table_id, name, seen_occupied, retry_at FROM open_table_qr WHERE cloud_url = ?',
+    )
+    .all(config.cloudUrl) as {
+    pos_table_id: string;
+    name: string;
+    seen_occupied: number;
+    retry_at: number;
+  }[];
+  if (!rows.length) return;
+  const pos = getDatabase();
+  for (const row of rows) {
+    if (signal.aborted || readConfig().cloudUrl !== config.cloudUrl) return;
+    const table = pos.prepare('SELECT status FROM tables WHERE id = ?').get(row.pos_table_id) as
+      | { status: string }
+      | undefined;
+    if (table?.status === 'occupied') {
+      if (!row.seen_occupied)
+        db.prepare(
+          'UPDATE open_table_qr SET seen_occupied = 1 WHERE cloud_url = ? AND pos_table_id = ?',
+        ).run(config.cloudUrl, row.pos_table_id);
+      continue;
+    }
+    if ((table && !row.seen_occupied) || row.retry_at > Date.now()) continue;
+    try {
+      await manageConnectorTableQr(
+        { config, token: readConnectorSetting(), caPem: readApprovedCa()?.pem, signal },
+        { action: 'close', pos_table_id: row.pos_table_id, name: row.name },
+      );
+      db.prepare('DELETE FROM open_table_qr WHERE cloud_url = ? AND pos_table_id = ?').run(
+        config.cloudUrl,
+        row.pos_table_id,
+      );
+    } catch {
+      db.prepare(
+        'UPDATE open_table_qr SET retry_at = ? WHERE cloud_url = ? AND pos_table_id = ?',
+      ).run(Date.now() + 60_000, config.cloudUrl, row.pos_table_id);
+    }
+  }
 }
 
 async function syncKitchenStatus(config: QrCloudConfig, signal: AbortSignal) {

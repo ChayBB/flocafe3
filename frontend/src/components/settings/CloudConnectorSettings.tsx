@@ -12,6 +12,7 @@ import { LegacyCloudConnectorImport } from '@/components/settings/LegacyCloudCon
 import { CloudInboxOrders } from '@/components/settings/CloudInboxOrders';
 import { CloudTableQr } from '@/components/settings/CloudTableQr';
 import { CloudCatalogPublish } from '@/components/settings/CloudCatalogPublish';
+import { CloudGuestScroll } from './CloudGuestScroll';
 import { downloadBlob } from '@/lib/download';
 
 /**
@@ -898,6 +899,7 @@ export function CloudConnectorSettings({
           {config.enabled && canManage && (
             <CloudCatalogPublish key={`catalog:${config.cloud_url}`} />
           )}
+          {config.enabled && canManage && <CloudGuestScroll key={`scroll:${config.cloud_url}`} />}
           {config.enabled && canManage && <CloudInboxOrders key={`inbox:${config.cloud_url}`} />}
 
           <section className="space-y-2 rounded-md border border-border p-3 text-sm">

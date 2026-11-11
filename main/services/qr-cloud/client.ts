@@ -252,6 +252,17 @@ export function reportConnectorKitchenStatus(
   return requestConnectorJson(options, '/api/v1/connectors/order-status', JSON.stringify(report));
 }
 
+export function connectorGuestSettings(
+  options: FetchEventsOptions,
+  settings?: { scroll_percent: number },
+): Promise<unknown> {
+  return requestConnectorJson(
+    options,
+    '/api/v1/connectors/guest-settings',
+    settings && JSON.stringify(settings),
+  );
+}
+
 export function readConnectorCapabilities(options: FetchEventsOptions): Promise<unknown> {
   return requestConnectorJson(options, '/api/v1/connectors/capabilities');
 }

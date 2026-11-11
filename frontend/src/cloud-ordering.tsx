@@ -45,6 +45,7 @@ interface SentOrder {
 }
 
 const uuid = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
+const DEFAULT_SCROLL_PERCENT = 87;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const money = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' });
 const assetUrl = (file: string) => new URL(file, import.meta.url).href;
@@ -90,7 +91,7 @@ async function session() {
 
 async function readMenu(
   response: Response,
-): Promise<{ items: CloudMenuItem[]; revision?: string }> {
+): Promise<{ items: CloudMenuItem[]; revision?: string; scrollPercent: number }> {
   if (!response.ok) throw new Error('โหลดเมนูไม่สำเร็จ กรุณาลองอีกครั้ง');
   const data = await response.json();
   if (
@@ -110,6 +111,12 @@ async function readMenu(
   return {
     items: data.items,
     revision: uuid.test(data.menu_revision ?? '') ? data.menu_revision : undefined,
+    scrollPercent:
+      Number.isInteger(data.scroll_percent) &&
+      data.scroll_percent >= 50 &&
+      data.scroll_percent <= 100
+        ? (data.scroll_percent as number)
+        : DEFAULT_SCROLL_PERCENT,
   };
 }
 
@@ -156,6 +163,7 @@ function Ordering() {
   const tCommon = useTranslations('common');
   const tPos = useTranslations('pos');
   const [menu, setMenu] = useState<CloudMenuItem[]>([]);
+  const [scrollPercent, setScrollPercent] = useState(DEFAULT_SCROLL_PERCENT);
   const [snapshot, setSnapshot] = useState<PosMenuPresentation>();
   const [category, setCategory] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -197,6 +205,7 @@ function Ordering() {
         );
         context.current = null;
         setMenu(data.items);
+        setScrollPercent(data.scrollPercent);
         setReady(true);
         setExpired(true);
         setCanReload(true);
@@ -231,6 +240,7 @@ function Ordering() {
       const data = await readMenu(response);
       context.current.revision = data.revision;
       setMenu(data.items);
+      setScrollPercent(data.scrollPercent);
       setReady(true);
       setCanReload(false);
       setExpired(false);
@@ -556,7 +566,7 @@ function Ordering() {
             cartQuantities={quantities}
             searchPlaceholder={t('searchMenu')}
             flat
-            flingScale={0.5}
+            flingScale={scrollPercent / 100}
             scrollSpy
             loopSections
             disabled={disabled}
