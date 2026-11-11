@@ -246,6 +246,11 @@ function verifyPrepaidCheckoutModalDiscountPreservation(): void {
         { key: 'cash', icon: Icon },
         { key: 'card', icon: Icon },
       ],
+      BUILT_IN_PAYMENT_SETTING: {
+        cash: 'payment_cash_enabled',
+        card: 'payment_card_enabled',
+        wallet: 'payment_wallet_enabled',
+      },
     },
     '@/hooks/useFormatCurrency': {
       useFormatCurrency: () => (amount: number) => `฿${amount.toFixed(2)}`,
