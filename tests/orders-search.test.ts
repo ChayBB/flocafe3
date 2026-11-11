@@ -882,6 +882,7 @@ test('FloorplanEditor View order navigates to /orders?table=<id> and OrdersPage 
         name: 'T42',
         capacity: 4,
         status: 'occupied' as const,
+        is_active: true,
         kitchen_station_id: null,
         floor: 'Ground',
         section: 'Main',

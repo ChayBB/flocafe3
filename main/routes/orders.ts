@@ -26,7 +26,6 @@ import {
   utcDayBounds,
   utcTodayDate,
   recordOrderAudit,
-  isKdsEnabled,
   registerOrderSearchFunctions,
 } from '../db';
 import { asyncHandler } from '../middleware/async-handler';
@@ -46,7 +45,6 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { maskNote, readProfanityWords } from '../services/profanity-filter';
 import {
   calculateOrderTotals,
-  completedKdsProjectionCutoff,
   getOrderServeConfirmation,
   recomputeOrderTotals,
   reconcileActiveOrderStatusFromItems,
@@ -708,22 +706,8 @@ router.get(
       const statuses = statusQuery ? statusQuery.split(',') : [];
       const statusIsActive = statuses.length === 1 && statuses[0] === 'active';
       if (boardStatuses === null && (view === 'active' || statusIsActive)) {
-        wheres.push(`orders.id IN (
-          SELECT ao.id FROM orders AS ao
-          WHERE ao.status IN ('pending', 'preparing', 'ready', 'served')
-          UNION ALL
-          SELECT co.id FROM orders AS co
-          WHERE ? = 1
-            AND +co.status = 'completed'
-            AND co.created_at >= ?
-            AND EXISTS (
-              SELECT 1 FROM order_items AS active_item
-              WHERE active_item.order_id = co.id
-                AND active_item.status IN ('pending', 'preparing', 'ready')
-                AND active_item.quantity > 0
-            )
-        )`);
-        params.push(isKdsEnabled() ? 1 : 0, completedKdsProjectionCutoff());
+        // A paid (completed) order leaves the serving list; the KDS keeps any food still owed.
+        wheres.push("orders.status IN ('pending', 'preparing', 'ready', 'served')");
       }
       if (view === 'unpaid') {
         wheres.push("orders.status != 'cancelled'");
