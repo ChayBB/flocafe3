@@ -4162,16 +4162,22 @@ router.patch(
             statusCode: 400,
           });
         }
-        const settledBill = db
+        // Fully paid: a paid bill and nothing still owed, so a part-paid checkout keeps its guards.
+        const fullyPaid = db
           .prepare(
-            `SELECT id FROM bills
-             WHERE order_id = ?
-               AND (payment_status IN ('paid', 'partial', 'partially_paid') OR COALESCE(paid_amount, 0) > 0)
+            `SELECT 1 FROM bills
+             WHERE order_id = ? AND payment_status = 'paid'
+               AND NOT EXISTS (
+                 SELECT 1 FROM bills AS owing
+                 WHERE owing.order_id = bills.order_id
+                   AND (owing.payment_status IN ('partial', 'partially_paid')
+                     OR (COALESCE(owing.payment_status, 'unpaid') = 'unpaid' AND COALESCE(owing.balance, owing.total, 0) > 0))
+               )
              LIMIT 1`,
           )
           .get(req.params.id);
         // A member may join after paying: attach them for history only, leaving totals and bills as paid.
-        if (currentOrder.status === 'completed' || settledBill) {
+        if (currentOrder.status === 'completed' || fullyPaid) {
           if (!customer_id || currentOrder.customer_id) {
             throw Object.assign(
               new Error('A paid order can only gain a member, not change or lose one'),

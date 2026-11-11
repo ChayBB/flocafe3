@@ -167,14 +167,17 @@ export function canLinkMemberToOrder(
 ): boolean {
   if (order.customer || order.customer_id || order.status === 'cancelled') return false;
   if (!isOrderCustomerEditLocked(order)) return true;
-  return (
-    order.status === 'completed' ||
-    getOrderBills(order).some(
-      (bill) =>
-        ['paid', 'partial'].includes(String(bill.payment_status || '')) ||
-        Number(bill.paid_amount || 0) > 0,
-    )
-  );
+  if (order.status === 'completed') return true;
+  const bills = getOrderBills(order);
+  const owing = bills.some((bill) => {
+    const status = String(bill.payment_status || 'unpaid');
+    return (
+      status === 'partial' ||
+      status === 'partially_paid' ||
+      (status === 'unpaid' && Number(bill.balance || 0) > 0)
+    );
+  });
+  return !owing && bills.some((bill) => bill.payment_status === 'paid');
 }
 
 export function isOrderItemEditLocked(

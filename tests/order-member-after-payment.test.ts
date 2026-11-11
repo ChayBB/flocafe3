@@ -117,6 +117,19 @@ async function main() {
       'A paid but not yet closed order accepts a member',
     );
 
+    const partPaid = insertOrder(db, 'served', 'partial');
+    db.prepare('UPDATE bills SET paid_amount = 40, balance = 60 WHERE order_id = ?').run(partPaid);
+    assertEqualOrThrow(
+      (await link(partPaid, 'cust-late')).status,
+      409,
+      'A part-paid order still owing money keeps the normal payment guard',
+    );
+    assertEqualOrThrow(
+      (db.prepare('SELECT customer_id FROM orders WHERE id = ?').get(partPaid) as any).customer_id,
+      null,
+      'The part-paid order is left without a member',
+    );
+
     assertEqualOrThrow(
       (await link(paid, 'cust-other')).status,
       409,
