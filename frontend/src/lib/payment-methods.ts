@@ -21,8 +21,11 @@ export interface CustomPaymentMethod {
   usage_count?: number;
 }
 
+const QR_CODE_METHOD_NAMES = new Set(['qr code', 'พร้อมเพย์', 'promptpay']);
+
+/** A custom method with one of these names collects by the shop's PromptPay QR. */
 export function isQrCodeMethod(name: string | null | undefined): boolean {
-  return (name ?? '').trim().toLowerCase() === 'qr code';
+  return QR_CODE_METHOD_NAMES.has((name ?? '').trim().toLowerCase());
 }
 
 const BANK_ACCOUNT_METHOD_NAMES = new Set([
