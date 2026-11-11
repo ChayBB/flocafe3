@@ -408,7 +408,7 @@ function run(): void {
     );
     assert(
       'default language keeps English labels',
-      text.includes('Invoice #:') && text.includes('TOTAL') && text.includes('Subtotal'),
+      text.includes('Bill # ') && text.includes('TOTAL') && text.includes('Subtotal'),
     );
     // Persian script requires a printer profile with arabicShaping (#437);
     // label selection itself is independent of that capability.
@@ -427,14 +427,14 @@ function run(): void {
         'fa',
       ),
     );
-    assert('fa classic renders Persian invoice title label', faText.includes('شماره صورتحساب:'));
+    assert('fa classic renders Persian bill number label', faText.includes('رسید #'));
     assert('fa classic renders Persian grand total', faText.includes('جمع کل'));
     assert(
       'fa classic renders Persian subtotal (borrowed pos.subtotal)',
       faText.includes('جمع جزء'),
     );
     assert('fa classic localizes cash payment method', faText.includes('نقدی'));
-    assert('fa classic translates table prefix', faText.includes('میز:'));
+    assert('fa classic translates table prefix', faText.includes('میز '));
     const urText = escPosToText(
       formatReceipt(
         buildOrder(),
@@ -450,7 +450,7 @@ function run(): void {
         'ur',
       ),
     );
-    assert('ur classic renders Urdu invoice title label', urText.includes('انوائس نمبر:'));
+    assert('ur classic renders Urdu bill number label', urText.includes('بل #'));
     assert('ur classic renders Urdu grand total', urText.includes('کل رقم'));
     assert('ur classic renders Urdu subtotal', urText.includes('ذیلی رقم'));
     assert('ur classic localizes cash payment method', urText.includes('نقد'));
@@ -491,7 +491,7 @@ function run(): void {
           false,
           'xx',
         ),
-      ).includes('Invoice #:'),
+      ).includes('Bill # '),
     );
     for (const locale of localeCodes) {
       const localized = renderClassicReceiptViaDocument(

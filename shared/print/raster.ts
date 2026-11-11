@@ -21,7 +21,7 @@ export interface RasterTextLayout {
   readonly kind: RasterLayoutKind;
   readonly columns: readonly {
     readonly text: string;
-    readonly align: 'left' | 'right';
+    readonly align: 'left' | 'right' | 'center';
     readonly widthRatio?: number;
   }[];
 }
@@ -350,7 +350,7 @@ export function isRasterRenderRequest(value: unknown): value is RasterRenderRequ
             !!column &&
             typeof column.text === 'string' &&
             column.text.length <= 16_000 &&
-            (column.align === 'left' || column.align === 'right') &&
+            (column.align === 'left' || column.align === 'right' || column.align === 'center') &&
             (column.widthRatio === undefined ||
               (typeof column.widthRatio === 'number' &&
                 Number.isFinite(column.widthRatio) &&

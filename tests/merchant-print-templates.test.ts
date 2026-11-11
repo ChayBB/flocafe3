@@ -56,7 +56,6 @@ import {
   renderClassicReceiptViaDocument,
   renderBillDocumentToClassicLines,
 } from '../main/printers/document-classic';
-import { formatClassicReceiptLegacy } from './helpers/legacy-thermal-oracle';
 import { escPosToText, formatReceipt } from '../main/printers/thermal';
 import {
   parseBillTemplateSelection,
@@ -754,10 +753,11 @@ async function runLifecycle(): Promise<void> {
         false,
         'en',
       );
-      const nativeBytes = formatClassicReceiptLegacy(
+      const nativeBytes = formatReceipt(
         order,
         bill,
         business,
+        'classic',
         cols,
         false,
         false,

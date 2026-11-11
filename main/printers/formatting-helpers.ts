@@ -138,8 +138,9 @@ export function itemRows(
   _language: string = 'en',
   fractionDigits: number = 2,
   capabilities?: ThermalPrinterCapabilities,
+  qtyColumn: { width: number; align: 'left' | 'center' } = { width: 4, align: 'left' },
 ): string[] {
-  const qtyW = 4;
+  const qtyW = qtyColumn.width;
   const productName = normalizeThermalText(String(item.product_name ?? ''), capabilities);
   const amount = formatCurrency(item.total, prefix, locale, trimDecimals, fractionDigits);
   const trimmedAmount = normalizeFinancialValue(amount);
@@ -147,7 +148,7 @@ export function itemRows(
   assertFinancialValueFitsColumns(rawQty, cols, 'item quantity');
   assertFinancialValueFitsColumns(trimmedAmount, cols, 'item amount');
 
-  const qty = padToDisplayCells(rawQty, qtyW);
+  const qty = padToDisplayCells(rawQty, qtyW, qtyColumn.align);
   const maxLine1Name = Math.max(1, nameLen - 1);
   const inlineFits =
     nameLen >= 2 &&

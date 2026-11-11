@@ -1467,7 +1467,7 @@ console.log('\n✅ Test 5: Tax-specific labels fall back to the default template
   const buf = formatReceipt(fixtureOrder, fixtureBill, fixtureBusiness, 'detailed', 48, true);
   const text = buf.toString('utf8');
 
-  assert('legacy detailed label renders the default classic receipt', text.includes('Invoice #:'));
+  assert('legacy detailed label renders the default classic receipt', text.includes('Bill # '));
   assert(
     'legacy detailed label does not render the GST-style tax invoice',
     !text.includes('TAX INVOICE'),
@@ -1508,11 +1508,11 @@ console.log('\n✅ Test 5b: Template labels normalize to built-in backend templa
     true,
   ).toString('utf8');
 
-  assert('Classic label renders classic template', classic.includes('Invoice #:'));
+  assert('Classic label renders classic template', classic.includes('Bill # '));
   assert('Compact label renders compact template', compact.includes('Bill #:'));
   assert(
     'Detailed (Tax) label falls back to classic until supplied by a tax pack/plugin',
-    detailed.includes('Invoice #:') && !detailed.includes('TAX INVOICE'),
+    detailed.includes('Bill # ') && !detailed.includes('TAX INVOICE'),
   );
   assert(
     'only classic and compact are distinct built-ins',

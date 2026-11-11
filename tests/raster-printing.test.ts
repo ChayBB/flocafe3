@@ -562,7 +562,10 @@ async function run(): Promise<void> {
   );
   assert.equal(
     longFinancialRequests.some(
-      (request) => request.text === 'جمع کل $2.34' && request.style === 'bold',
+      (request) =>
+        request.text === 'جمع کل $2.34' &&
+        request.style === 'double-height' &&
+        request.styles?.includes('bold'),
     ),
     true,
   );
@@ -763,7 +766,8 @@ async function run(): Promise<void> {
   );
   const grandTotalRequests = financialRequests.filter((request) => request.text === 'جمع کل $0.00');
   assert.equal(grandTotalRequests.length, 1);
-  assert.equal(grandTotalRequests[0].style, 'bold');
+  assert.equal(grandTotalRequests[0].style, 'double-height');
+  assert.ok(grandTotalRequests[0].styles.includes('bold'));
   const pointsRequest = financialRequests.find((request) => request.text === 'نقاط مستردة -5 pts');
   assert.deepEqual(pointsRequest?.layout?.columns, [
     { text: 'نقاط مستردة', align: 'left', widthRatio: 30 / 42 },
@@ -2386,6 +2390,51 @@ async function run(): Promise<void> {
   assert.equal(ratioRequests[0].layout.columns[0].widthRatio, 18 / 32);
   assert.equal(ratioRequests[0].layout.columns[1].widthRatio, 4 / 32);
   assert.equal(ratioRequests[0].layout.columns[2].widthRatio, 10 / 32);
+
+  // The classic item header shares the rows' column grid: qty centred, amount flush right.
+  const gridGroups: any[] = [];
+  const gridDocument = {
+    ...compactDocument,
+    blocks: compactDocument.blocks.map((block) =>
+      block.kind === 'item-table'
+        ? {
+            ...block,
+            rows: [
+              {
+                direction: 'ltr' as const,
+                name: { text: 'Espresso', direction: 'ltr' as const },
+                quantity: 2,
+                amount: 5,
+                addons: [],
+                specialInstructions: null,
+              },
+            ],
+          }
+        : block,
+    ),
+  };
+  renderBillDocumentToClassicLines(gridDocument as any, {
+    columns: 42,
+    language: 'en',
+    locale: 'en-US',
+    currencySymbol: '$',
+    trimDecimals: false,
+    useUnicode: false,
+    arabicShaping: false,
+    cutMode: 'full',
+    capabilities: caps,
+    rasterGroups: gridGroups,
+  });
+  const headerGrid = gridGroups.find((group) => group.groupId === 'item-table-header');
+  const rowGrid = gridGroups.find((group) => group.groupId === 'item-table-row-0');
+  assert.deepEqual(
+    headerGrid?.sourceLayouts?.[0]?.columns.map((column: any) => [column.align, column.widthRatio]),
+    rowGrid?.sourceLayouts?.[0]?.columns.map((column: any) => [column.align, column.widthRatio]),
+  );
+  assert.deepEqual(
+    headerGrid.sourceLayouts[0].columns.map((column: any) => column.align),
+    ['left', 'center', 'right'],
+  );
 
   // Verify itemRows on narrow 32-column printer never exceeds 32 columns
   const narrow32Item = itemRows(

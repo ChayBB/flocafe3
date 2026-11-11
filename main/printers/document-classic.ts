@@ -35,7 +35,6 @@ import {
   formatCurrency,
   itemAmountWidth,
   itemRows,
-  itemNameWidth,
   normalizeThermalText,
   normalizePrintLanguage,
   maskPhoneOnReceipt,
@@ -323,15 +322,20 @@ function classicBannerLines(label: SemanticLabel, context: ThermalLayoutContext)
   );
 }
 
+/** The quantity column is wide enough for its header label plus one cell of gap. */
+function classicQtyWidth(block: ItemTableBlock, capabilities?: ThermalPrinterCapabilities): number {
+  const qtyLabel = normalizeThermalText(labelOf(block.header.quantity), capabilities);
+  return Math.min(8, Math.max(4, displayCellWidth(qtyLabel) + 1));
+}
+
 /** Column header row, composed from the document's own header labels. */
 function classicItemHeader(
   block: ItemTableBlock,
   nameLen: number,
+  qtyW: number,
   amtLen: number,
-  language: string,
   capabilities?: ThermalPrinterCapabilities,
 ): string {
-  const qtyW = 4;
   const itemLabel = normalizeThermalText(labelOf(block.header.item), capabilities);
   const qtyLabel = normalizeThermalText(labelOf(block.header.quantity), capabilities);
   const amountLabel = normalizeThermalText(labelOf(block.header.amount), capabilities);
@@ -340,9 +344,9 @@ function classicItemHeader(
       ? value
       : truncateToDisplayCells(value, length);
   const item = padToDisplayCells(fit(itemLabel, nameLen), nameLen);
-  const qty = padToDisplayCells(fit(qtyLabel, qtyW), qtyW);
+  const qty = padToDisplayCells(fit(qtyLabel, qtyW), qtyW, 'center');
   const amount = fit(amountLabel, Math.max(1, amtLen - 1));
-  return item + qty + ' '.repeat(Math.max(0, amtLen - displayCellWidth(amount))) + amount;
+  return item + qty + padToDisplayCells(amount, amtLen, 'right');
 }
 
 /** Map a PrintDocument onto classic token-line layout. */
@@ -465,10 +469,13 @@ export function renderBillDocumentToClassicLines(
       trimDecimals,
       fractionDigits,
     );
+    // The grand total prints tall, matching the browser bill's large total row.
     appendFinancial(
       target,
-      financialRows(label, value, cols, options.language, options.capabilities),
-      true,
+      financialRows(label, value, cols, options.language, options.capabilities).map(
+        (line) => `{BOLD}{DOUBLE_HEIGHT}${line}{/DOUBLE_HEIGHT}{/BOLD}`,
+      ),
+      false,
       label,
       value,
     );
@@ -580,42 +587,26 @@ export function renderBillDocumentToClassicLines(
           segment.sourceLines.main.push(block.name.text);
           segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
         }
-        // Contact/tax facts are header-owned content; they travel with
-        // the header block's position in reordered compositions.
-        const footerLines: string[] = [];
-        const footerSourceLines: string[] = [];
-        if (block.address) {
-          footerLines.push(block.address.text);
-          footerSourceLines.push(block.address.text);
-        }
-        if (block.phone && block.phoneLabel) {
-          footerLines.push(normalize(labelOf(block.phoneLabel) + ': ' + block.phone.text));
-          footerSourceLines.push(labelOf(block.phoneLabel) + ': ' + block.phone.text);
-        }
-        if (block.taxId) {
-          footerLines.push(normalize(labelOf(block.taxId.label) + ': ' + block.taxId.value.text));
-          footerSourceLines.push(labelOf(block.taxId.label) + ': ' + block.taxId.value.text);
-        }
-        if (block.instagramHandle) {
-          footerLines.push(block.instagramHandle.text);
-          footerSourceLines.push(block.instagramHandle.text);
-        }
-        if (footerLines.length > 0) {
-          segment.post.push(dash);
-          const footerControlLines: string[] = [dash];
-          for (const footerLine of footerLines) {
-            const start = segment.post.length;
-            pushCenteredWrapped(
-              segment.post,
-              footerLine,
-              cols,
-              options.language,
-              options.capabilities,
-            );
-            footerControlLines.push(segment.post[start] ?? '');
-          }
-          segment.sourceLines.post.push(dash, ...footerSourceLines);
-          segment.sourceControlLines.post.push(...footerControlLines);
+        // Contact/tax facts sit under the store name, as on the browser bill, and travel
+        // with the header block's position in reordered compositions.
+        const contactLines: string[] = [];
+        if (block.address) contactLines.push(block.address.text);
+        if (block.phone && block.phoneLabel)
+          contactLines.push(labelOf(block.phoneLabel) + ': ' + block.phone.text);
+        if (block.taxId)
+          contactLines.push(labelOf(block.taxId.label) + ': ' + block.taxId.value.text);
+        if (block.instagramHandle) contactLines.push(block.instagramHandle.text);
+        for (const contactLine of contactLines) {
+          const start = segment.main.length;
+          pushCenteredWrapped(
+            segment.main,
+            normalize(contactLine),
+            cols,
+            options.language,
+            options.capabilities,
+          );
+          segment.sourceLines.main.push(contactLine);
+          segment.sourceControlLines.main.push(segment.main[start] ?? '');
         }
         break;
       }
@@ -694,46 +685,37 @@ export function renderBillDocumentToClassicLines(
           segment.sourceLines.main.push(labelOf(block.title));
           segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
         }
-        segment.main.push(
-          '{CENTER}' +
-            normalize(labelOf(block.invoiceNumberLabel) + ' ' + block.invoiceNumber.text) +
-            '{/CENTER}',
-        );
-        segment.sourceLines.main.push(
-          labelOf(block.invoiceNumberLabel) + ' ' + block.invoiceNumber.text,
-        );
-        segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
-        const date = parseDbTimestamp(block.timestamp.text);
-        segment.main.push(
-          '{CENTER}' +
-            date.toLocaleDateString(options.locale + '-u-nu-latn', tzOptions) +
-            ' ' +
-            date.toLocaleTimeString(options.locale + '-u-nu-latn', tzOptions) +
-            '{/CENTER}',
-        );
-        segment.sourceLines.main.push(
-          date.toLocaleDateString(options.locale + '-u-nu-latn', tzOptions) +
-            ' ' +
-            date.toLocaleTimeString(options.locale + '-u-nu-latn', tzOptions),
-        );
-        segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
+        // Bill number, table and date read left-aligned under labels, as on the browser bill.
+        const pushMeta = (text: string): void => {
+          const start = segment.main.length;
+          pushWrapped(segment.main, normalize(text), cols, options.language, options.capabilities);
+          segment.sourceLines.main.push(text);
+          segment.sourceControlLines.main.push(segment.main[start] ?? '');
+        };
+        pushMeta(labelOf(block.billNumberLabel) + ' ' + block.invoiceNumber.text);
         if (block.table) {
-          segment.main.push(
-            '{CENTER}' +
-              truncateShapedLine(
-                block.table.label.primary.replace('{name}', block.table.name.text),
-                cols,
-                options.arabicShaping,
-                options.language,
-                options.capabilities,
-              ) +
-              '{/CENTER}',
-          );
-          segment.sourceLines.main.push(
-            block.table.label.primary.replace('{name}', block.table.name.text),
-          );
-          segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
+          const tableLabel = block.table.label.primary
+            .replace('{name}', '')
+            .replace(/[:：]\s*$/, '')
+            .trim();
+          pushMeta(tableLabel + ' ' + block.table.name.text);
         }
+        const date = parseDbTimestamp(block.timestamp.text);
+        const dateLocale = options.locale + '-u-nu-latn';
+        const clock = { ...tzOptions, hour: '2-digit', minute: '2-digit' } as const;
+        const namedMonth = date.toLocaleString(dateLocale, {
+          ...clock,
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        });
+        // A month name in Arabic script cannot print without shaping, so those locales stay numeric.
+        const printedDate = /[؀-ۿ]/.test(namedMonth)
+          ? date.toLocaleDateString(dateLocale, tzOptions) +
+            ' ' +
+            date.toLocaleTimeString(dateLocale, clock)
+          : namedMonth;
+        pushMeta(labelOf(block.dateLabel) + ' ' + printedDate);
         segment.main.push(dash);
         segment.sourceLines.main.push(dash);
         segment.sourceControlLines.main.push(dash);
@@ -754,18 +736,46 @@ export function renderBillDocumentToClassicLines(
           cols,
           fractionDigits,
         );
-        const nameLen = itemNameWidth(cols, amtLen);
-        segment.main.push(
-          classicItemHeader(block, nameLen, amtLen, options.language, options.capabilities),
-        );
-        segment.sourceLines.main.push(
-          [
-            labelOf(block.header.item),
-            labelOf(block.header.quantity),
-            labelOf(block.header.amount),
-          ].join(' '),
-        );
-        segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
+        const qtyW = classicQtyWidth(block, options.capabilities);
+        const nameLen = Math.max(1, cols - qtyW - amtLen);
+        // Header and rows share one column grid so quantities centre under the quantity label
+        // and amounts end flush under the amount label, in text and raster alike.
+        const columnLayout = (
+          name: string,
+          quantity: string,
+          amount: string,
+        ): RasterTextLayout => ({
+          kind: 'financial-item',
+          columns: [
+            { text: name, align: 'left', widthRatio: nameLen / cols },
+            { text: quantity, align: 'center', widthRatio: qtyW / cols },
+            { text: amount, align: 'right', widthRatio: amtLen / cols },
+          ],
+        });
+        const headerStart = segment.main.length;
+        const headerLine = classicItemHeader(block, nameLen, qtyW, amtLen, options.capabilities);
+        segment.main.push(headerLine);
+        segment.groups.push({
+          groupId: 'item-table-header',
+          start: headerStart,
+          count: 1,
+          sourceLines: [
+            [
+              labelOf(block.header.item),
+              labelOf(block.header.quantity),
+              labelOf(block.header.amount),
+            ].join(' '),
+          ],
+          sourceControlLines: [headerLine],
+          sourceLayouts: [
+            columnLayout(
+              labelOf(block.header.item),
+              labelOf(block.header.quantity),
+              labelOf(block.header.amount),
+            ),
+          ],
+          financialSourceLines: [false],
+        });
         segment.main.push(dash);
         segment.sourceLines.main.push(dash);
         segment.sourceControlLines.main.push(dash);
@@ -782,6 +792,7 @@ export function renderBillDocumentToClassicLines(
             options.language,
             fractionDigits,
             options.capabilities,
+            { width: qtyW, align: 'center' },
           );
           segment.financialRanges.main.push({ start, count: rowLines.length });
           segment.main.push(...rowLines);
@@ -795,14 +806,7 @@ export function renderBillDocumentToClassicLines(
           const sourceLines = [`${row.name.text} ${row.quantity} ${amount}`];
           const sourceControlLines = [rowLines[0] ?? ''];
           const sourceLayouts: Array<RasterTextLayout | undefined> = [
-            {
-              kind: 'financial-item',
-              columns: [
-                { text: row.name.text, align: 'left', widthRatio: nameLen / cols },
-                { text: String(row.quantity), align: 'left', widthRatio: 4 / cols },
-                { text: amount.trimStart(), align: 'right', widthRatio: amtLen / cols },
-              ],
-            },
+            columnLayout(row.name.text, String(row.quantity), amount.trimStart()),
           ];
           const financialSourceLines = [true];
           for (const addon of row.addons) {
@@ -1085,9 +1089,26 @@ export function renderBillDocumentToClassicLines(
             ],
           });
         };
+        if (block.lines.length > 0) {
+          segment.main.push(
+            '{CENTER}{BOLD}' + normalize(labelOf(block.heading)) + '{/BOLD}{/CENTER}',
+          );
+          segment.sourceLines.main.push(labelOf(block.heading));
+          segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
+          segment.sourceLayouts.main.push(undefined);
+        }
+        // A Thai bill reads the paid amount as net paid, as the browser bill does, naming the
+        // method only when the bill was split; the print catalog has no net-paid label for other
+        // languages, so they keep the method name.
+        const netPaid = options.language === 'th' ? 'ยอดชำระสุทธิ' : null;
+        const split = block.lines.length > 1;
         for (const line of block.lines) {
-          for (const row of paymentDisplayRows(line)) {
-            pushPaymentRow(paymentLabel(row.label), row.amount);
+          for (const [index, row] of paymentDisplayRows(line).entries()) {
+            const label = paymentLabel(row.label);
+            pushPaymentRow(
+              index > 0 || !netPaid ? label : split ? `${netPaid} (${label})` : netPaid,
+              row.amount,
+            );
           }
         }
         break;
@@ -1140,6 +1161,9 @@ export function renderBillDocumentToClassicLines(
           segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
         }
         if (block.footerNote) {
+          segment.post.push(dash);
+          segment.sourceLines.post.push(dash);
+          segment.sourceControlLines.post.push(dash);
           const start = segment.post.length;
           pushCenteredWrapped(
             segment.post,

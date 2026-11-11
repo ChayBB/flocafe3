@@ -1165,8 +1165,8 @@ function run(): void {
       const headingAt = classic.indexOf(HEADING);
       const storeAt = classic.indexOf(business.address);
       warn(
-        headingAt > 0 && storeAt > headingAt,
-        'backend/classic: the customer block is headed and precedes the store address',
+        storeAt > 0 && headingAt > storeAt,
+        'backend/classic: the customer block is headed and follows the store address',
       );
     }
 
@@ -1427,7 +1427,8 @@ function run(): void {
         cutMode: 'full' as const,
       });
       const docText = escPosToText(docResult.data);
-      warn(legacyText === docText, `${label}: identical output to legacy classic`);
+      // Classic now prints the browser-bill layout, so the legacy oracle is a content reference only.
+      warn(legacyText.length > 0, `${label}: legacy classic oracle still renders`);
       const withSubtotal = { subtotal: 1220 };
       expectContent(
         label,
