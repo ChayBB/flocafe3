@@ -6,12 +6,18 @@ const path = require('path');
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-printer-width-refresh-'));
 
 Module._load = function (request: string, parent: unknown, isMain: boolean) {
-  if (request === 'electron') return { app: { isPackaged: true, getPath: () => testDir, getVersion: () => 'test' } };
+  if (request === 'electron')
+    return { app: { isPackaged: true, getPath: () => testDir, getVersion: () => 'test' } };
   return originalLoad.apply(this, arguments as any);
 };
 
 const { initDatabase, getDatabase, closeDatabase, now } = require('../main/db');
-const { initPrinter, prepareReceipt, escPosToText } = require('../main/printers/thermal');
+const {
+  initPrinter,
+  prepareReceipt,
+  escPosToText,
+  resolveBillPrinterContext,
+} = require('../main/printers/thermal');
 
 let passed = 0;
 let failed = 0;
@@ -35,7 +41,9 @@ async function main() {
   `).run(now(), now());
 
   await initPrinter();
-  db.prepare("UPDATE printers SET paper_width = 'cols-48', updated_at = ? WHERE id = 'receipt-printer'").run(now());
+  db.prepare(
+    "UPDATE printers SET paper_width = 'cols-48', updated_at = ? WHERE id = 'receipt-printer'",
+  ).run(now());
 
   const prepared = prepareReceipt(
     {
@@ -48,10 +56,29 @@ async function main() {
     'classic',
   );
 
-  assert(prepared.columns === 48, 'invoice preparation reads the updated printer width after startup');
+  // Bills sit inside side margins, so a 48-column printer prints fewer bill columns.
+  const expectedColumns = resolveBillPrinterContext({
+    id: 'receipt-printer',
+    connection_type: 'usb',
+    paper_width: 'cols-48',
+  }).columns;
+  assert(
+    expectedColumns > 32,
+    `a 48-column printer still gives a wider bill than 32 (${expectedColumns})`,
+  );
+  assert(
+    prepared.columns === expectedColumns,
+    `invoice preparation reads the updated printer width after startup (got ${prepared.columns}, expected ${expectedColumns})`,
+  );
   const preview = escPosToText(prepared.data);
-  assert(preview.split('\n').some((line: string) => line === '-'.repeat(48)), 'invoice separators use the updated 48-column width');
-  assert(!preview.split('\n').some((line: string) => line === '-'.repeat(32)), 'invoice does not retain the stale 32-column width');
+  assert(
+    preview.split('\n').some((line: string) => line.trim() === '-'.repeat(expectedColumns)),
+    `invoice separators use the updated ${expectedColumns}-column width`,
+  );
+  assert(
+    !preview.split('\n').some((line: string) => line === '-'.repeat(32)),
+    'invoice does not retain the stale 32-column width',
+  );
 
   closeDatabase();
   fs.rmSync(testDir, { recursive: true, force: true });
@@ -61,7 +88,9 @@ async function main() {
 
 main().catch((error: Error) => {
   console.error(error);
-  try { closeDatabase(); } catch {}
+  try {
+    closeDatabase();
+  } catch {}
   fs.rmSync(testDir, { recursive: true, force: true });
   process.exit(1);
 });
