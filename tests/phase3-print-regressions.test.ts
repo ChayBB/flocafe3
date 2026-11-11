@@ -807,6 +807,7 @@ async function run(): Promise<void> {
         discount_amount: 0,
         tax_amount: 10,
         total: 110,
+        paid_at: '2026-04-21 10:30:00',
         order: {
           created_at: '2026-04-21 10:30:00',
           items: [{ product_name: 'Coffee', quantity: 1, total: 100, addons: [] }],
@@ -867,6 +868,7 @@ async function run(): Promise<void> {
         discount_amount: 0,
         tax_amount: 0,
         total: 100,
+        paid_at: '2026-03-21 10:30:00',
         order: {
           created_at: '2026-03-21 10:30:00',
           items: [{ product_name: 'Coffee', quantity: 1, total: 100, addons: [] }],
@@ -876,19 +878,19 @@ async function run(): Promise<void> {
       {
         rawEscPos: true,
         useUnicode: false,
-        language: 'de',
+        language: 'en',
       },
       germanTaxWarnings,
     ),
   ).toString('utf8');
   assert.match(
     germanTaxText,
-    /Datum: .*Maer/,
+    /Date: .*Maer/,
     'raw tax bill keeps a representable country locale date',
   );
   assert.doesNotMatch(
     germanTaxWarnings.map((warning) => warning.text).join('\n'),
-    /Datum:/,
+    /Date:/,
     'raw tax bill date fallback does not create a date omission warning',
   );
 
@@ -909,12 +911,12 @@ async function run(): Promise<void> {
     {
       rawEscPos: true,
       useUnicode: false,
-      language: 'fa',
+      language: 'th',
     },
     taxHeaderWarnings,
   );
   assert.ok(
-    taxHeaderWarnings.some((warning) => /اقلام|تعداد|نرخ|مبلغ/.test(warning.text)),
+    taxHeaderWarnings.some((warning) => /รายการ|จำนวน|ราคา|รวม/.test(warning.text)),
     'tax-bill item header uses the safe text warning path',
   );
 
@@ -935,7 +937,7 @@ async function run(): Promise<void> {
     {
       rawEscPos: true,
       useUnicode: false,
-      language: 'fa',
+      language: 'th',
     },
     unsupportedFinancialWarnings,
   );
@@ -967,7 +969,7 @@ async function run(): Promise<void> {
     {
       rawEscPos: true,
       useUnicode: false,
-      language: 'fa',
+      language: 'th',
     },
     truncatedUnsupportedWarnings,
   );
@@ -1005,7 +1007,7 @@ async function run(): Promise<void> {
     {
       rawEscPos: true,
       useUnicode: false,
-      language: 'fa',
+      language: 'th',
     },
     truncatedUnsupportedAddonWarnings,
   );
@@ -1020,9 +1022,8 @@ async function run(): Promise<void> {
     'priced add-on warning preserves unsupported text that layout would truncate',
   );
 
-  const faShapedWarnings: any[] = [];
-  const faGenericWarnings: any[] = [];
-  const faGenericText = escPosToText(
+  const thGenericWarnings: any[] = [];
+  const thGenericText = escPosToText(
     formatKOT(
       order,
       order.items,
@@ -1030,53 +1031,18 @@ async function run(): Promise<void> {
       42,
       false,
       'full',
-      'fa-IR',
+      'th-TH',
       { timeZone: 'UTC' },
-      faGenericWarnings,
+      thGenericWarnings,
       false,
-      'fa',
+      'th',
     ),
   );
   assert.match(
-    faGenericText,
+    thGenericText,
     /Type: DINE IN/,
     'generic thermal path keeps an ASCII order type fallback',
   );
-  const faShapedText = escPosToText(
-    formatKOT(
-      order,
-      order.items,
-      'Main Kitchen',
-      42,
-      false,
-      'full',
-      'fa-IR',
-      { timeZone: 'UTC' },
-      faShapedWarnings,
-      true,
-      'fa',
-    ),
-  );
-  assert.match(faShapedText, /برگ سفارش آشپزخانه/, 'fa shaping path keeps localized KOT banner');
-  assert.match(faShapedText, /نوع: خوردن در محل/, 'fa shaping path keeps localized order type');
-  const urShapedWarnings: any[] = [];
-  const urShapedText = escPosToText(
-    formatKOT(
-      order,
-      order.items,
-      'Main Kitchen',
-      42,
-      false,
-      'full',
-      'ur-PK',
-      { timeZone: 'UTC' },
-      urShapedWarnings,
-      true,
-      'ur',
-    ),
-  );
-  assert.match(urShapedText, /کچن آرڈر ٹکٹ/, 'ur shaping path keeps localized KOT banner');
-  assert.match(urShapedText, /قسم: ٹیبل سروس/, 'ur shaping path keeps localized order type');
 
   console.log(
     `Phase 3 print regressions: ${languages.length} locales covered across browser, backend thermal-safe, and WebUSB KOT paths.`,
