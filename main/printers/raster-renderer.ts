@@ -205,13 +205,13 @@ export class ChromiumRasterRenderer {
     this.ipc.removeListener('flo:raster-ready', this.onReady);
     this.ipc.removeListener('flo:raster-result', this.onResult);
     this.surface.removeListener('closed', this.onSurfaceClosed);
+    // On 'closed' the window is already destroyed and reading its webContents throws.
+    if (this.surface.isDestroyed()) return;
     this.surface.webContents.removeListener('did-fail-load', this.onLoadFailure);
     this.surface.webContents.removeListener('render-process-gone', this.onRenderProcessGone);
-    if (!this.surface.isDestroyed()) {
-      try {
-        this.surface.close();
-      } catch {}
-    }
+    try {
+      this.surface.close();
+    } catch {}
   }
 
   async render(request: unknown): Promise<RasterRenderResult> {

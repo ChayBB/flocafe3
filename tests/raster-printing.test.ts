@@ -2104,6 +2104,36 @@ async function run(): Promise<void> {
     if (originalRasterTimeout === undefined) delete process.env.RASTER_RENDER_TIMEOUT_MS;
     else process.env.RASTER_RENDER_TIMEOUT_MS = originalRasterTimeout;
   }
+  {
+    // Electron destroys the window before 'closed' fires; its webContents then throws on access.
+    let closedSurfaceDestroyed = false;
+    const closingSurface = new EventEmitter() as EventEmitter & {
+      webContents: typeof webContents;
+      isDestroyed: () => boolean;
+      close: () => void;
+    };
+    Object.defineProperty(closingSurface, 'webContents', {
+      get: () => {
+        if (closedSurfaceDestroyed) throw new TypeError('Object has been destroyed');
+        return webContents;
+      },
+    });
+    closingSurface.isDestroyed = () => closedSurfaceDestroyed;
+    closingSurface.close = () => undefined;
+    const closingRenderer = new ChromiumRasterRenderer({
+      timeoutMs: 100,
+      ipc: ipc as any,
+      windowFactory: () => closingSurface as any,
+    });
+    ipc.emit('flo:raster-ready', { sender: webContents });
+    const pendingRender = closingRenderer.render(request);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    closedSurfaceDestroyed = true;
+    assert.doesNotThrow(() => closingSurface.emit('closed'));
+    const closedResult = await pendingRender;
+    assert.equal(closedResult.ok, false, 'a render pending when the surface closes fails');
+    assert.ok(closingRenderer.isDestroyed());
+  }
   const renderer = new ChromiumRasterRenderer({
     timeoutMs: 100,
     ipc: ipc as any,
