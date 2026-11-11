@@ -346,6 +346,8 @@ async function runTests() {
     tax_amount: 2672.73,
     discount_amount: 0,
     points_earned: 154,
+    // A paid bill prints its payment time, so the receipt date stays fixed across runs.
+    paid_at: '2026-08-20 12:30:00',
     order: {
       id: 201,
       order_number: 'ORD-101',
