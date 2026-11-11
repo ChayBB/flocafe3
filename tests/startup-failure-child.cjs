@@ -418,6 +418,11 @@ Module._load = function (request, parent, isMain) {
       probeBackendHealth: async () => serverRunning && kdsRunning && serverAppRunning,
     };
   if (request === './ipc') return { registerIpcHandlers() {} };
+  if (request === './services/qr-cloud/connector')
+    return {
+      startQrCloudConnector() {},
+      shutdownQrCloudConnector: async () => {},
+    };
   if (request === './services/whatsapp')
     return {
       initFromDb() {},
