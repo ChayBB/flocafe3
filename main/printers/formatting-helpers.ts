@@ -290,6 +290,32 @@ export function financialRows(
   return [safeLabel, padToDisplayCells(stackedValue, cols, 'right')];
 }
 
+/**
+ * One row with `left` wrapping on the left and `right` kept whole on the right of its first line;
+ * when the right text leaves no room it drops to its own right-aligned line.
+ */
+export function splitRowLines(
+  left: string,
+  right: string,
+  cols: number,
+  capabilities?: ThermalPrinterCapabilities,
+): string[] {
+  const safeCols = Math.max(1, cols);
+  const raster =
+    capabilities?.raster.enabled === true &&
+    (!isThermalTextRepresentable(left, capabilities) ||
+      !isThermalTextRepresentable(right, capabilities));
+  // Raster rows are laid out by the renderer from the row's source layout.
+  if (raster) return [left + ' ' + right];
+  const rightWidth = displayCellWidth(right);
+  const leftWidth = safeCols - rightWidth - 1;
+  if (leftWidth < Math.min(12, displayCellWidth(left))) {
+    return [...wrapText(left, safeCols), padToDisplayCells(right, safeCols, 'right')];
+  }
+  const [first = '', ...rest] = wrapText(left, leftWidth);
+  return [padToDisplayCells(first, leftWidth) + ' ' + right, ...rest];
+}
+
 export function taxBreakdownRows(
   title: string,
   rate: number | string | null | undefined,
@@ -558,6 +584,8 @@ export interface RasterLineUnit {
   readonly unit: RasterSemanticUnit;
 }
 
+const FONT_A_CELL_DOTS = 12;
+
 export function buildEscPos(
   lines: string[],
   _useUnicode: boolean = false,
@@ -799,6 +827,8 @@ export function buildEscPos(
     }
 
     buf.push(0x1b, 0x61, center ? 0x01 : 0x00);
+    const indent = center ? 0 : Math.floor((capabilities.sideMarginDots ?? 0) / FONT_A_CELL_DOTS);
+    if (indent > 0) buf.push(0x1b, 0x21, 0x00, ...Array<number>(indent).fill(0x20));
 
     let mode = 0;
     if (lineDH) mode |= 0x10;

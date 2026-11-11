@@ -1298,3 +1298,55 @@ test('frontend WebUSB byte encoders apply capabilities.textSize across 58mm and 
     }
   }
 });
+
+test('bill on 80 mm paper keeps a 4.5 mm margin each side, padding images and indenting text', async () => {
+  const { resolveBillPrinterContext } = await import('../main/printers/thermal');
+  const { buildEscPos } = await import('../main/printers/formatting-helpers');
+  const { encodeRasterUnits } = await import('../shared/print/raster');
+  for (const paper_width of ['80mm', 'cols-42']) {
+    const context = resolveBillPrinterContext({ paper_width, connection_type: 'network' });
+    assert.equal(context.columns, 42);
+    assert.equal(context.capabilities.raster.widthDots, 504);
+    assert.equal(context.capabilities.sideMarginDots, 36);
+  }
+  const { capabilities } = resolveBillPrinterContext({ paper_width: '80mm' });
+  const text = buildEscPos(['{INIT}', 'Total', '{CENTER}Thanks{/CENTER}'], false, { capabilities });
+  assert.ok(text.includes(Buffer.from([0x1b, 0x21, 0x00, 0x20, 0x20, 0x20])));
+  assert.equal(text.indexOf(Buffer.from('   Thanks')), -1);
+  if (capabilities.raster.enabled) {
+    const pixels = new Uint8Array(504).fill(1);
+    const bytes = encodeRasterUnits(
+      [
+        {
+          unitId: 'u',
+          financial: false,
+          complete: true,
+          bands: [{ widthDots: 504, heightDots: 1, pixels }],
+        },
+      ],
+      capabilities,
+    );
+    // GS v 0 header: 576 dots = 72 bytes wide, 36 blank dots then 504 black on each row.
+    assert.deepEqual([...bytes.subarray(0, 8)], [0x1d, 0x76, 0x30, 0x00, 72, 0, 1, 0]);
+    assert.equal(bytes[8], 0x00);
+    assert.equal(bytes[12], 0x0f);
+  }
+  const narrow = resolveBillPrinterContext({ paper_width: '58mm', connection_type: 'network' });
+  assert.equal(narrow.capabilities.sideMarginDots, undefined);
+  assert.equal(narrow.columns, resolvePrinterContext({ paper_width: '58mm' }).columns);
+});
+
+test('bill number and date share one row, the date on the right', async () => {
+  const { splitRowLines } = await import('../main/printers/formatting-helpers');
+  assert.deepEqual(splitRowLines('Bill # INV-1', 'Date 11 Nov 2026, 10:35', 42), [
+    'Bill # INV-1' + ' '.repeat(42 - 12 - 23) + 'Date 11 Nov 2026, 10:35',
+  ]);
+  const wrapped = splitRowLines('Bill # INV-20261111-0001', 'Date 11 Nov 2026, 10:35', 42);
+  assert.equal(wrapped[0].length, 42);
+  assert.ok(wrapped[0].endsWith(' Date 11 Nov 2026, 10:35'));
+  assert.ok(wrapped.join(' ').includes('INV-20261111-0001'));
+  assert.deepEqual(splitRowLines('Bill # INV-1', 'Date 11 Nov 2026, 10:35', 32), [
+    'Bill # INV-1',
+    ' '.repeat(9) + 'Date 11 Nov 2026, 10:35',
+  ]);
+});

@@ -1055,10 +1055,11 @@ export async function insertBillPaymentQr(
   const amount = Number(Number(total).toFixed(2));
   const target = amount > 0 ? resolvePaymentQrTarget('promptpay') : null;
   if (!target) return data;
-  const { profile, columns, capabilities } = resolvePrinterContext(printer);
+  const { profile, columns, capabilities } = resolveBillPrinterContext(printer);
   const qr = buildQrRasterBytes(
     buildPromptPayPayload(target, amount),
-    capabilities.raster?.widthDots ?? (columns <= 32 ? 384 : 576),
+    (capabilities.raster?.widthDots ?? (columns <= 32 ? 384 : 576)) +
+      2 * (capabilities.sideMarginDots ?? 0),
     capabilities.raster?.maxBandHeight ?? 200,
   );
   const qrLine = `{RAW_BYTES:${Buffer.from(qr).toString('base64')}}`;
@@ -2229,6 +2230,39 @@ export function resolvePrinterContext(
   return { profile, columns, capabilities };
 }
 
+/** Bills on 80 mm paper keep 4.5 mm (36 dots at 8 dots/mm) clear on each side; 58 mm has no room. */
+const BILL_SIDE_MARGIN_DOTS = 36;
+const BILL_MARGIN_MIN_HEAD_DOTS = 576;
+const FONT_A_DOTS = 12;
+
+/**
+ * The printer context for a bill: the layout narrows to leave {@link BILL_SIDE_MARGIN_DOTS} on each
+ * side of the paper and `capabilities.sideMarginDots` centres it.
+ */
+export function resolveBillPrinterContext(
+  printer: any,
+  arabicShapingOverride?: boolean,
+): PrinterContext {
+  const context = resolvePrinterContext(printer, arabicShapingOverride);
+  const headDots =
+    context.capabilities.raster.widthDots ||
+    dotsForPaperWidth(String(printer?.paper_width || context.profile.defaultPaperWidth || ''));
+  if (!headDots || headDots < BILL_MARGIN_MIN_HEAD_DOTS) return context;
+  const baseColumns = getColumnsForPrinter(printer, context.profile);
+  const printableDots = Math.min(baseColumns * FONT_A_DOTS, headDots - 2 * BILL_SIDE_MARGIN_DOTS);
+  if (printableDots <= 0) return context;
+  const textSize = normalizePrinterTextSize(printer?.text_size);
+  return {
+    profile: context.profile,
+    columns: layoutColumnsForTextSize(Math.floor(printableDots / FONT_A_DOTS), textSize),
+    capabilities: {
+      ...context.capabilities,
+      raster: { ...context.capabilities.raster, widthDots: printableDots },
+      sideMarginDots: Math.floor((headDots - printableDots) / 2),
+    },
+  };
+}
+
 /** The operating system's printer to send to: the chosen device, else the label for older printers. */
 export function osPrinterName(printer: { name?: string; device_name?: string | null }): string {
   return printer.device_name || printer.name || '';
@@ -2364,7 +2398,10 @@ export function prepareReceipt(
     };
   }
 
-  const { profile, columns, capabilities } = resolvePrinterContext(printer, arabicShapingOverride);
+  const { profile, columns, capabilities } = resolveBillPrinterContext(
+    printer,
+    arabicShapingOverride,
+  );
   const warnings: PrintWarning[] = [];
   const data = formatReceipt(
     order,
@@ -2785,7 +2822,10 @@ async function rasterizeReceiptIfEnabled(
   language: string | undefined,
   additionalLanguage: string | undefined,
 ): Promise<ReturnType<typeof prepareReceipt>> {
-  const { profile, capabilities } = resolvePrinterContext(prepared.printer, arabicShapingOverride);
+  const { profile, capabilities } = resolveBillPrinterContext(
+    prepared.printer,
+    arabicShapingOverride,
+  );
   if (!rasterCapabilityEnabled(capabilities)) return prepared;
   const document = receiptDocumentLines(
     order,

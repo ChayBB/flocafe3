@@ -145,6 +145,19 @@ export function validateRasterBand(
   if (!Number.isSafeInteger(expectedLength)) throw new Error('Raster dimensions are too large');
 }
 
+/** Widens a band with `margin` white dots on each side. */
+export function padRasterBand(band: RasterBand, margin: number): RasterBand {
+  if (margin <= 0) return band;
+  const widthDots = band.widthDots + 2 * margin;
+  const pixels = new Uint8Array(widthDots * band.heightDots);
+  for (let y = 0; y < band.heightDots; y += 1)
+    pixels.set(
+      band.pixels.subarray(y * band.widthDots, (y + 1) * band.widthDots),
+      y * widthDots + margin,
+    );
+  return { widthDots, heightDots: band.heightDots, pixels };
+}
+
 /** Encode exactly one validated band using GS v 0, m=0 (normal density). */
 export function encodeGsV0Band(
   band: RasterBand,
@@ -214,7 +227,12 @@ export function encodeRasterUnits(
           `Raster width ${band.widthDots} does not match profile width ${capabilities.raster.widthDots}`,
         );
       }
-      parts.push(encodeGsV0Band(band, capabilities.raster.maxBandHeight));
+      parts.push(
+        encodeGsV0Band(
+          padRasterBand(band, capabilities.sideMarginDots ?? 0),
+          capabilities.raster.maxBandHeight,
+        ),
+      );
     }
   }
   return concatBytes(parts);

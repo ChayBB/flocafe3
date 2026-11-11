@@ -47,6 +47,11 @@ export interface ThermalPrinterCapabilities {
   readonly raster: ThermalRasterCapabilities;
   /** Per-printer text enlargement; absent means normal. */
   readonly textSize?: PrinterTextSize;
+  /**
+   * Blank paper kept on each side of the print, in dots: images are padded with white and text
+   * lines are indented, since printers apply the GS L margin to text but not always to images.
+   */
+  readonly sideMarginDots?: number;
 }
 
 export const GENERIC_THERMAL_CAPABILITIES: ThermalPrinterCapabilities = {

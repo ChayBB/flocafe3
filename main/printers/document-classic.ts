@@ -42,6 +42,7 @@ import {
   pushCenteredWrapped,
   pushWrapped,
   resolveCurrencyPrefix,
+  splitRowLines,
   taxBreakdownRows,
   truncate,
   truncateShapedLine,
@@ -566,7 +567,10 @@ export function renderBillDocumentToClassicLines(
           block.logoRaster &&
           (logoCapabilities === undefined || rasterCapabilityEnabled(logoCapabilities))
         ) {
-          const widthDots = logoCapabilities?.raster?.widthDots ?? (cols <= 32 ? 384 : 576);
+          // The logo spans the whole paper and centres itself, so it skips the side margin.
+          const widthDots =
+            (logoCapabilities?.raster?.widthDots ?? (cols <= 32 ? 384 : 576)) +
+            2 * (logoCapabilities?.sideMarginDots ?? 0);
           const maxBandHeight = logoCapabilities?.raster?.maxBandHeight ?? 200;
           const bands = getLogoRasterBands(block.logoRaster, widthDots, maxBandHeight);
           if (bands.length > 0) {
@@ -675,17 +679,22 @@ export function renderBillDocumentToClassicLines(
       }
       case 'document-meta': {
         const segment = segmentOf('document-meta');
-        segment.main.push(dash);
-        segment.sourceLines.main.push(dash);
-        segment.sourceControlLines.main.push(dash);
+        const pushPlain = (line: string, source: string): void => {
+          segment.main.push(line);
+          segment.sourceLines.main.push(source);
+          segment.sourceControlLines.main.push(line);
+          segment.sourceLayouts.main.push(undefined);
+        };
+        pushPlain(dash, dash);
         const defaultTitle =
           block.title.conceptId === 'print.taxInvoiceTitle'
             ? printLabel(options.language, 'print.taxInvoiceTitle')
             : printLabel(options.language, 'print.invoiceTitle');
         if (labelOf(block.title) !== defaultTitle) {
-          segment.main.push('{CENTER}' + normalize(labelOf(block.title)) + '{/CENTER}');
-          segment.sourceLines.main.push(labelOf(block.title));
-          segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
+          pushPlain(
+            '{CENTER}' + normalize(labelOf(block.title)) + '{/CENTER}',
+            labelOf(block.title),
+          );
         }
         // Bill number, table and date read left-aligned under labels, as on the browser bill.
         const pushMeta = (text: string): void => {
@@ -693,15 +702,8 @@ export function renderBillDocumentToClassicLines(
           pushWrapped(segment.main, normalize(text), cols, options.language, options.capabilities);
           segment.sourceLines.main.push(text);
           segment.sourceControlLines.main.push(segment.main[start] ?? '');
+          segment.sourceLayouts.main.push(undefined);
         };
-        pushMeta(labelOf(block.billNumberLabel) + ' ' + block.invoiceNumber.text);
-        if (block.table) {
-          const tableLabel = block.table.label.primary
-            .replace('{name}', '')
-            .replace(/[:：]\s*$/, '')
-            .trim();
-          pushMeta(tableLabel + ' ' + block.table.name.text);
-        }
         const date = parseDbTimestamp(block.timestamp.text);
         const dateLocale = options.locale + '-u-nu-latn';
         const clock = { ...tzOptions, hour: '2-digit', minute: '2-digit' } as const;
@@ -717,10 +719,36 @@ export function renderBillDocumentToClassicLines(
             ' ' +
             date.toLocaleTimeString(dateLocale, clock)
           : namedMonth;
-        pushMeta(labelOf(block.dateLabel) + ' ' + printedDate);
-        segment.main.push(dash);
-        segment.sourceLines.main.push(dash);
-        segment.sourceControlLines.main.push(dash);
+        // The date shares the bill-number row on the right. When both do not fit, the label keeps
+        // the date's row and the bill number moves whole to the next line, never split mid-number.
+        const billLabel = labelOf(block.billNumberLabel);
+        const billNumberText = billLabel + ' ' + block.invoiceNumber.text;
+        const dateText = labelOf(block.dateLabel) + ' ' + printedDate;
+        const fitsOneRow =
+          displayCellWidth(billNumberText) + 1 + displayCellWidth(dateText) <= cols;
+        const rowLeft = fitsOneRow ? billNumberText : billLabel;
+        const rowStart = segment.main.length;
+        segment.main.push(
+          ...splitRowLines(normalize(rowLeft), normalize(dateText), cols, options.capabilities),
+        );
+        segment.sourceLines.main.push(rowLeft + ' ' + dateText);
+        segment.sourceControlLines.main.push(segment.main[rowStart] ?? '');
+        segment.sourceLayouts.main.push({
+          kind: 'financial-summary',
+          columns: [
+            { text: rowLeft, align: 'left' },
+            { text: dateText, align: 'right' },
+          ],
+        });
+        if (!fitsOneRow) pushMeta(block.invoiceNumber.text);
+        if (block.table) {
+          const tableLabel = block.table.label.primary
+            .replace('{name}', '')
+            .replace(/[:：]\s*$/, '')
+            .trim();
+          pushMeta(tableLabel + ' ' + block.table.name.text);
+        }
+        pushPlain(dash, dash);
         break;
       }
       case 'item-table': {

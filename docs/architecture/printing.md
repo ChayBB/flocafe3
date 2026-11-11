@@ -412,6 +412,17 @@ and `whole-receipt`, which rasterizes the entire receipt and must be opted into 
 caller.
 A Z report whose labels the code page cannot hold takes the mixed raster path in printZReport.
 
+### Bill side margin
+
+Bills on an 80 mm head (576 dots) print inside a 4.5 mm (36-dot) margin on each side:
+`resolveBillPrinterContext()` narrows the layout to 504 dots (42 columns) and sets
+`capabilities.sideMarginDots`. The margin is drawn, not commanded, because printers such as the
+Xprinter apply `GS L` to text but not to `GS v 0` images: `encodeRasterUnits()` pads every band with
+white on both sides, and `buildEscPos()` indents each non-centred text line with spaces. The logo
+and PromptPay QR span the full head width and centre themselves. 58 mm bills and all other
+documents keep the full width. In the classic bill the date sits on the bill-number row, right
+aligned; when both do not fit, the bill number moves whole to the next line.
+
 ### The diagnostic probe is not reachable from the UI
 
 `buildRasterDiagnosticBands()` in `shared/print/raster.ts` builds a banded diagnostic pattern for
