@@ -147,6 +147,13 @@ import {
 } from './formatting-helpers';
 import { clockNow } from '../lib/clock';
 import { enqueuePrintJob, networkPrinterKey, osPrinterKey } from './print-queue';
+import {
+  findPaperStatus,
+  networkPrintPolicy,
+  PAPER_STATUS_REQUEST,
+  PRINTER_OUT_OF_PAPER_DETAIL,
+  type PaperStatus,
+} from './network-status';
 
 export {
   type PrintWarning,
@@ -5241,7 +5248,53 @@ export async function printViaNetwork(
   data: Buffer,
   signal?: AbortSignal,
 ): Promise<DispatchResult> {
-  return enqueuePrintJob(networkPrinterKey(ip, port), () => sendViaNetwork(ip, port, data, signal));
+  return enqueuePrintJob(networkPrinterKey(ip, port), () =>
+    sendViaNetworkWithRetry(ip, port, data, signal),
+  );
+}
+
+// A busy printer refuses or drops new connections while it prints; none of these reach the paper.
+const RETRYABLE_NETWORK_ERRORS = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ETIMEDOUT',
+  'EPIPE',
+]);
+
+type NetworkSendResult = DispatchResult & { retryable?: boolean };
+
+/** Retries a job only while none of its bytes were sent, so a retry can never print a ticket twice. */
+async function sendViaNetworkWithRetry(
+  ip: string,
+  port: number,
+  data: Buffer,
+  signal?: AbortSignal,
+): Promise<DispatchResult> {
+  const delays = networkPrintPolicy.retryDelaysMs;
+  for (let attempt = 0; ; attempt++) {
+    const { retryable, ...result } = await sendViaNetwork(ip, port, data, signal);
+    if (result.ok || !retryable || attempt >= delays.length || signal?.aborted) {
+      if (!result.ok && attempt > 0) {
+        result.detail = `${result.detail} (after ${attempt + 1} attempts)`;
+      }
+      return result;
+    }
+    console.warn(
+      `[Printer] ${ip}:${port} did not take the job (${result.detail}); trying again in ${delays[attempt]} ms`,
+    );
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(done, delays[attempt]);
+      function done() {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      }
+      signal?.addEventListener('abort', done, { once: true });
+    });
+  }
 }
 
 async function sendViaNetwork(
@@ -5249,29 +5302,32 @@ async function sendViaNetwork(
   port: number,
   data: Buffer,
   signal?: AbortSignal,
-): Promise<DispatchResult> {
+): Promise<NetworkSendResult> {
   return new Promise((resolve) => {
     const client = new net.Socket();
     let settled = false;
     let connected = false;
+    let dataStarted = false;
     let timer: NodeJS.Timeout | null = null;
+    let statusTimer: NodeJS.Timeout | null = null;
 
     const onAbort = (): void => {
       if (timer) clearTimeout(timer);
       client.destroy();
       finish({ ok: false, detail: 'Print cancelled during shutdown' });
     };
-    const finish = (result: DispatchResult): void => {
+    const finish = (result: NetworkSendResult): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (statusTimer) clearTimeout(statusTimer);
       signal?.removeEventListener('abort', onAbort);
-      resolve(result);
+      resolve({ ...result, retryable: !result.ok && !dataStarted && result.retryable === true });
     };
 
-    client.connect(port, ip, () => {
-      connected = true;
-      client.setTimeout(NETWORK_PRINT_WRITE_IDLE_TIMEOUT_MS);
+    const sendData = (): void => {
+      if (settled) return;
+      dataStarted = true;
       // For small payloads (typical text receipts <4KB), write directly in a single pass.
       if (data.length <= NETWORK_PRINT_CHUNK_SIZE) {
         client.write(data, () => {
@@ -5317,12 +5373,53 @@ async function sendViaNetwork(
       };
 
       sendNextChunk();
+    };
+
+    // An out-of-paper printer still accepts bytes and may print them once a roll goes in, so the
+    // ticket is held back here and kept for a manual reprint instead.
+    const checkPaperThenSend = (): void => {
+      const timeoutMs = networkPrintPolicy.statusTimeoutMs;
+      if (timeoutMs <= 0) return sendData();
+      let answered = false;
+      const onStatus = (status: PaperStatus | null): void => {
+        if (answered || settled) return;
+        answered = true;
+        if (statusTimer) clearTimeout(statusTimer);
+        client.removeListener('data', onData);
+        if (status === 'paper_out') {
+          client.destroy();
+          finish({
+            ok: false,
+            detail: PRINTER_OUT_OF_PAPER_DETAIL,
+            failureClass: 'needs_attention',
+          });
+          return;
+        }
+        sendData();
+      };
+      const onData = (chunk: Buffer): void => {
+        const status = findPaperStatus(chunk);
+        if (status) onStatus(status);
+      };
+      client.on('data', onData);
+      statusTimer = setTimeout(() => onStatus(null), timeoutMs);
+      client.write(PAPER_STATUS_REQUEST);
+    };
+
+    client.connect(port, ip, () => {
+      connected = true;
+      client.setTimeout(NETWORK_PRINT_WRITE_IDLE_TIMEOUT_MS);
+      checkPaperThenSend();
     });
 
-    client.on('error', (err) => {
+    client.on('error', (err: NodeJS.ErrnoException) => {
       console.error(`[Printer] Network error: ${err.message}`);
       client.destroy();
-      finish({ ok: false, detail: `Network error: ${err.message}` });
+      finish({
+        ok: false,
+        detail: `Network error: ${err.message}`,
+        retryable: RETRYABLE_NETWORK_ERRORS.has(String(err.code)),
+      });
     });
 
     client.setTimeout(NETWORK_PRINT_CONNECT_TIMEOUT_MS, () => {
@@ -5332,6 +5429,7 @@ async function sendViaNetwork(
         detail: connected
           ? `Timed out writing to ${ip}:${port}`
           : `Timed out connecting to ${ip}:${port}`,
+        retryable: !connected,
       });
     });
     signal?.addEventListener('abort', onAbort, { once: true });

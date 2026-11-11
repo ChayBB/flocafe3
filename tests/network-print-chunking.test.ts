@@ -8,6 +8,10 @@ import {
   NETWORK_PRINT_CONNECT_TIMEOUT_MS,
   NETWORK_PRINT_WRITE_IDLE_TIMEOUT_MS,
 } from '../main/printers/thermal';
+import { networkPrintPolicy } from '../main/printers/network-status';
+
+// These cases are about chunking; the paper status check is covered in kot-print-resilience.
+networkPrintPolicy.statusTimeoutMs = 0;
 
 class MockSocket extends EventEmitter {
   public writtenChunks: Buffer[] = [];

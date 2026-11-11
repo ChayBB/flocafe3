@@ -206,15 +206,17 @@ export interface UseKdsConnectionOptions {
   enabled: boolean;
 }
 
-/** An emergency call staff sent, or a kitchen ticket that did not print; every display shows it. */
+/** An emergency call staff sent, a kitchen ticket that did not print, or its printer being ready again. */
 export interface KdsAlert {
   id: string;
-  kind: 'emergency' | 'kot_unprinted';
+  kind: 'emergency' | 'kot_unprinted' | 'kot_ready';
   message: string;
   table: string | null;
   sent_by: string | null;
-  /** The missing kitchen ticket a `kot_unprinted` alert is about. */
+  /** The missing kitchen ticket a `kot_unprinted` or `kot_ready` alert is about. */
   ref?: string | null;
+  /** Why the ticket did not print: `paper_out`, `needs_attention`, `offline`, `timeout`, `error`. */
+  reason?: string | null;
   created_at: string;
 }
 

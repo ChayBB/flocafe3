@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import {
   ArrowLeftRight,
   Ban,
@@ -15,7 +15,12 @@ import { useTranslations } from 'use-intl';
 import { KdsBellButton } from '@/components/kds/KdsBellButton';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import type { KdsMessage } from '@/lib/kds-messages';
+import {
+  getKdsKotPrompt,
+  getServerKdsKotPrompt,
+  subscribeKdsMessages,
+  type KdsMessage,
+} from '@/lib/kds-messages';
 
 const ICONS = {
   move: ArrowLeftRight,
@@ -31,6 +36,13 @@ const ICONS = {
  * stay here until someone taps to acknowledge them; a kitchen ticket that did not print opens a
  * choice to print it again or drop it. The bell button sits at its end when shown.
  */
+const KOT_REASON_KEYS = {
+  paper_out: 'kotReasonPaperOut',
+  needs_attention: 'kotReasonNeedsAttention',
+  offline: 'kotReasonOffline',
+  timeout: 'kotReasonOffline',
+} as const;
+
 export function KdsMessageBar({
   messages,
   onDismiss,
@@ -55,6 +67,24 @@ export function KdsMessageBar({
     setFailed(false);
     setKot(message);
   };
+  const kotPrompt = useSyncExternalStore(
+    subscribeKdsMessages,
+    getKdsKotPrompt,
+    getServerKdsKotPrompt,
+  );
+  // A prompt from before this bar mounted was already offered.
+  const [promptSeen, setPromptSeen] = useState(() => getKdsKotPrompt()?.nonce ?? null);
+  if (kotPrompt && kotPrompt.nonce !== promptSeen && !printing) {
+    const prompted = messages.find((message) => message.id === kotPrompt.id);
+    setPromptSeen(kotPrompt.nonce);
+    if (prompted) openKot(prompted);
+  }
+  // The notice can turn ready while its dialog is open.
+  const shown = kot ? (messages.find((message) => message.id === kot.id) ?? kot) : null;
+  const reasonKey =
+    shown?.reason && shown.reason in KOT_REASON_KEYS
+      ? KOT_REASON_KEYS[shown.reason as keyof typeof KOT_REASON_KEYS]
+      : undefined;
   const reprint = async () => {
     if (!kot) return;
     setPrinting(true);
@@ -151,9 +181,21 @@ export function KdsMessageBar({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <PrinterX size={20} className="text-pink-500" />
-              {kot?.text}
+              {shown?.text}
             </DialogTitle>
           </DialogHeader>
+          {shown?.ready && !failed ? (
+            <p data-testid="kds-kot-ready" className="text-sm font-medium text-emerald-700">
+              {t('kotPrinterReady')}
+            </p>
+          ) : (
+            reasonKey &&
+            !failed && (
+              <p data-testid="kds-kot-reason" className="text-sm text-muted-foreground">
+                {t(reasonKey)}
+              </p>
+            )
+          )}
           {failed && (
             <p data-testid="kds-kot-failed" className="text-sm text-red-600">
               {t('kotReprintFailed')}

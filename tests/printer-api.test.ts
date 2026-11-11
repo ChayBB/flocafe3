@@ -912,7 +912,8 @@ async function runTests() {
         text += chunk.toString('latin1');
       });
       socket.on('close', () => {
-        received.push(text);
+        // Each job opens with the DLE EOT 4 paper status request before its data.
+        received.push(text.replace(/^/, ''));
         open--;
       });
     });

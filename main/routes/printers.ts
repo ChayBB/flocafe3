@@ -88,6 +88,7 @@ import { getHttpRequestSignal } from '../shutdown';
 import {
   clearUnprintedKot,
   dismissUnprintedKot,
+  findUnprintedKot,
   listUnprintedKots,
   recordUnprintedKot,
 } from '../services/unprinted-kots';
@@ -1493,17 +1494,44 @@ export async function printOrderKot(
     let success = true;
     const warnings: NonNullable<Awaited<ReturnType<typeof printKOTDetailed>>['warnings']> = [];
     let failure: Awaited<ReturnType<typeof printKOTDetailed>> | null = null;
-    const kotSourceItems = (Array.isArray(items) ? items : orderItems).filter((item: any) =>
-      isKotItemPending(item?.status),
+    const retryStation = typeof body.retryStation === 'string' ? body.retryStation : null;
+    // A reprint covers only the items whose ticket failed; the rest already came out.
+    const retryEntry = retryStation ? findUnprintedKot(order.id, retryStation) : undefined;
+    const retryIds = retryEntry?.item_ids.length ? new Set(retryEntry.item_ids) : null;
+    const kotSourceItems = (Array.isArray(items) ? items : orderItems).filter(
+      (item: any) =>
+        isKotItemPending(item?.status) && (!retryIds || retryIds.has(Number(item?.id))),
     );
 
     const separate = isKotPrintSeparate();
     const tickets = (ticketItems: any[]) =>
       separate ? ticketItems.map((item) => [item]) : [ticketItems];
-    const stationFailures = new Map<string, string | null>();
-    const noteTicket = (station: string, result: Awaited<ReturnType<typeof printKOTDetailed>>) => {
-      if (!result.ok) stationFailures.set(station, result.detail ?? null);
-      else if (!stationFailures.has(station)) stationFailures.set(station, '');
+    type StationOutcome = {
+      failure: Awaited<ReturnType<typeof printKOTDetailed>> | null;
+      failedIds: number[];
+      printedIds: number[];
+      printer: any;
+    };
+    const stationOutcomes = new Map<string, StationOutcome>();
+    const noteTicket = (
+      station: string,
+      ticketItems: any[],
+      ticketPrinter: any,
+      result: Awaited<ReturnType<typeof printKOTDetailed>>,
+    ) => {
+      const outcome = stationOutcomes.get(station) ?? {
+        failure: null,
+        failedIds: [],
+        printedIds: [],
+        printer: ticketPrinter,
+      };
+      const ids = ticketItems.map((item) => Number(item?.id)).filter(Number.isFinite);
+      if (result.ok) outcome.printedIds.push(...ids);
+      else {
+        outcome.failure ??= result;
+        outcome.failedIds.push(...ids);
+      }
+      stationOutcomes.set(station, outcome);
     };
 
     if (stationName) {
@@ -1519,13 +1547,12 @@ export async function printOrderKot(
           arabicShapingOverride,
           kotLanguage,
         );
-        noteTicket(station, result);
+        noteTicket(station, ticket, printer, result);
         success = success && result.ok;
         warnings.push(...(result.warnings || []));
         if (!result.ok && !failure) failure = result;
       }
     } else {
-      const retryStation = typeof body.retryStation === 'string' ? body.retryStation : null;
       const groups = routeItemsToStations(db, kotSourceItems).filter(
         (g) => g.items.length > 0 && (!retryStation || g.stationName === retryStation),
       );
@@ -1542,25 +1569,39 @@ export async function printOrderKot(
           arabicShapingOverride,
           kotLanguage,
         );
-        noteTicket(group.stationName, result);
+        noteTicket(group.stationName, group.items, group.printer || printer, result);
         success = success && result.ok;
         warnings.push(...(result.warnings || []));
         if (!result.ok && !failure) failure = result;
       }
     }
 
-    for (const [station, detail] of stationFailures) {
-      if (detail === '') {
-        clearUnprintedKot(order.id, station);
-      } else {
+    for (const [station, outcome] of stationOutcomes) {
+      if (outcome.printedIds.length > 0) {
+        clearUnprintedKot(order.id, station, outcome.printedIds);
+      }
+      if (outcome.failure) {
         recordUnprintedKot({
           orderId: order.id,
           orderNumber: order.order_number,
           table: order.table?.name ?? null,
           station,
-          detail,
+          detail: outcome.failure.detail ?? null,
+          failureClass: outcome.failure.failureClass ?? null,
+          itemIds: outcome.failedIds,
+          printer:
+            outcome.printer?.connection_type === 'network' && outcome.printer.ip_address
+              ? {
+                  ip: String(outcome.printer.ip_address),
+                  port: Number(outcome.printer.port) || 9100,
+                }
+              : null,
         });
       }
+    }
+    // Nothing left to print for a reprinted entry (the kitchen started those items) settles it.
+    if (retryEntry && success && kotSourceItems.length === 0) {
+      clearUnprintedKot(order.id, retryEntry.station);
     }
 
     if (success) {

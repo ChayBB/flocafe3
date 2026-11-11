@@ -19,6 +19,10 @@ export interface KdsMessage {
   speech?: string;
   /** The missing kitchen ticket behind a `kot_unprinted` notice. */
   ref?: string;
+  /** Why that ticket did not print. */
+  reason?: string;
+  /** Its printer can print again (paper loaded, back online). */
+  ready?: boolean;
   at: string;
 }
 
@@ -171,6 +175,36 @@ export function cancelKdsTakeawayMessages(cancelled: KdsMessage[]): KdsMessage[]
   });
   if (changed.length > 0) setKdsMessages(next);
   return changed;
+}
+
+/**
+ * Marks the notice for a missing ticket as ready to print again, adding it back if this display
+ * no longer has it, and asks the message bar to open its reprint choice.
+ */
+export function markKdsKotReady(ref: string, fallback: KdsMessage, nonce: string): KdsMessage {
+  const current = getKdsMessages();
+  const existing = current.find(
+    (message) => message.kind === 'kot_unprinted' && message.ref === ref,
+  );
+  const ready = existing ? { ...existing, ready: true } : { ...fallback, ref, ready: true };
+  kotPrompt = { id: ready.id, nonce };
+  setKdsMessages(
+    existing
+      ? current.map((message) => (message === existing ? ready : message))
+      : [...current, ready],
+  );
+  return ready;
+}
+
+// The kept ticket whose reprint choice should open next; a new nonce opens it again.
+let kotPrompt: { id: string; nonce: string } | null = null;
+
+export function getKdsKotPrompt(): { id: string; nonce: string } | null {
+  return kotPrompt;
+}
+
+export function getServerKdsKotPrompt(): null {
+  return null;
 }
 
 export function dismissKdsMessage(id: string): void {

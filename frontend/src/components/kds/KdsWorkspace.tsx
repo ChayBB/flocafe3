@@ -37,6 +37,7 @@ import {
   getKdsMessages,
   getServerKdsMessages,
   kdsItemPlaces,
+  markKdsKotReady,
   readSeenKdsAlerts,
   subscribeKdsMessages,
   writeSeenKdsAlerts,
@@ -200,30 +201,51 @@ export function KdsWorkspace({
     if (unseen.length === 0) return;
     writeSeenKdsAlerts([...seen, ...unseen.map((alert) => alert.id)]);
     if (!soundSettingsRef.current.showMessages) return;
+    const kotText = (alert: (typeof unseen)[number]) =>
+      [
+        t('messageKotFailed'),
+        alert.table
+          ? t('tableLabel', { name: alert.table })
+          : t('messageOrder', { number: alert.message }),
+      ].join(' · ');
     announceKdsMessages(
-      unseen.map((alert) => ({
-        id: `alert:${alert.id}`,
-        kind: alert.kind,
-        at: alert.created_at,
-        ref: alert.ref ?? undefined,
-        text:
-          alert.kind === 'kot_unprinted'
-            ? [
-                t('messageKotFailed'),
-                alert.table
-                  ? t('tableLabel', { name: alert.table })
-                  : t('messageOrder', { number: alert.message }),
-              ].join(' · ')
-            : [
-                t('messageEmergency'),
-                alert.table ? t('tableLabel', { name: alert.table }) : null,
-                alert.message || null,
-                alert.sent_by ? t('messageFrom', { name: alert.sent_by }) : null,
-              ]
-                .filter(Boolean)
-                .join(' · '),
-      })),
+      unseen
+        .filter((alert) => alert.kind !== 'kot_ready')
+        .map((alert) => ({
+          id: `alert:${alert.id}`,
+          kind: alert.kind as Exclude<typeof alert.kind, 'kot_ready'>,
+          at: alert.created_at,
+          ref: alert.ref ?? undefined,
+          reason: alert.reason ?? undefined,
+          text:
+            alert.kind === 'kot_unprinted'
+              ? kotText(alert)
+              : [
+                  t('messageEmergency'),
+                  alert.table ? t('tableLabel', { name: alert.table }) : null,
+                  alert.message || null,
+                  alert.sent_by ? t('messageFrom', { name: alert.sent_by }) : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · '),
+        })),
     );
+    // The printer can print a kept ticket again: its notice opens so staff can reprint it by hand.
+    const ready = unseen.filter((alert) => alert.kind === 'kot_ready' && alert.ref);
+    for (const alert of ready) {
+      markKdsKotReady(
+        alert.ref!,
+        {
+          id: `alert:${alert.id}`,
+          kind: 'kot_unprinted',
+          at: alert.created_at,
+          reason: alert.reason ?? undefined,
+          text: kotText(alert),
+        },
+        alert.id,
+      );
+    }
+    if (ready.length > 0) playKdsAlert(1);
   }, [conn.alerts, t]);
   // Every display opens on all stations; picking one narrows the board to that category.
   const [selectedStation, setSelectedStation] = useState('');
