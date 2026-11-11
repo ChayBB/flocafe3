@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { renderKotViaDocument, renderKotDocumentToLines } from '../main/printers/document-kot';
 import { renderUnsupportedRasterLines } from '../main/printers/raster-renderer';
 import { escPosToText } from '../main/printers/thermal';
-import { isKotDocument } from '../shared/print';
+import { isKotDocument, kotTicketTime } from '../shared/print';
 import { GENERIC_THERMAL_CAPABILITIES } from '../shared/print/thermal-capabilities';
 
 function loadFrontendModules(): {
@@ -519,6 +519,31 @@ async function runAsyncTests() {
   assert.ok(
     htmlLongItem.includes('line-height:1.4;'),
     'generateKotHtml includes explicit line-height:1.4 on .kot-container',
+  );
+}
+
+{
+  const opened = '2026-11-10 15:36:08';
+  assert.equal(
+    kotTicketTime(opened, [
+      { status: 'ready', created_at: '2026-11-10 19:30:00' },
+      { status: 'pending', created_at: '2026-11-10 18:32:15' },
+      { status: 'preparing', created_at: '2026-11-10 18:33:20' },
+    ]),
+    '2026-11-10 18:33:20',
+    'a KOT prints its newest pending item time, not the order opening time',
+  );
+  assert.equal(kotTicketTime(opened, [{ status: 'pending' }]), opened);
+  assert.equal(kotTicketTime(opened, []), opened);
+  const ticket = renderKotViaDocument(
+    { ...baseOrder, created_at: opened },
+    items.map((item) => ({ ...item, created_at: '2026-11-10 18:33:20' })),
+    'Kitchen',
+    { ...opts, timezone: 'Asia/Bangkok' },
+  );
+  assert.ok(
+    ticket.lines.some((line) => line.includes('01:33')),
+    'KOT shows the added items time in the store timezone',
   );
 }
 

@@ -846,6 +846,41 @@ export function isKotItemPending(status: unknown): boolean {
   return status !== 'served' && status !== 'ready';
 }
 
+/** When a bill document was issued: its payment time once paid, otherwise the moment it prints. */
+export function billDocumentTime(
+  bill: { paid_at?: unknown } | null | undefined,
+  now: Date = new Date(),
+): string {
+  const paidAt = bill?.paid_at;
+  return typeof paidAt === 'string' && paidAt ? paidAt : now.toISOString();
+}
+
+function storedTimeMs(value: unknown): number {
+  if (typeof value !== 'string' || !value) return NaN;
+  return Date.parse(/^d{4}-d{2}-d{2} /.test(value) ? `${value.replace(' ', 'T')}Z` : value);
+}
+
+/**
+ * The time a kitchen ticket was sent: its newest pending item, so items added to an open order
+ * later do not print with the order's opening time.
+ */
+export function kotTicketTime(
+  orderCreatedAt: unknown,
+  items: readonly { status?: unknown; created_at?: unknown }[] | null | undefined,
+): string {
+  let newest = typeof orderCreatedAt === 'string' ? orderCreatedAt : '';
+  let newestMs = -Infinity;
+  for (const item of items ?? []) {
+    if (!isKotItemPending(item?.status)) continue;
+    const ms = storedTimeMs(item.created_at);
+    if (Number.isFinite(ms) && ms > newestMs) {
+      newestMs = ms;
+      newest = item.created_at as string;
+    }
+  }
+  return newest;
+}
+
 /** One add-on under a KOT item row; quantity is display-only kitchen truth. */
 export interface KotAddonSnapshot {
   readonly name: string;

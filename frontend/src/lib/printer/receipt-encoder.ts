@@ -51,6 +51,7 @@ import {
   type TaxBreakdownBlock,
   type TotalsBlock,
   paymentDisplayRows,
+  billDocumentTime,
 } from '@print/document';
 import { layoutStyledUnit } from '@print/layout';
 import type { ResolvedPrintLanguages } from '@print/types';
@@ -1649,7 +1650,7 @@ export function buildDetailedReceiptBytes(
       padRow(
         `Bill #: ${bill.bill_number}`,
         formatDate(
-          bill.order?.created_at,
+          billDocumentTime(bill),
           locale,
           tenant.timezone ? { timeZone: tenant.timezone } : undefined,
         ),

@@ -11,6 +11,8 @@ import {
   type PrintContext,
   type PrintData,
   type PrintDocument,
+  billDocumentTime,
+  kotTicketTime,
 } from '@print/document';
 import { defaultPrintLanguagePolicy, resolveReceiptLanguages } from '@print/policy';
 import type {
@@ -166,7 +168,7 @@ export function buildBillPrintData(bill: Bill, opts: BillBusinessOptions = {}): 
     isReprint: opts.isReprint === true,
     order: {
       orderNumber: String(order?.order_number ?? ''),
-      createdAt: String(order?.created_at ?? ''),
+      createdAt: billDocumentTime(bill),
       tableName: String(order?.table?.name ?? ''),
       onlinePlatform: String(order?.online_platform ?? ''),
       externalOrderId: String(order?.external_order_id ?? ''),
@@ -370,7 +372,7 @@ export function buildFrontendKotDocument(
     stationName: String(opts.stationName ?? ''),
     order: {
       orderNumber: String(order.order_number ?? ''),
-      createdAt: String(order.created_at ?? ''),
+      createdAt: kotTicketTime(order.created_at, items),
       tableName: firstText(order.table?.name, orderShape.table_name, orderShape.tableName),
       orderType: String(order.type ?? '').trim(),
       customerName: firstText(

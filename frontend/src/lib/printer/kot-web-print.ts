@@ -5,7 +5,12 @@ import { createTranslator } from 'use-intl/core';
 import { getCachedMessages } from '@/lib/i18n/loader';
 import { LANGUAGES, getLanguageDirection, type Language } from '@/lib/i18n/languages';
 import { defaultPrintLanguagePolicy, resolveKotLanguage } from '@print/policy';
-import { directionalText, isKotItemPending, type DirectionalText } from '@print/document';
+import {
+  directionalText,
+  isKotItemPending,
+  kotTicketTime,
+  type DirectionalText,
+} from '@print/document';
 import { containsRtlScript } from '@print/direction';
 import { normalizePrinterTextSize, type PrinterTextSize } from '@print/text-size';
 import type { TextDirection } from '@print/types';
@@ -185,7 +190,7 @@ export function generateKotHtml(order: Order, opts: KotWebPrintOptions = {}): st
 
   // Header facts annotated by the direction kernel.
   const orderNumber = directionalText(String(order.order_number ?? ''), base);
-  const createdAt = String(order.created_at ?? '');
+  const createdAt = kotTicketTime(order.created_at, order.items);
   const stationName = String(opts.stationName ?? '');
   const tableHeading = order.table?.name
     ? ` ${escapeHtml(labelWithoutPlaceholder(tr.raw('pos.tableLabel')))} <strong style="font-size:1.5em;">${directionalValue(directionalText(order.table.name, base), base)}</strong>`

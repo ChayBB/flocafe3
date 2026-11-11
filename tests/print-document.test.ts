@@ -27,6 +27,7 @@ import {
   projectCashTender,
   type PrintContext,
   type PrintData,
+  billDocumentTime,
 } from '../shared/print';
 import {
   buildBillPrintContext,
@@ -131,6 +132,16 @@ console.log('\n▶ Block construction (fixture bill)');
   assert.equal(meta.invoiceNumber.text, 'INV-PARITY-001');
   assert.equal(meta.invoiceNumberLabel.conceptId, 'print.invoiceNumber');
   assert.equal(meta.timestamp.text, '2026-08-21 18:42:00');
+  assert.equal(
+    billDocumentTime({ paid_at: null }, new Date('2026-11-10T19:30:00Z')),
+    '2026-11-10T19:30:00.000Z',
+    'an unpaid bill prints the time it is printed',
+  );
+  assert.equal(
+    billDocumentTime({ paid_at: '2026-11-10 19:00:35' }, new Date('2026-11-12T00:00:00Z')),
+    '2026-11-10 19:00:35',
+    'a paid bill keeps its payment time on reprint',
+  );
   assert.equal(meta.table?.name.text, '4');
   assert.equal(meta.table?.label.conceptId, 'pos.tableLabel');
   assert.equal(

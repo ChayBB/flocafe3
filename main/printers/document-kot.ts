@@ -28,6 +28,7 @@ import { displayCellWidth } from '../../shared/print/width';
 import {
   buildKotDocument,
   isKotItemPending,
+  kotTicketTime,
   type DirectionalText,
   type KotDocument,
   type KotDocumentBlock,
@@ -49,7 +50,7 @@ export function buildKotPrintData(order: any, items: any[], stationName: string)
     stationName: String(stationName ?? ''),
     order: {
       orderNumber: String(order?.order_number ?? ''),
-      createdAt: String(order?.created_at ?? ''),
+      createdAt: kotTicketTime(order?.created_at, ticketItems),
       tableName: String(order?.table?.name ?? ''),
       orderType: String(order?.type ?? '').trim(),
       customerName: String(order?.customer?.name ?? order?.customer_name ?? '').trim(),

@@ -325,6 +325,7 @@ export interface Bill {
     | 'paid'
     | 'refunded'
     | 'partially_refunded';
+  paid_at?: string | null;
   payment_details:
     | {
         method: string;

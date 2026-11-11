@@ -119,6 +119,7 @@ import {
   type ThermalLayoutContext,
   type ZReportDocument,
   type ZReportPrintData,
+  billDocumentTime,
 } from '../../shared/print';
 import {
   type PrintWarning,
@@ -1798,9 +1799,7 @@ export async function printPaymentTicket(
       if (order.table_name) {
         lines.push(`Table: ${normalizeThermalText(safePrinterText(order.table_name), caps)}`);
       }
-      if (order.created_at) {
-        lines.push(`Date: ${localTime(order.created_at)}`);
-      }
+      lines.push(`Date: ${localTime(clockNow().toISOString())}`);
       if (order.scheduled_for) {
         lines.push(`Scheduled For: ${localTime(order.scheduled_for)}`);
       }
@@ -3345,7 +3344,7 @@ function escposLineTemplateV1Lines(
   };
   const cols = profile.columns;
   const layout = profile.layout || {};
-  const date = parseDbTimestamp(order.created_at);
+  const date = parseDbTimestamp(billDocumentTime(bill, clockNow()));
   const bar = '='.repeat(cols);
   const dash = '-'.repeat(cols);
   const currency = resolveTenantCurrency(biz.currency, biz.country);

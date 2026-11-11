@@ -64,7 +64,9 @@ import {
   optionalPaymentAmount,
   paymentDisplayRows,
   type ThermalLayoutContext,
+  billDocumentTime,
 } from '../../shared/print';
+import { clockNow } from '../lib/clock';
 import { receiptChargeLines } from '../../shared/charges';
 import { isExcludedFromBillReceipt } from '../../shared/order-item-status';
 import { itemLine } from '../../shared/item-line';
@@ -129,7 +131,7 @@ export function buildBillPrintData(
     isReprint,
     order: {
       orderNumber: String(order?.order_number ?? ''),
-      createdAt: String(order?.created_at ?? ''),
+      createdAt: billDocumentTime(bill, clockNow()),
       tableName: String(order?.table?.name ?? ''),
       onlinePlatform: String(order?.online_platform ?? ''),
       externalOrderId: String(order?.external_order_id ?? ''),

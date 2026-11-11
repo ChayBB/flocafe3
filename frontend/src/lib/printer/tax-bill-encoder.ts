@@ -21,7 +21,7 @@ import {
   resolveTenantCurrency,
 } from '@/lib/countries';
 import { formatDate } from './format-date';
-import { shouldShowCustomerNumber } from '@print/document';
+import { billDocumentTime, shouldShowCustomerNumber } from '@print/document';
 import { formatTaxComponentLabel, resolveTaxComponents } from './tax-components';
 import {
   hasUnsupportedPrinterChars,
@@ -345,9 +345,9 @@ export function buildTaxBillBytes(
     language,
   ).newline();
   const billDate = rawEscPos
-    ? formatRawTaxBillDate(bill.order?.created_at, locale, tenant.timezone, opts.capabilities)
+    ? formatRawTaxBillDate(billDocumentTime(bill), locale, tenant.timezone, opts.capabilities)
     : formatDate(
-        bill.order?.created_at,
+        billDocumentTime(bill),
         locale,
         tenant.timezone ? { timeZone: tenant.timezone } : undefined,
       );

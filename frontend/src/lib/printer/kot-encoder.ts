@@ -24,7 +24,7 @@ import {
   type PrintWarning,
 } from './warnings';
 import { printLabelResolver } from './print-document';
-import { isKotItemPending } from '@print/document';
+import { isKotItemPending, kotTicketTime } from '@print/document';
 import { parseVariantSelection } from './item-heading';
 import { ticketItemLine } from '../../../../shared/item-line';
 
@@ -234,13 +234,14 @@ export function buildKotBytes(
   }
 
   enc.bold(false);
+  const ticketTime = kotTicketTime(order.created_at, order.items);
   const time = formatTime(
-    order.created_at,
+    ticketTime,
     locale,
     opts.timezone ? { timeZone: opts.timezone } : undefined,
   );
   const fallbackTime = formatTime(
-    order.created_at,
+    ticketTime,
     'en-US',
     opts.timezone ? { timeZone: opts.timezone } : undefined,
   );

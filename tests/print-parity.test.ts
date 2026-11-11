@@ -116,6 +116,7 @@ export function buildParityFixtures() {
 
   const bill: any = {
     bill_number: 'INV-PARITY-001',
+    paid_at: '2026-08-21 18:42:00',
     subtotal: 1220,
     discount_amount: 120,
     tax_amount: 0,
