@@ -533,6 +533,14 @@ async function runAsyncTests() {
     '2026-11-10 18:33:20',
     'a KOT prints its newest pending item time, not the order opening time',
   );
+  assert.equal(
+    kotTicketTime(opened, [
+      { status: 'pending', created_at: '2026-11-10T18:40:00.000Z' },
+      { status: 'pending', created_at: '2026-11-10 18:45:00' },
+    ]),
+    '2026-11-10 18:45:00',
+    'stored SQLite times compare as UTC against ISO times',
+  );
   assert.equal(kotTicketTime(opened, [{ status: 'pending' }]), opened);
   assert.equal(kotTicketTime(opened, []), opened);
   const ticket = renderKotViaDocument(

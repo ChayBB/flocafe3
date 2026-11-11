@@ -857,7 +857,7 @@ export function billDocumentTime(
 
 function storedTimeMs(value: unknown): number {
   if (typeof value !== 'string' || !value) return NaN;
-  return Date.parse(/^d{4}-d{2}-d{2} /.test(value) ? `${value.replace(' ', 'T')}Z` : value);
+  return Date.parse(/^\d{4}-\d{2}-\d{2} /.test(value) ? `${value.replace(' ', 'T')}Z` : value);
 }
 
 /**
