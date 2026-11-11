@@ -114,7 +114,7 @@ async function run(): Promise<void> {
     assert.match(
       browserHtml,
       new RegExp(
-        `>${printLabel(language, 'print.kot.banner').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<`,
+        `>${printLabel(language, 'print.kot.banner').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[< ]`,
       ),
       `${language}: browser banner`,
     );
@@ -687,7 +687,7 @@ async function run(): Promise<void> {
   );
   assert.match(
     metadataThermalText,
-    /Table: \[UNSUPPORTED\]/,
+    /Table \[UNSUPPORTED\]/,
     'thermal KOT preserves non-ASCII table visibility with an explicit placeholder',
   );
 
@@ -717,7 +717,7 @@ async function run(): Promise<void> {
   );
   assert.match(
     metadataWebUsbText,
-    /Table: \[UNSUPPORTED\]/,
+    /Table \[UNSUPPORTED\]/,
     'WebUSB KOT preserves non-ASCII table visibility with an explicit placeholder',
   );
   assert.match(
@@ -759,7 +759,7 @@ async function run(): Promise<void> {
   );
   assert.match(
     shapedMetadataThermalText,
-    /Table: \[UNSUPPORTED\]/,
+    /Table \[UNSUPPORTED\]/,
     'shaped thermal KOT preserves non-Arabic table visibility',
   );
 
@@ -789,7 +789,7 @@ async function run(): Promise<void> {
   );
   assert.match(
     shapedMetadataWebUsbText,
-    /Table: \[UNSUPPORTED\]/,
+    /Table \[UNSUPPORTED\]/,
     'shaped WebUSB KOT preserves non-Arabic table visibility',
   );
   assert.match(

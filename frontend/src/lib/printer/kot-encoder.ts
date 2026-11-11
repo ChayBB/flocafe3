@@ -170,26 +170,13 @@ export function buildKotBytes(
   if (order.table?.name) {
     const tableName = String(order.table.name);
     enc.bold(true).height(2);
-    safePrinterText(
-      enc,
-      thermalSafeHeaderText(
-        label('pos.tableLabel')
-          .replace(/[:：](?=\s*\{name\})/, '')
-          .replace('{name}', () => tableName),
-        `Table ${thermalSafeMetadataValue(tableName, language, arabicShaping, opts.capabilities)}`,
-        language,
-        arabicShaping,
-        opts.capabilities,
-      ),
-      warnings,
-      false,
-      arabicShaping,
-      undefined,
-      cols,
-      language,
-    )
-      .height(1)
-      .newline();
+    writeKotHeaderText(
+      label('pos.tableLabel')
+        .replace(/[:：](?=\s*\{name\})/, '')
+        .replace('{name}', () => tableName),
+      `Table ${thermalSafeMetadataValue(tableName, language, arabicShaping, opts.capabilities)}`,
+    );
+    enc.height(1);
   }
 
   // Order details

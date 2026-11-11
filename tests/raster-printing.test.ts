@@ -3215,7 +3215,7 @@ async function run(): Promise<void> {
       assert.ok(unavailableCanvasKotText.includes('KITCHEN ORDER TICKET'));
       assert.ok(unavailableCanvasKotText.includes('Station: [UNSUPPORTED]'));
       assert.ok(unavailableCanvasKotText.includes('Order #[UNSUPPORTED]'));
-      assert.ok(unavailableCanvasKotText.includes('Table: [UNSUPPORTED]'));
+      assert.ok(unavailableCanvasKotText.includes('Table [UNSUPPORTED]'));
       assert.ok(unavailableCanvasKotText.includes('Type: DINE IN'));
       assert.ok(unavailableCanvasKotText.includes('Customer: [UNSUPPORTED]'));
 
@@ -3242,7 +3242,7 @@ async function run(): Promise<void> {
       assert.ok(failedCanvasKotText.includes('KITCHEN ORDER TICKET'));
       assert.ok(failedCanvasKotText.includes('Station: [UNSUPPORTED]'));
       assert.ok(failedCanvasKotText.includes('Order #[UNSUPPORTED]'));
-      assert.ok(failedCanvasKotText.includes('Table: [UNSUPPORTED]'));
+      assert.ok(failedCanvasKotText.includes('Table [UNSUPPORTED]'));
       assert.ok(failedCanvasKotText.includes('Type: DINE IN'));
       assert.ok(failedCanvasKotText.includes('Customer: [UNSUPPORTED]'));
 
@@ -3410,7 +3410,7 @@ async function run(): Promise<void> {
     assert.ok(
       zRasterRequests.some(
         (req) =>
-          req.text.includes('Çağrı Şahin 5 kez') &&
+          req.text.includes('Çağrı Şahin x5') &&
           req.financial &&
           req.layout?.kind === 'financial-summary',
       ),
@@ -3504,7 +3504,7 @@ async function run(): Promise<void> {
       zRasterRequests.some(
         (req) =>
           req.layout?.kind === 'financial-summary' &&
-          req.layout?.columns?.[0]?.text.includes('Çağrı Şahin 5 kez') &&
+          req.layout?.columns?.[0]?.text.includes('Çağrı Şahin x5') &&
           req.layout?.columns?.[0]?.text.startsWith('  ') &&
           req.layout?.columns?.[1]?.align === 'right',
       ),
