@@ -423,14 +423,7 @@ function OrderDetailContent({
                     onClick={() => onCorrectPaymentMethod(order, correctablePaidBills)}
                   >
                     <CreditCard size={14} className="me-2" />
-                    <span>
-                      {tOrders('correctPaymentMethod')}
-                      {!hasCorrectablePayment && (
-                        <span className="block text-xs">
-                          {tOrders('correctPaymentUnavailable')}
-                        </span>
-                      )}
-                    </span>
+                    <span>{tOrders('correctPaymentMethod')}</span>
                   </DropdownMenuItem>
                 )}
                 {!['completed', 'cancelled'].includes(order.status) && (
@@ -1046,11 +1039,6 @@ function OrderDetailContent({
                   <CreditCard size={15} className="me-1.5 text-muted-foreground" />
                   {tOrders('correctPaymentMethod')}
                 </Button>
-                {!hasCorrectablePayment && (
-                  <p className="text-xs text-muted-foreground">
-                    {tOrders('correctPaymentUnavailable')}
-                  </p>
-                )}
               </div>
             )}
             {canRefund && hasEligibleRefund && (
