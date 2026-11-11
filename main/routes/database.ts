@@ -463,15 +463,9 @@ router.post(
 
                 const currentCols = getTableColumns(db, tableName);
                 // Validate and filter column names to prevent SQL injection
-                const importCols =
-                  tableName === 'product_variants' ||
-                  tableName === 'addons' ||
-                  tableName === 'order_item_addons' ||
-                  tableName === 'orders'
-                    ? Array.from(
-                        new Set(rows.flatMap((row) => Object.keys(row).filter(isSafeIdentifier))),
-                      )
-                    : Object.keys(rows[0]).filter(isSafeIdentifier);
+                const importCols = Array.from(
+                  new Set(rows.flatMap((row) => Object.keys(row).filter(isSafeIdentifier))),
+                );
                 // A normal export intentionally omits password/pin hashes. It must not
                 // attempt to recreate users with a NULL required password.
                 if (tableName === 'users' && !importCols.includes('password')) continue;
@@ -589,24 +583,19 @@ router.post(
                     }
                   }
 
-                  const rowCols =
-                    tableName === 'product_variants' ||
-                    tableName === 'addons' ||
-                    tableName === 'order_item_addons' ||
-                    tableName === 'orders'
-                      ? commonCols.filter(
-                          (column) =>
-                            Object.prototype.hasOwnProperty.call(row, column) &&
-                            row[column] !== undefined &&
-                            !(
-                              tableName === 'orders' &&
-                              (column === 'release_status' ||
-                                column === 'checkout_stage' ||
-                                column === 'dispatch_policy') &&
-                              row[column] === null
-                            ),
-                        )
-                      : commonCols;
+                  // A column a row lacks (older backups) takes the database default instead of NULL.
+                  const rowCols = commonCols.filter(
+                    (column) =>
+                      Object.prototype.hasOwnProperty.call(row, column) &&
+                      row[column] !== undefined &&
+                      !(
+                        tableName === 'orders' &&
+                        (column === 'release_status' ||
+                          column === 'checkout_stage' ||
+                          column === 'dispatch_policy') &&
+                        row[column] === null
+                      ),
+                  );
                   const rowColumnKey = rowCols.join(', ');
                   let insertStmt = insertStatements.get(rowColumnKey);
                   if (!insertStmt) {
