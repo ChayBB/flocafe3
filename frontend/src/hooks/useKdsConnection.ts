@@ -466,10 +466,10 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
           status,
           ...(opts.expectedStatus ? { expected_status: opts.expectedStatus } : {}),
         });
+        // A closed socket stays in wsRef for the reconnect timer, so test readiness, not presence.
         if (
           generation === sessionGenerationRef.current &&
-          connectionMode === 'rest' &&
-          wsRef.current === null
+          wsRef.current?.readyState !== WebSocket.OPEN
         ) {
           await fetchOrdersRest();
         }
@@ -533,15 +533,7 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
     },
     // statusLabel is derived from `t` (already in deps), so omit it.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [
-      api,
-      connectionMode,
-      disableKdsConnection,
-      fetchOrdersRest,
-      itemStatusPath,
-      stopRestPolling,
-      t,
-    ],
+    [api, disableKdsConnection, fetchOrdersRest, itemStatusPath, stopRestPolling, t],
   );
 
   const tryWebSocket = useCallback(
