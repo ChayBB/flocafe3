@@ -3,6 +3,8 @@ import { noteKdsSpeechEnded, playKdsAudio, wakeKdsSpeaker } from '@/lib/kds-aler
 
 /** Which sounds this KDS display plays; kept per display like its stage switches. */
 export interface KdsSoundSettings {
+  /** Beep when new menu items arrive. */
+  newOrderAlert: boolean;
   /** Speak newly arrived menu items aloud. */
   readAloud: boolean;
   /** Ring and announce a table as its menu items turn ready to serve. */
@@ -17,6 +19,7 @@ export type KdsSoundSetting = keyof KdsSoundSettings;
 
 const KEY = 'flocafe:kds-sound-settings';
 export const DEFAULT_KDS_SOUND_SETTINGS: KdsSoundSettings = {
+  newOrderAlert: true,
   readAloud: true,
   orderReady: true,
   showBell: false,

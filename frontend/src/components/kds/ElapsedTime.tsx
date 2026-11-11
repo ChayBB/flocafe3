@@ -15,6 +15,27 @@ function formatElapsed(dateStr: string): string {
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+/**
+ * When a ticket card's wait began: its oldest shown item, since items added to an open order later
+ * would otherwise inherit the order's opening time.
+ */
+export function ticketStartedAt(
+  items: readonly { created_at?: string }[],
+  orderCreatedAt: string,
+): string {
+  let oldest = orderCreatedAt;
+  let oldestAt = Infinity;
+  for (const item of items) {
+    if (!item.created_at) continue;
+    const at = parseDbTimestamp(item.created_at).getTime();
+    if (Number.isFinite(at) && at < oldestAt) {
+      oldestAt = at;
+      oldest = item.created_at;
+    }
+  }
+  return oldest;
+}
+
 /** Renders elapsed time for an order with a local 1-second tick,
  * avoiding parent re-renders every second. */
 export function ElapsedTime({ dateStr }: { dateStr: string }) {

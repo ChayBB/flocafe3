@@ -285,6 +285,14 @@ export function KdsWorkspace({
     const knownItems = knownItemIdsRef.current;
     const knownStatuses = knownStatusesRef.current;
     const readOrderNotes = readOrderNotesRef.current;
+    const hasFresh =
+      knownItems !== null &&
+      orders.some((order) => liveItems(order).some((item) => !knownItems.has(item.id)));
+    if (hasFresh && soundSettingsRef.current.newOrderAlert) {
+      queueKdsSound(async () => {
+        if (playKdsAlert(2)) await new Promise((resolve) => setTimeout(resolve, 700));
+      });
+    }
     if (knownItems && soundSettingsRef.current.readAloud) {
       // Each table is read in parts: special instructions follow their item after a short pause, and
       // the order note comes once the table's last item has been read.

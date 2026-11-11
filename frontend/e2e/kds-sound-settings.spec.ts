@@ -288,7 +288,7 @@ test('KDS sound switches turn reading new items aloud and the ready-to-serve ann
   await expect(dialog.getByTestId('kds-sound-switch-readAloud')).toBeHidden();
   await dialog.getByTestId('kds-settings-tab-sound').click();
   await expect(dialog.getByTestId('kds-screen-mode-day')).toBeHidden();
-  for (const setting of ['readAloud', 'orderReady']) {
+  for (const setting of ['newOrderAlert', 'readAloud', 'orderReady']) {
     await expect(dialog.getByTestId(`kds-sound-switch-${setting}`)).toHaveAttribute(
       'aria-checked',
       'true',
@@ -299,7 +299,7 @@ test('KDS sound switches turn reading new items aloud and the ready-to-serve ann
     'false',
   );
   // Status-change alerts have no switch.
-  await expect(dialog.getByRole('switch')).toHaveCount(3);
+  await expect(dialog.getByRole('switch')).toHaveCount(4);
   await page.keyboard.press('Escape');
 
   // On by default: a new order is read out, and the bell rings and names the order when a menu

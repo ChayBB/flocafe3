@@ -19,7 +19,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { STATUS_CONFIG, STATUS_ORDER, type KitchenStatus } from '@/hooks/useKdsConnection';
 import { activeStages } from '@/lib/kds-stages';
-import { KDS_BRIGHTNESS_MAX, KDS_BRIGHTNESS_MIN, KDS_SCREEN_MODES, type KdsScreenMode } from '@/lib/kds-screen-mode';
+import {
+  KDS_BRIGHTNESS_MAX,
+  KDS_BRIGHTNESS_MIN,
+  KDS_SCREEN_MODES,
+  type KdsScreenMode,
+} from '@/lib/kds-screen-mode';
 import {
   isNaturalVoice,
   kdsSpeechLang,
@@ -46,6 +51,7 @@ const READY_BELL_LABELS = {
 } as const satisfies Record<KdsReadyBell, string>;
 
 const SOUND_ROWS = [
+  { setting: 'newOrderAlert' as KdsSoundSetting, labelKey: 'soundNewOrderAlert' as const },
   { setting: 'readAloud' as KdsSoundSetting, labelKey: 'soundReadAloud' as const },
   { setting: 'orderReady' as KdsSoundSetting, labelKey: 'soundOrderReady' as const },
   { setting: 'showBell' as KdsSoundSetting, labelKey: 'soundShowBell' as const },
@@ -107,7 +113,8 @@ function ReadyDelayField({
   const [value, setValue] = useState(() => String(readKdsReadyDelay(delay)));
   const id = `kds-ready-${delay}`;
   const commit = () => {
-    const seconds = value.trim() === '' ? readKdsReadyDelay(delay) : clampKdsReadyDelay(delay, Number(value));
+    const seconds =
+      value.trim() === '' ? readKdsReadyDelay(delay) : clampKdsReadyDelay(delay, Number(value));
     writeKdsReadyDelay(delay, seconds);
     setValue(String(seconds));
   };
@@ -183,7 +190,8 @@ export function KdsSettingsDialog({
     let cancelled = false;
     const lang = kdsSpeechLang();
     void kdsVoicesFor(lang).then((list) => {
-      if (!cancelled) setVoices(list.map((voice) => ({ name: voice.name, natural: isNaturalVoice(voice) })));
+      if (!cancelled)
+        setVoices(list.map((voice) => ({ name: voice.name, natural: isNaturalVoice(voice) })));
     });
     void kdsServerVoices(true).then(({ voices: local }) => {
       if (cancelled) return;
@@ -228,7 +236,9 @@ export function KdsSettingsDialog({
             </TabsTrigger>
           </TabsList>
           <TabsContent value="display" className="space-y-2">
-            <p className="text-sm text-muted-foreground">{t('settingsColumnsHint', { station: stationName })}</p>
+            <p className="text-sm text-muted-foreground">
+              {t('settingsColumnsHint', { station: stationName })}
+            </p>
             <div className="divide-y divide-border">
               {STATUS_ORDER.map((status) => {
                 const config = STATUS_CONFIG[status];
@@ -239,7 +249,9 @@ export function KdsSettingsDialog({
                 return (
                   <div key={status} className="flex items-center gap-3 py-3">
                     <span className={`w-2.5 h-2.5 rounded-full ${config.color}`} />
-                    <span className={`flex-1 text-sm font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground'}`}>
+                    <span
+                      className={`flex-1 text-sm font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground'}`}
+                    >
                       {stage}
                     </span>
                     <span className="text-xs text-muted-foreground">
@@ -277,7 +289,11 @@ export function KdsSettingsDialog({
             </div>
             <div className="space-y-1.5 pt-2">
               <h3 className="text-sm font-semibold text-foreground">{t('screenModeTitle')}</h3>
-              <div role="radiogroup" aria-label={t('screenModeTitle')} className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+              <div
+                role="radiogroup"
+                aria-label={t('screenModeTitle')}
+                className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+              >
                 {KDS_SCREEN_MODES.map((mode) => (
                   <button
                     key={mode}
@@ -287,7 +303,9 @@ export function KdsSettingsDialog({
                     data-testid={`kds-screen-mode-${mode}`}
                     onClick={() => onScreenMode(mode)}
                     className={`min-h-11 rounded-md px-1 text-sm font-medium ${
-                      screenMode === mode ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'
+                      screenMode === mode
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground'
                     }`}
                   >
                     {t(SCREEN_MODE_LABELS[mode])}
@@ -296,7 +314,10 @@ export function KdsSettingsDialog({
               </div>
               <div className="flex items-center gap-3 pt-2">
                 <Sun size={18} aria-hidden="true" className="shrink-0 text-muted-foreground" />
-                <label htmlFor="kds-brightness" className="shrink-0 text-sm font-medium text-foreground">
+                <label
+                  htmlFor="kds-brightness"
+                  className="shrink-0 text-sm font-medium text-foreground"
+                >
                   {t('brightnessLabel')}
                 </label>
                 <input
@@ -310,7 +331,10 @@ export function KdsSettingsDialog({
                   onChange={(event) => onBrightness(Number(event.target.value))}
                   className="h-11 min-w-0 flex-1 accent-brand"
                 />
-                <span data-testid="kds-brightness-value" className="w-12 shrink-0 text-end text-sm tabular-nums text-muted-foreground">
+                <span
+                  data-testid="kds-brightness-value"
+                  className="w-12 shrink-0 text-end text-sm tabular-nums text-muted-foreground"
+                >
                   {brightness}%
                 </span>
               </div>
@@ -323,10 +347,14 @@ export function KdsSettingsDialog({
                 const label = t(labelKey);
                 return (
                   <div key={setting} className="flex items-center gap-3 py-3">
-                    <span className={`flex-1 text-sm font-medium ${on ? 'text-foreground' : 'text-muted-foreground'}`}>
+                    <span
+                      className={`flex-1 text-sm font-medium ${on ? 'text-foreground' : 'text-muted-foreground'}`}
+                    >
                       {label}
                     </span>
-                    <span className="text-xs text-muted-foreground">{on ? t('stageActive') : t('stageSkipped')}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {on ? t('stageActive') : t('stageSkipped')}
+                    </span>
                     <Switch
                       checked={on}
                       label={label}
@@ -374,7 +402,10 @@ export function KdsSettingsDialog({
               disabled={!readyOn}
             />
             <div className="space-y-1.5 pt-1">
-              <label htmlFor="kds-voice-select" className="block text-sm font-medium text-foreground">
+              <label
+                htmlFor="kds-voice-select"
+                className="block text-sm font-medium text-foreground"
+              >
                 {t('voiceLabel')}
               </label>
               <select

@@ -5,7 +5,7 @@ import { DragDropProvider, useDraggable, type DragEndEvent } from '@dnd-kit/reac
 import { Clock } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { ElapsedTime } from '@/components/kds/ElapsedTime';
+import { ElapsedTime, ticketStartedAt } from '@/components/kds/ElapsedTime';
 import { KdsColumn } from '@/components/kds/KdsColumn';
 import { KdsSetPrice } from '@/components/kds/KdsSetPrice';
 import { KdsServiceNotice, noticeRowClass } from '@/components/kds/KdsServiceNotice';
@@ -263,7 +263,7 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
           <div className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0">
             <Clock size={12} />
             <Ltr>
-              <ElapsedTime dateStr={order.created_at} />
+              <ElapsedTime dateStr={ticketStartedAt(items, order.created_at)} />
             </Ltr>
           </div>
         </div>

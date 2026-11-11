@@ -2,7 +2,7 @@
 
 import { Clock } from 'lucide-react';
 import { useState } from 'react';
-import { ElapsedTime } from '@/components/kds/ElapsedTime';
+import { ElapsedTime, ticketStartedAt } from '@/components/kds/ElapsedTime';
 import { KdsSetPrice } from '@/components/kds/KdsSetPrice';
 import { KdsServiceNotice, noticeRowClass } from '@/components/kds/KdsServiceNotice';
 import { KdsStatusToggle } from '@/components/kds/KdsStatusToggle';
@@ -129,7 +129,7 @@ export function KdsTabsView({
                 <div className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0">
                   <Clock size={12} />
                   <Ltr>
-                    <ElapsedTime dateStr={order.created_at} />
+                    <ElapsedTime dateStr={ticketStartedAt(order.items ?? [], order.created_at)} />
                   </Ltr>
                 </div>
               </div>

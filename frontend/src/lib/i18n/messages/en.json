@@ -616,6 +616,7 @@
     "stageSwitch": "{status} stage on or off",
     "stageActive": "On",
     "stageSkipped": "Off",
+    "soundNewOrderAlert": "Beep when a new order arrives",
     "soundReadAloud": "Read new menu items aloud",
     "soundOrderReady": "Ring and announce when a menu item is ready to serve",
     "soundShowBell": "Show a bell button on the KDS",
