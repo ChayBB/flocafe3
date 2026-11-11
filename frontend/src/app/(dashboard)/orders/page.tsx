@@ -2392,6 +2392,7 @@ export default function OrdersPage() {
           onClose={() => setPaymentBill(null)}
           onPaid={handlePaymentComplete}
           onBillUpdate={(updated) => setPaymentBill(updated)}
+          memberCheckout={printMemberBill}
           onPrintBill={
             paymentOrder &&
             paymentOrder.dispatch_policy !== 'on_payment' &&

@@ -80,6 +80,8 @@ interface Props {
    * taking money, and resolves true once the bill printed and the order waits for confirmation.
    */
   onPrintBill?: (bill: Bill) => Promise<boolean>;
+  /** Opened from a member card: offer the member's points as a ready-to-apply discount. */
+  memberCheckout?: boolean;
 }
 
 interface Payment {
@@ -154,6 +156,7 @@ export default function PaymentModal({
   onBillUpdate,
   onSplit,
   onPrintBill,
+  memberCheckout = false,
 }: Props) {
   const [printingBill, setPrintingBill] = useState(false);
   const awaitingConfirmation = Boolean(bill.order && isAwaitingBillPayment(bill.order));
@@ -255,6 +258,8 @@ export default function PaymentModal({
   const [discountReason, setDiscountReason] = useState('');
 
   const [discountMode, setDiscountMode] = useState<DiscountMode>('percentage');
+  const [discountSettingsLoaded, setDiscountSettingsLoaded] = useState(false);
+  const [memberDiscountOffered, setMemberDiscountOffered] = useState(false);
   const [discountRequiresApproval, setDiscountRequiresApproval] = useState(false);
   const [discountPin, setDiscountPin] = useState('');
   const [discountApproverId, setDiscountApproverId] = useState<string | null>(null);
@@ -612,6 +617,7 @@ export default function PaymentModal({
       .then((res) => {
         setDiscountMode(normalizeDiscountMode(res.data.discount_mode));
         setDiscountRequiresApproval(!!res.data.discount_requires_approval);
+        setDiscountSettingsLoaded(true);
       })
       .catch(() => {});
     api
@@ -874,6 +880,30 @@ export default function PaymentModal({
       ? Math.floor((walletBalance ?? 0) / LOYALTY_REDEMPTION_RATE)
       : null;
   const fmtNum = useFormatNumber();
+
+  // A member checkout opens the discount with what the member's points can cover; staff apply it.
+  if (
+    memberCheckout &&
+    !memberDiscountOffered &&
+    discountSettingsLoaded &&
+    memberDiscountLimit !== null &&
+    walletBalance !== null
+  ) {
+    setMemberDiscountOffered(true);
+    const offer = Math.min(Number(bill.subtotal), memberDiscountLimit);
+    if (
+      offer > 0 &&
+      Number(bill.discount_amount) === 0 &&
+      !bill.split_group_id &&
+      !scheduledOrderEditLocked &&
+      discountMode !== 'none' &&
+      isDiscountTypeAllowed(discountMode, 'amount')
+    ) {
+      setShowDiscount(true);
+      setDiscountType('amount');
+      setDiscountValue(String(toDisplayUnit(offer)));
+    }
+  }
 
   const handleApplyDiscount = async (customVal?: number) => {
     if (
