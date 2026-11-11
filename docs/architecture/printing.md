@@ -215,7 +215,7 @@ tickets do not use the bill logo setting.
 
 | Transport | Mechanism |
 | --- | --- |
-| Network | Raw socket. Each job first sends `DLE EOT 4` and waits up to 300 ms for the paper status; an out-of-paper reply fails the job before any data is sent, and no reply prints anyway. Data is sent in 4096-byte chunks (`NETWORK_PRINT_CHUNK_SIZE`) with a 10 ms delay between chunks (`NETWORK_PRINT_CHUNK_DELAY_MS`), so a large receipt does not overrun the printer's buffer. A refused, reset, or timed-out connection is tried twice more (after 500 ms, then 1 s; `networkPrintPolicy` in `main/printers/network-status.ts`), but only while none of the job's data was sent, so a retry never prints twice. |
+| Network | Raw socket. Each job first sends `DLE EOT 4` (paper sensor) and `DLE EOT 2` (offline cause) and waits up to 300 ms for the replies; paper out, a paper-end stop, or an open cover fails the job before any data is sent, and no reply prints anyway. Data is sent in 4096-byte chunks (`NETWORK_PRINT_CHUNK_SIZE`) with a 10 ms delay between chunks (`NETWORK_PRINT_CHUNK_DELAY_MS`), so a large receipt does not overrun the printer's buffer. A refused, reset, or timed-out connection is tried twice more (after 500 ms, then 1 s; `networkPrintPolicy` in `main/printers/network-status.ts`), but only while none of the job's data was sent, so a retry never prints twice. |
 | CUPS | `lp -d <printer> -o raw <tmpfile>`. |
 | Windows | `OpenPrinterW` with `pDataType` set to `RAW`. |
 | macOS Mac App Store | IPP over the local CUPS UNIX domain socket `/private/var/run/cupsd` (with loopback HTTP fallback on `127.0.0.1:631`) using `main/printers/ipp-client.ts` and `document-format` `application/vnd.cups-raw`, because the macOS App Sandbox blocks shelling out to `lp` and blocks outbound TCP to `localhost:631` while permitting `/private/var/run/cupsd` under `com.apple.security.print`. |
@@ -358,9 +358,9 @@ on restart) per order and station, with the item ids that missed, the failure re
 failure for the same order and station adds its items to the same entry; a ticket that prints
 removes only its own items. Kitchen displays get a `kot_unprinted` alert carrying the reason.
 
-While an entry waits, its network printer is probed every 5 seconds with `DLE EOT 4` through the
-printer's queue. Once the printer reports paper (or, for a non-paper failure, accepts connections
-again) the entry is marked `ready` and a `kot_ready` alert opens the KDS reprint dialog. Nothing
+While an entry waits, its network printer is probed every 5 seconds with the same status request
+through the printer's queue. Once the printer reports paper with the cover closed (or, for a
+connection failure, accepts connections again) the entry is marked `ready` and a `kot_ready` alert opens the KDS reprint dialog. Nothing
 prints until a person chooses Print again; the reprint, from the KDS or the POS (`retryStation`),
 prints only the entry's items that are still pending, then clears the entry.
 

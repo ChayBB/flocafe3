@@ -135,7 +135,9 @@ let watching = false;
 function isPrinterBack(entry: UnprintedKot, result: PrinterProbeResult): boolean {
   if (result === 'ok' || result === 'near_end') return true;
   // A printer that never reported paper status is back once it takes connections again.
-  return result === 'no_answer' && entry.reason !== 'paper_out';
+  return (
+    result === 'no_answer' && entry.reason !== 'paper_out' && entry.reason !== 'needs_attention'
+  );
 }
 
 /**

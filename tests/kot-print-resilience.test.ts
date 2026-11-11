@@ -28,8 +28,8 @@ const { initDatabase, getDatabase, closeDatabase, now } = require('../main/db');
 const { printViaNetwork } = require('../main/printers/thermal');
 const {
   networkPrintPolicy,
-  PAPER_STATUS_REQUEST,
-  parsePaperStatusByte,
+  PRINTER_STATUS_REQUEST,
+  decodePrinterStatus,
   probeNetworkPrinter,
 } = require('../main/printers/network-status');
 const { printOrderKot } = require('../main/routes/printers');
@@ -39,15 +39,23 @@ const { handleKdsReprintKot } = require('../main/services/kds-kot-actions');
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const STATUS_BYTE = { ok: 0x12, near_end: 0x1e, paper_out: 0x72 } as const;
+// Replies to DLE EOT 4 then DLE EOT 2, as read from a real Xprinter on the shop network.
+const STATUS_REPLY = {
+  ok: [0x12, 0x12],
+  near_end: [0x1e, 0x12],
+  paper_out: [0x72, 0x36],
+  cover_open: [0x12, 0x16],
+  paper_only: [0x12],
+  silent: [],
+} as const;
 
 type FakePrinterState = {
-  paper: keyof typeof STATUS_BYTE | 'silent';
+  paper: keyof typeof STATUS_REPLY;
   /** Connections to reset straight away, as a printer busy with another job does. */
   resetNext: number;
 };
 
-/** A raw-TCP printer that answers `DLE EOT 4` and keeps each connection's payload as one job. */
+/** A raw-TCP printer that answers `DLE EOT 4`/`DLE EOT 2` and keeps each connection's payload as one job. */
 async function startFakePrinter(state: FakePrinterState, port = 0) {
   const jobs: Buffer[] = [];
   const stats = { connections: 0, open: 0, maxOpen: 0, statusRequests: 0 };
@@ -63,10 +71,12 @@ async function startFakePrinter(state: FakePrinterState, port = 0) {
     let payload = Buffer.alloc(0);
     socket.on('data', (chunk: Buffer) => {
       let data = chunk;
-      if (payload.length === 0 && data.subarray(0, 3).equals(PAPER_STATUS_REQUEST)) {
+      const request = PRINTER_STATUS_REQUEST.length;
+      if (payload.length === 0 && data.subarray(0, request).equals(PRINTER_STATUS_REQUEST)) {
         stats.statusRequests++;
-        data = data.subarray(3);
-        if (state.paper !== 'silent') socket.write(Buffer.from([STATUS_BYTE[state.paper]]));
+        data = data.subarray(request);
+        const reply = STATUS_REPLY[state.paper];
+        if (reply.length > 0) socket.write(Buffer.from(reply));
       }
       payload = Buffer.concat([payload, data]);
     });
@@ -148,12 +158,18 @@ async function withMockSockets(
 
 async function networkCases() {
   {
-    assert.equal(parsePaperStatusByte(0x12), 'ok');
-    assert.equal(parsePaperStatusByte(0x1e), 'near_end');
-    assert.equal(parsePaperStatusByte(0x72), 'paper_out');
-    assert.equal(parsePaperStatusByte(0x00), null, 'a byte without the fixed bits is no status');
-    assert.equal(parsePaperStatusByte(0x10), null, 'an ASB byte is not a DLE EOT 4 reply');
-    console.log('  ✓ DLE EOT 4 replies decode to ok, near end and paper out');
+    assert.equal(decodePrinterStatus([0x12, 0x12]), 'ok');
+    assert.equal(decodePrinterStatus([0x1e, 0x12]), 'near_end');
+    assert.equal(decodePrinterStatus([0x72, 0x36]), 'paper_out', 'roll out, cover open');
+    assert.equal(decodePrinterStatus([0x12, 0x32]), 'paper_out', 'stopped for paper end');
+    assert.equal(
+      decodePrinterStatus([0x12, 0x16]),
+      'cover_open',
+      'cover open while the sensor still sees paper',
+    );
+    assert.equal(decodePrinterStatus([0x12]), 'ok', 'a printer answering only DLE EOT 4');
+    assert.equal(decodePrinterStatus([]), null, 'no reply is no status');
+    console.log('  ✓ status replies decode to ok, near end, paper out and cover open');
   }
 
   {
@@ -225,7 +241,19 @@ async function networkCases() {
   }
 
   {
-    for (const paper of ['near_end', 'silent'] as const) {
+    const printer = await startFakePrinter({ paper: 'cover_open', resetNext: 0 });
+    const result = await printViaNetwork('127.0.0.1', printer.port, Buffer.from('KOT cover open'));
+    await settle(printer);
+    assert.equal(result.ok, false);
+    assert.equal(result.detail, 'Printer cover is open');
+    assert.equal(result.failureClass, 'needs_attention');
+    assert.deepEqual(printer.jobs, [], 'nothing is sent while the cover is open');
+    await printer.close();
+    console.log('  ✓ cover open with paper inside: the ticket is held back too');
+  }
+
+  {
+    for (const paper of ['near_end', 'paper_only', 'silent'] as const) {
       const printer = await startFakePrinter({ paper, resetNext: 0 });
       const ticket = Buffer.from(`KOT ${paper}\n`);
       const result = await printViaNetwork('127.0.0.1', printer.port, ticket);
@@ -264,7 +292,7 @@ async function networkCases() {
           };
           socket.write = function (chunk: Buffer) {
             this.writes.push(Buffer.from(chunk));
-            if (!chunk.equals(PAPER_STATUS_REQUEST)) {
+            if (!chunk.equals(PRINTER_STATUS_REQUEST)) {
               process.nextTick(() =>
                 this.emit('error', Object.assign(new Error('reset'), { code: 'ECONNRESET' })),
               );
@@ -289,6 +317,8 @@ async function networkCases() {
     const state: FakePrinterState = { paper: 'paper_out', resetNext: 0 };
     const printer = await startFakePrinter(state);
     assert.equal(await probeNetworkPrinter('127.0.0.1', printer.port), 'paper_out');
+    state.paper = 'cover_open';
+    assert.equal(await probeNetworkPrinter('127.0.0.1', printer.port), 'cover_open');
     state.paper = 'ok';
     assert.equal(await probeNetworkPrinter('127.0.0.1', printer.port), 'ok');
     await settle(printer);
@@ -401,6 +431,10 @@ async function kitchenTicketCases() {
 
       await unprintedKots.checkUnprintedKotPrinters();
       assert.equal(kept[0].ready, false, 'still out of paper: nothing is offered yet');
+
+      state.paper = 'cover_open';
+      await unprintedKots.checkUnprintedKotPrinters();
+      assert.equal(kept[0].ready, false, 'roll back in but cover still open: not offered yet');
 
       state.paper = 'ok';
       await unprintedKots.checkUnprintedKotPrinters();

@@ -148,11 +148,12 @@ import {
 import { clockNow } from '../lib/clock';
 import { enqueuePrintJob, networkPrinterKey, osPrinterKey } from './print-queue';
 import {
-  findPaperStatus,
+  collectStatusBytes,
+  decodePrinterStatus,
   networkPrintPolicy,
-  PAPER_STATUS_REQUEST,
+  PRINTER_COVER_OPEN_DETAIL,
   PRINTER_OUT_OF_PAPER_DETAIL,
-  type PaperStatus,
+  PRINTER_STATUS_REQUEST,
 } from './network-status';
 
 export {
@@ -5375,22 +5376,25 @@ async function sendViaNetwork(
       sendNextChunk();
     };
 
-    // An out-of-paper printer still accepts bytes and may print them once a roll goes in, so the
-    // ticket is held back here and kept for a manual reprint instead.
+    // A printer out of paper or with its cover open still accepts bytes and may print them later,
+    // so the ticket is held back here and kept for a manual reprint instead.
     const checkPaperThenSend = (): void => {
       const timeoutMs = networkPrintPolicy.statusTimeoutMs;
       if (timeoutMs <= 0) return sendData();
+      const replies: number[] = [];
       let answered = false;
-      const onStatus = (status: PaperStatus | null): void => {
+      const onStatus = (): void => {
         if (answered || settled) return;
         answered = true;
         if (statusTimer) clearTimeout(statusTimer);
         client.removeListener('data', onData);
-        if (status === 'paper_out') {
+        const status = decodePrinterStatus(replies);
+        if (status === 'paper_out' || status === 'cover_open') {
           client.destroy();
           finish({
             ok: false,
-            detail: PRINTER_OUT_OF_PAPER_DETAIL,
+            detail:
+              status === 'paper_out' ? PRINTER_OUT_OF_PAPER_DETAIL : PRINTER_COVER_OPEN_DETAIL,
             failureClass: 'needs_attention',
           });
           return;
@@ -5398,12 +5402,12 @@ async function sendViaNetwork(
         sendData();
       };
       const onData = (chunk: Buffer): void => {
-        const status = findPaperStatus(chunk);
-        if (status) onStatus(status);
+        collectStatusBytes(replies, chunk);
+        if (replies.length >= 2) onStatus();
       };
       client.on('data', onData);
-      statusTimer = setTimeout(() => onStatus(null), timeoutMs);
-      client.write(PAPER_STATUS_REQUEST);
+      statusTimer = setTimeout(onStatus, timeoutMs);
+      client.write(PRINTER_STATUS_REQUEST);
     };
 
     client.connect(port, ip, () => {
