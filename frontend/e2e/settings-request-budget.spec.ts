@@ -1452,29 +1452,13 @@ test('Network pairing cards explain local and VPN/mesh QR choices across setting
   await expectPairingHints(englishLocalHint, englishVpnHint, 'VPN / Mesh Network');
   await expectLocalAddressCard();
 
-  await selectLanguage('Store Details', 'es');
-  await page.getByRole('button', { name: 'Flujo del POS', exact: true }).click();
+  await selectLanguage('Store Details', 'th');
+  await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+  await page.getByRole('button', { name: 'ขั้นตอนการใช้งาน POS', exact: true }).click();
   await expectPairingHints(
-    'Úsalo cuando todos los dispositivos puedan acceder a esta dirección por Wi-Fi, Ethernet o una red VPN/mesh',
-    'Úsalo cuando los dispositivos se conecten mediante una VPN o una red mesh entre distintas subredes o ubicaciones',
-    'VPN / Red mesh',
-  );
-
-  await selectLanguage('Datos del Negocio', 'de');
-  await page.getByRole('button', { name: 'KDS & Küche', exact: true }).click();
-  await expectPairingHints(
-    'Verwenden Sie diese Option, wenn alle Geräte diese Adresse über WLAN, Ethernet oder ein VPN-/Mesh-Netzwerk erreichen können',
-    'Verwenden Sie diese Option, wenn Geräte über ein VPN oder Mesh-Netzwerk über verschiedene Subnetze oder Standorte hinweg verbunden sind',
-    'VPN / Mesh-Netzwerk',
-  );
-
-  await selectLanguage('Geschäftsdaten', 'ar');
-  await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-  await page.getByRole('button', { name: 'الطلب من جانب الطاولة', exact: true }).click();
-  await expectPairingHints(
-    'استخدم هذا الخيار عندما تتمكن جميع الأجهزة من الوصول إلى هذا العنوان عبر Wi-Fi أو Ethernet أو شبكة VPN/mesh',
-    'استخدم هذا الخيار عندما تتصل الأجهزة عبر VPN أو شبكة متداخلة بين شبكات فرعية أو مواقع مختلفة',
-    'شبكة VPN / شبكة متشابكة',
+    'ใช้เมื่ออุปกรณ์ทุกเครื่องเข้าถึงที่อยู่นี้ได้ผ่าน Wi-Fi, Ethernet หรือเครือข่าย VPN/mesh',
+    'ใช้เมื่ออุปกรณ์เชื่อมต่อผ่าน VPN หรือเครือข่าย Mesh ข้ามซับเน็ตหรือตำแหน่งที่แตกต่างกัน',
+    'VPN / เครือข่าย Mesh',
   );
 });
 

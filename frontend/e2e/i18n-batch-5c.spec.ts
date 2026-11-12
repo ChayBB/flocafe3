@@ -26,7 +26,9 @@ async function login(page: Page, email: string): Promise<void> {
   await page.waitForFunction(() => !!localStorage.getItem('token'));
 }
 
-test('Batch 5C Pages (Dashboard, Orders, Tables, Customers, OrderHistoryGrid) render correctly in English and Persian', async ({ page }) => {
+test('Batch 5C Pages (Dashboard, Orders, Tables, Customers, OrderHistoryGrid) render correctly in English and Thai', async ({
+  page,
+}) => {
   await login(page, 'owner@flo.local');
 
   // ==========================================
@@ -46,7 +48,9 @@ test('Batch 5C Pages (Dashboard, Orders, Tables, Customers, OrderHistoryGrid) re
   await page.goto(`${BASE}/orders`);
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Orders');
-  await expect(page.getByPlaceholder('Search by order number, name, phone, table, staff, or amount…')).toBeVisible();
+  await expect(
+    page.getByPlaceholder('Search by order number, name, phone, table, staff, or amount…'),
+  ).toBeVisible();
   await captureScreenshot(page, 'orders-en.png');
 
   // 1c. Tables (EN)
@@ -75,50 +79,47 @@ test('Batch 5C Pages (Dashboard, Orders, Tables, Customers, OrderHistoryGrid) re
   await captureScreenshot(page, 'order-history-grid-en.png');
 
   // ==========================================
-  // 2. PERSIAN (FA) RTL
+  // 2. THAI (TH)
   // ==========================================
   try {
-    await setLanguage(page, 'fa');
+    await setLanguage(page, 'th');
 
-    // 2a. Dashboard (FA)
+    // 2a. Dashboard (TH)
     await page.goto(`${BASE}/dashboard`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('پیشخوان');
-    await expect(page.getByText('فروش امروز')).toBeVisible();
-    await expect(page.getByText('سفارش‌های در جریان')).toBeVisible();
-    await captureScreenshot(page, 'dashboard-fa.png');
+    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('แดชบอร์ด');
+    await expect(page.getByText('ยอดขายวันนี้')).toBeVisible();
+    await expect(page.getByText('คำสั่งซื้อที่กำลังดำเนินการ')).toBeVisible();
+    await captureScreenshot(page, 'dashboard-th.png');
 
-    // 2b. Orders (FA)
+    // 2b. Orders (TH)
     await page.goto(`${BASE}/orders`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('سفارش‌ها');
-    await expect(page.getByPlaceholder('بر پایه شماره سفارش، نام یا تلفن جستجو کنید…')).toBeVisible();
-    await captureScreenshot(page, 'orders-fa.png');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('คำสั่งซื้อ');
+    await expect(
+      page.getByPlaceholder('ค้นหาจากเลขคำสั่งซื้อ ชื่อ โทรศัพท์ โต๊ะ พนักงาน หรือยอดเงิน…'),
+    ).toBeVisible();
+    await captureScreenshot(page, 'orders-th.png');
 
-    // 2c. Tables (FA)
+    // 2c. Tables (TH)
     await page.goto(`${BASE}/tables`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('میزها');
-    await page.getByRole('button', { name: 'نقشه سالن' }).click();
-    await expect(page.getByRole('button', { name: 'ویرایش چیدمان' })).toBeVisible();
-    await captureScreenshot(page, 'tables-fa.png');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('โต๊ะ');
+    await page.getByRole('button', { name: 'ผังชั้น/โซน' }).click();
+    await expect(page.getByRole('button', { name: 'แก้ไขผัง' })).toBeVisible();
+    await captureScreenshot(page, 'tables-th.png');
 
-    // 2d. Customers (FA)
+    // 2d. Customers (TH)
     await page.goto(`${BASE}/customers`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('مشتریان');
-    await expect(page.getByText('افزودن مشتری').first()).toBeVisible();
-    await captureScreenshot(page, 'customers-fa.png');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('ลูกค้า');
+    await expect(page.getByText('เพิ่มลูกค้า').first()).toBeVisible();
+    await captureScreenshot(page, 'customers-th.png');
 
-    // 2e. Order History Demo (OrderHistoryGrid) (FA)
+    // 2e. Order History Demo (OrderHistoryGrid) (TH)
     await page.goto(`${BASE}/order-history-demo`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('پیشینه سفارش‌ها');
-    await expect(page.getByText('خوردن در محل').first()).toBeVisible();
-    await expect(page.getByText('جمع جزء').first()).toBeVisible();
-    await expect(page.getByText('چاپ رسید').first()).toBeVisible();
-    await captureScreenshot(page, 'order-history-grid-fa.png');
-
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('ประวัติคำสั่งซื้อ');
+    await expect(page.getByText('ทานที่ร้าน').first()).toBeVisible();
+    await expect(page.getByText('ยอดรวมย่อย').first()).toBeVisible();
+    await expect(page.getByText('พิมพ์ใบเสร็จ').first()).toBeVisible();
+    await captureScreenshot(page, 'order-history-grid-th.png');
   } finally {
     await setLanguage(page, 'en');
   }

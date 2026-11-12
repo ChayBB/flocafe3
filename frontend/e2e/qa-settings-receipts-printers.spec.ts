@@ -126,7 +126,7 @@ test.describe('@ci-tier2 Settings > Printers', () => {
     const receiptPrimary = page.getByLabel('Receipt language', { exact: true });
     const original = (await readSetting(page, 'bill_language_policy')) as LanguagePolicy;
     const originalValue = await receiptPrimary.inputValue();
-    const next = originalValue === 'de' ? 'th' : 'de';
+    const next = originalValue === 'th' ? 'en' : 'th';
 
     try {
       await receiptPrimary.selectOption(next);
@@ -162,7 +162,7 @@ test.describe('@ci-tier2 Settings > Printers', () => {
     const receiptSecond = page.getByLabel('Second receipt language', { exact: true });
     const original = (await readSetting(page, 'bill_language_policy')) as LanguagePolicy;
 
-    const primary = (await receiptPrimary.inputValue()) === 'fr' ? 'it' : 'fr';
+    const primary = (await receiptPrimary.inputValue()) === 'th' ? 'en' : 'th';
     try {
       await receiptPrimary.selectOption(primary);
       await receiptSecond.selectOption(primary);
@@ -207,8 +207,8 @@ test.describe('@ci-tier2 Settings > Printers', () => {
     const originalKot = await readSetting(page, 'kot_language_policy');
     const originalZ = await readSetting(page, 'z_report_language_policy');
 
-    const nextKot = (await kot.inputValue()) === 'de' ? 'th' : 'de';
-    const nextZ = (await zPrimary.inputValue()) === 'fr' ? 'it' : 'fr';
+    const nextKot = (await kot.inputValue()) === 'th' ? 'en' : 'th';
+    const nextZ = (await zPrimary.inputValue()) === 'th' ? 'en' : 'th';
 
     try {
       await kot.selectOption(nextKot);
@@ -403,7 +403,7 @@ test.describe('@ci-tier2 Settings > Printers', () => {
       .locator('xpath=following-sibling::select[1]');
     const originalMethod = await printMethod.inputValue();
 
-    // 1. Verify English and Spanish Print Method guidance copy in the live UI
+    // 1. Verify English and Thai Print Method guidance copy in the live UI
     await printMethod.selectOption('escpos');
     await expect(printMethod.locator('option[value="escpos"]')).toHaveText(
       'ESCPOS (USB / Network Thermal Printer)',
@@ -421,11 +421,11 @@ test.describe('@ci-tier2 Settings > Printers', () => {
       });
     }
 
-    await setLanguage(page, 'es');
+    await setLanguage(page, 'th');
     await page.goto(`${BASE}/settings?tab=receipts-printers`);
     await expect(
       page.getByText(
-        'Impresión térmica directa para impresoras USB, de red y WebUSB: mantenlo seleccionado para impresoras de tickets',
+        'พิมพ์ความร้อนโดยตรงสำหรับเครื่องพิมพ์ USB, เครือข่าย และ WebUSB - แนะนำให้เลือกไว้สำหรับเครื่องพิมพ์ใบเสร็จ',
       ),
     ).toBeVisible({ timeout: 30_000 });
     await setLanguage(page, 'en');

@@ -19,7 +19,7 @@ async function login(page: Page, email: string): Promise<void> {
 }
 
 test.describe('Batch 5E Migrated Pages & Components E2E Validation', () => {
-  test('Batch 5E Pages render correctly in English, Spanish, and Persian with useTranslations and valid leaf keys', async ({
+  test('Batch 5E Pages render correctly in English and Thai with useTranslations and valid leaf keys', async ({
     page,
   }) => {
     await login(page, 'owner@flo.local');
@@ -97,117 +97,52 @@ test.describe('Batch 5E Migrated Pages & Components E2E Validation', () => {
     await captureScreenshot(page, 'batch-5e-print-test-en.png');
 
     // ==========================================
-    // 2. SPANISH (ES)
-    // ==========================================
-    await setLanguage(page, 'es');
-
-    // 2a. Settings (ES)
-    await page.goto(`${BASE}/settings`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Configuración');
-    await expect(page.getByText('Datos del Negocio').first()).toBeVisible();
-    await captureScreenshot(page, 'batch-5e-settings-es.png');
-
-    // 2b. Products (ES)
-    await page.goto(`${BASE}/products`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Productos');
-    await captureScreenshot(page, 'batch-5e-products-es.png');
-
-    // 2c. Addon Groups (ES)
-    await page.goto(`${BASE}/addon-groups`);
-    await page.waitForURL(
-      (url) => url.pathname.startsWith('/products') && url.searchParams.get('tab') === 'addons',
-    );
-    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Productos');
-    await expect(page.getByRole('tab', { name: 'Grupos de adicionales' })).toHaveAttribute(
-      'data-state',
-      'active',
-    );
-    await captureScreenshot(page, 'batch-5e-addon-groups-es.png');
-
-    // 2d. Staff (ES)
-    await page.goto(`${BASE}/staff`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Personal');
-    await captureScreenshot(page, 'batch-5e-staff-es.png');
-
-    // 2e. Support (ES)
-    await page.goto(`${BASE}/support`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Ayuda y soporte');
-    await captureScreenshot(page, 'batch-5e-support-es.png');
-
-    // 2f. WhatsApp (ES)
-    await page.goto(`${BASE}/whatsapp`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('WhatsApp');
-    await captureScreenshot(page, 'batch-5e-whatsapp-es.png');
-
-    // 2g. Print Test (ES)
-    await page.goto(`${BASE}/print-test`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-      'Página de prueba de impresión',
-    );
-    await captureScreenshot(page, 'batch-5e-print-test-es.png');
-
-    // ==========================================
-    // 3. PERSIAN (FA) RTL
+    // 2. THAI (TH)
     // ==========================================
     try {
-      await setLanguage(page, 'fa');
+      await setLanguage(page, 'th');
 
-      // 3a. Settings (FA)
       await page.goto(`${BASE}/settings`);
-      await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('تنظیمات');
-      await expect(page.getByText('جزئیات فروشگاه').first()).toBeVisible();
-      await captureScreenshot(page, 'batch-5e-settings-fa.png');
+      await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('การตั้งค่า');
+      await expect(page.getByText('ข้อมูลร้าน').first()).toBeVisible();
+      await captureScreenshot(page, 'batch-5e-settings-th.png');
 
-      // 3b. Products (FA)
       await page.goto(`${BASE}/products`);
-      await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('کالاها');
-      await captureScreenshot(page, 'batch-5e-products-fa.png');
+      await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('สินค้า');
+      await captureScreenshot(page, 'batch-5e-products-th.png');
 
-      // 3c. Addon Groups (FA)
       await page.goto(`${BASE}/addon-groups`);
       await page.waitForURL(
         (url) => url.pathname.startsWith('/products') && url.searchParams.get('tab') === 'addons',
       );
-      await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('کالاها');
-      await expect(page.getByRole('tab', { name: 'گروه‌های افزودنی' })).toHaveAttribute(
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('สินค้า');
+      await expect(page.getByRole('tab', { name: 'กลุ่มตัวเลือกเพิ่ม' })).toHaveAttribute(
         'data-state',
         'active',
       );
-      await captureScreenshot(page, 'batch-5e-addon-groups-fa.png');
+      await captureScreenshot(page, 'batch-5e-addon-groups-th.png');
 
-      // 3d. Staff (FA)
       await page.goto(`${BASE}/staff`);
-      await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('کارمند');
-      await captureScreenshot(page, 'batch-5e-staff-fa.png');
+      await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('พนักงาน');
+      await captureScreenshot(page, 'batch-5e-staff-th.png');
 
-      // 3e. Support (FA)
       await page.goto(`${BASE}/support`);
-      await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('راهنما و پشتیبانی');
-      await captureScreenshot(page, 'batch-5e-support-fa.png');
+      await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('ช่วยเหลือและฝ่ายสนับสนุน');
+      await captureScreenshot(page, 'batch-5e-support-th.png');
 
-      // 3f. WhatsApp (FA)
       await page.goto(`${BASE}/whatsapp`);
-      await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('واتساپ');
-      await captureScreenshot(page, 'batch-5e-whatsapp-fa.png');
+      await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('WhatsApp');
+      await captureScreenshot(page, 'batch-5e-whatsapp-th.png');
 
-      // 3g. Print Test (FA)
       await page.goto(`${BASE}/print-test`);
-      await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('صفحه آزمون چاپ');
-      await captureScreenshot(page, 'batch-5e-print-test-fa.png');
+      await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('หน้าทดสอบการพิมพ์');
+      await captureScreenshot(page, 'batch-5e-print-test-th.png');
     } finally {
       await setLanguage(page, 'en');
     }

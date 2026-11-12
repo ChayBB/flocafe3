@@ -21,9 +21,11 @@ import { E2E_PASSWORD, setLanguage } from './helpers/test-auth';
 /** Reads a raw settings row from the API, independent of the UI's own fetch. */
 async function readSetting(page: Page, key: string): Promise<string> {
   const token = await page.evaluate(() => localStorage.getItem('token'));
-  const res = await page.request.get(`${BASE}/api/settings`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await page.request.get(`${BASE}/api/settings`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   expect(res.ok(), `GET /api/settings must succeed (got ${res.status()})`).toBeTruthy();
-  const { settings } = await res.json() as { settings: Record<string, string> };
+  const { settings } = (await res.json()) as { settings: Record<string, string> };
   return settings[key] ?? '';
 }
 
@@ -52,7 +54,9 @@ async function openStoreTab(page: Page): Promise<void> {
  * getByLabel cannot see them. Reach the control the label actually describes.
  */
 function fieldAfterLabel(page: Page, text: string): Locator {
-  return page.getByText(text, { exact: true }).first()
+  return page
+    .getByText(text, { exact: true })
+    .first()
     .locator('xpath=following-sibling::*[self::input or self::select or self::textarea][1]');
 }
 
@@ -71,7 +75,9 @@ test.describe('@ci-tier2 Settings > Store Details', () => {
     await setLanguage(page, 'en');
   });
 
-  test('business name, business day start, billing type and table requirement persist across a reload', async ({ page }) => {
+  test('business name, business day start, billing type and table requirement persist across a reload', async ({
+    page,
+  }) => {
     await openStoreTab(page);
     await expect(page.getByRole('heading', { name: 'Store Details', exact: true })).toBeVisible();
 
@@ -111,14 +117,20 @@ test.describe('@ci-tier2 Settings > Store Details', () => {
       expect(await readSetting(page, 'business_name')).toBe(stamp);
       expect(await readSetting(page, 'business_day_start_time')).toBe(nextDayStart);
       expect(await readSetting(page, 'billing_type')).toBe(nextBilling);
-      expect(await readSetting(page, 'tables_required')).toBe(nextTables === 'yes' ? 'true' : 'false');
+      expect(await readSetting(page, 'tables_required')).toBe(
+        nextTables === 'yes' ? 'true' : 'false',
+      );
     } finally {
       await openStoreTab(page);
       await fieldAfterLabel(page, 'Business Name').fill(originalName);
       await page.getByLabel('Business day start time').selectOption(originalDayStart);
       await fieldAfterLabel(page, 'Billing Type').selectOption(originalBilling);
       await fieldAfterLabel(page, 'Tables Required').selectOption(originalTables);
-      if (await saveChanges(page).isVisible().catch(() => false)) {
+      if (
+        await saveChanges(page)
+          .isVisible()
+          .catch(() => false)
+      ) {
         await saveAndReloadStoreTab(page);
       }
       expect(await readSetting(page, 'business_name')).toBe(originalName);
@@ -127,16 +139,21 @@ test.describe('@ci-tier2 Settings > Store Details', () => {
     }
   });
 
-  test('the language selector persists on change, without the Save Changes bar', async ({ page }) => {
+  test('the language selector persists on change, without the Save Changes bar', async ({
+    page,
+  }) => {
     await openStoreTab(page);
 
     const original = await readSetting(page, 'language');
-    const next = original === 'es' ? 'fr' : 'es';
+    const next = original === 'th' ? 'en' : 'th';
+    const nextLocale = next === 'th' ? 'th-TH' : 'en';
 
     // The language selector is the one store field that writes on change, so
     // the dirty save bar must not be what persists it. Assert that rather than
     // assuming it.
-    const languageSelect = page.getByText('Languages', { exact: true }).first()
+    const languageSelect = page
+      .getByText('Languages', { exact: true })
+      .first()
       .locator('xpath=following-sibling::select[1]');
     await expect(languageSelect).toBeVisible();
     await expect(saveChanges(page)).toHaveCount(0);
@@ -154,7 +171,7 @@ test.describe('@ci-tier2 Settings > Store Details', () => {
       await openStoreTab(page);
       await expect
         .poll(async () => page.evaluate(() => document.documentElement.lang), { timeout: 20_000 })
-        .toBe(next);
+        .toBe(nextLocale);
     } finally {
       // Restore through the shared helper so the UI store and the backend row
       // cannot drift apart, whichever assertion above failed.
@@ -163,7 +180,9 @@ test.describe('@ci-tier2 Settings > Store Details', () => {
     }
   });
 
-  test('changing the store currency is refused inline and routed to the currency reset dialog', async ({ page }) => {
+  test('changing the store currency is refused inline and routed to the currency reset dialog', async ({
+    page,
+  }) => {
     await openStoreTab(page);
 
     const originalCurrency = await readSetting(page, 'currency');

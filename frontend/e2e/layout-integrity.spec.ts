@@ -142,21 +142,12 @@ test('sidebar theme toggle button does not clip horizontally or vertically acros
 
   const locales = [
     {
-      code: 'vi',
-      title: 'Giao diện',
+      code: 'th',
+      title: 'ธีม',
       modes: [
-        { mode: 'system', label: 'Theo hệ thống' },
-        { mode: 'light', label: 'Sáng' },
-        { mode: 'dark', label: 'Tối' },
-      ],
-    },
-    {
-      code: 'tr',
-      title: 'Tema ve Renk Modu',
-      modes: [
-        { mode: 'system', label: 'Sistem Varsayılanı' },
-        { mode: 'light', label: 'Açık Tema' },
-        { mode: 'dark', label: 'Koyu Tema' },
+        { mode: 'system', label: 'ตามระบบ' },
+        { mode: 'light', label: 'สว่าง' },
+        { mode: 'dark', label: 'มืด' },
       ],
     },
   ] as const;
@@ -378,25 +369,6 @@ test('sidebar renders one localized primary navigation landmark wrapping nav lin
     await page.keyboard.press('Control+b');
     await expect(sidebar).toHaveAttribute('data-state', 'expanded');
 
-    // RTL (Persian): landmark label localizes and stays on the inline-start (right) edge
-    await setLanguage(page, 'fa');
-    await page.goto(`${BASE}/orders`);
-    await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
-    await expect(page.getByRole('navigation')).toHaveCount(1);
-    const rtlNav = page.getByRole('navigation', { name: 'منو', exact: true });
-    await expect(rtlNav).toBeVisible();
-    await expect(rtlNav.getByRole('link', { name: 'صندوق فروش', exact: true })).toBeVisible();
-    await expect(rtlNav.getByRole('link', { name: 'سفارش‌ها', exact: true })).toBeVisible();
-    await expect(rtlNav.getByTestId('sidebar-theme-toggle')).toHaveCount(0);
-    const rtlBox = await rtlNav.boundingBox();
-    const viewportWidth = page.viewportSize()?.width ?? 1280;
-    expect(rtlBox, 'RTL nav has bounding box').not.toBeNull();
-    expect(
-      rtlBox!.x + rtlBox!.width,
-      'RTL nav sits on the right side of the viewport',
-    ).toBeGreaterThan(viewportWidth - 25);
-
-    await setLanguage(page, 'en');
     await page.goto(`${BASE}/orders`);
 
     // Mobile drawer: landmark mounts inside the mobile sheet when opened and closes on link navigation
@@ -3614,9 +3586,7 @@ test.describe('POS collapse rows and cart table control', () => {
       await openPosAsManager(page);
       for (const [width, language] of [
         [390, 'en'],
-        [320, 'de'],
-        [320, 'tr'],
-        [320, 'ar'],
+        [320, 'th'],
       ] as const) {
         await page.setViewportSize({ width, height: 844 });
         await setLanguage(page, language);
