@@ -25,6 +25,7 @@ import {
   queueKdsSound,
   speakKds,
   speakKdsNow,
+  primeKdsVoice,
   writeKdsSoundSettings,
   type KdsSoundSetting,
   type KdsSoundSettings,
@@ -67,6 +68,8 @@ const NONE_INACTIVE: KitchenStatus[] = [];
 const AFTER_READ_ALOUD_MS = 3000;
 // The pause between the parts of a read-out: an item and its special instructions, tables, the order note.
 const READ_ALOUD_PAUSE_MS = 700;
+// The table (or "new order") is read on its own, then this pause, then the dishes.
+const READ_ALOUD_TABLE_PAUSE_MS = 600;
 // An order of more than two dishes reads each dish on its own, with a 30% longer pause between them.
 const READ_ALOUD_SPACED_DISHES_OVER = 2;
 const READ_ALOUD_DISH_PAUSE_MS = Math.round(READ_ALOUD_PAUSE_MS * 1.3);
@@ -345,12 +348,13 @@ export function KdsWorkspace({
           }
         }
         if (chunk) chunks.push({ text: chunk, pauseMs: READ_ALOUD_PAUSE_MS });
-        chunks[0] = {
+        chunks[0] = { ...chunks[0], pauseMs: READ_ALOUD_TABLE_PAUSE_MS };
+        chunks.unshift({
           text: order.table?.name
-            ? t('readAloudTable', { table: order.table.name, items: chunks[0].text })
-            : t('readAloudOrder', { number: order.order_number, items: chunks[0].text }),
+            ? t('readAloudTable', { table: order.table.name })
+            : t('readAloudOrder', { number: order.order_number }),
           pauseMs: READ_ALOUD_PAUSE_MS,
-        };
+        });
         const orderNote = order.special_instructions?.trim() || '';
         if (orderNote && readOrderNotes.get(order.id) !== orderNote) {
           chunks.push({
@@ -362,6 +366,7 @@ export function KdsWorkspace({
       });
       if (parts.length > 0) {
         const lang = kdsSpeechLang();
+        primeKdsVoice(parts[0].text.split(/\s+/)[0] ?? '', lang);
         queueKdsSound(async () => {
           for (const [index, part] of parts.entries()) {
             if (index > 0) await new Promise((resolve) => setTimeout(resolve, part.pauseMs));

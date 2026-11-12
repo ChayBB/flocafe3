@@ -153,21 +153,19 @@ test('orders already in the kitchen when the display signs in or switches statio
     (await sounds(page)).__spoken.filter((text) => text.includes(productName));
   expect(await spokenAboutProduct()).toEqual([]);
 
-  // A new order is read out once without its order number: the item, its special instructions
-  // 0.7 seconds later, then the order note once the last item has been read.
+  // A new order is read out once without its order number: "New order", the item 0.6 seconds later,
+  // its special instructions 0.7 seconds after that, then the order note once the last item is read.
   const fresh = await placeOrder(`rush ${run}`, 'extra coconut');
   await expect.poll(spokenAboutProduct, { timeout: 15000 }).toHaveLength(1);
   const [spoken] = await spokenAboutProduct();
-  expect(spoken).toBe(`New order: 1 ${productName}`);
-  // A browser voice is woken first too, so the first word is not swallowed.
-  expect((await sounds(page)).__hums).toBeGreaterThan(0);
+  expect(spoken).toBe(`1 ${productName}`);
   // After a quiet spell an online browser voice cuts its first sentence short, so a silent
-  // first word goes ahead of the order.
+  // first word goes ahead of the order, started while the new-order beep plays.
   const warm = await sounds(page);
   const spokenAt = warm.__spoken.indexOf(spoken);
-  expect(warm.__spoken[spokenAt - 1]).toBe('New');
-  expect(warm.__volumes[spokenAt - 1]).toBe(0);
-  expect(warm.__volumes[spokenAt]).toBe(1);
+  expect(warm.__spoken.slice(spokenAt - 2, spokenAt)).toEqual(['New', 'New order']);
+  expect(warm.__volumes.slice(spokenAt - 2, spokenAt + 1)).toEqual([0, 1, 1]);
+  expect(warm.__spokenAt[spokenAt] - warm.__spokenAt[spokenAt - 1]).toBeGreaterThanOrEqual(550);
   expect(spoken).not.toContain(fresh.order_number);
   await expect
     .poll(async () => (await sounds(page)).__spoken.includes(`Order note: rush ${run}`), {
@@ -198,9 +196,10 @@ test('orders already in the kitchen when the display signs in or switches statio
   expect(many.status()).toBe(201);
   await expect.poll(async () => (await spokenAboutProduct()).length, { timeout: 15000 }).toBe(4);
   const spaced = await sounds(page);
-  const first = spaced.__spoken.lastIndexOf(`New order: 1 ${productName}`);
-  expect(spaced.__spoken.slice(first, first + 3)).toEqual([
-    `New order: 1 ${productName}`,
+  const first = spaced.__spoken.lastIndexOf(`1 ${productName}`);
+  expect(spaced.__spoken.slice(first - 1, first + 3)).toEqual([
+    'New order',
+    `1 ${productName}`,
     `2 ${productName}`,
     `3 ${productName}`,
   ]);
@@ -313,7 +312,8 @@ test('KDS sound switches turn reading new items aloud and the ready-to-serve ann
     .poll(async () => (await sounds(page)).__spoken.includes('later'), { timeout: 15000 })
     .toBe(true);
   const readOut = await sounds(page);
-  const readIndex = readOut.__spoken.indexOf(`New order: 2 ${productName}, 1 ${productName}`);
+  const readIndex = readOut.__spoken.indexOf(`2 ${productName}, 1 ${productName}`);
+  expect(readOut.__spoken[readIndex - 1]).toBe('New order');
   expect(readOut.__spoken[readIndex + 1]).toBe('later');
   const bellsBefore = (await sounds(page)).__bells;
   await markReady(first.items[0].id);
@@ -325,8 +325,7 @@ test('KDS sound switches turn reading new items aloud and the ready-to-serve ann
     .toContain('An order is ready to serve');
   // The new order is read out first, and the ready announcement waits at least 3 seconds after it.
   const log = await sounds(page);
-  const readAt =
-    log.__spokenAt[log.__spoken.findIndex((text) => text.includes(`New order: 2 ${productName}`))];
+  const readAt = log.__spokenAt[log.__spoken.indexOf(`2 ${productName}, 1 ${productName}`)];
   const readyAt = log.__spokenAt[log.__spoken.indexOf('An order is ready to serve')];
   expect(readyAt - readAt).toBeGreaterThanOrEqual(2900);
   // The rest of the order turning ready within 10 seconds is not announced again.
@@ -522,7 +521,7 @@ test('a table with several items turning ready is announced once, and not again 
   expect(await announced()).toBe(3);
   // A new order arriving meanwhile is read out without waiting for the queued alert.
   const readOut = async () =>
-    (await sounds(page)).__spoken.filter((text) => text.startsWith(`Table ${tableName}:`)).length;
+    (await sounds(page)).__spoken.filter((text) => text === `Table ${tableName}`).length;
   const readBefore = await readOut();
   const late = await page.request.post(`${E2E_BASE_URL}/api/orders`, {
     headers,
@@ -694,6 +693,8 @@ test('the POS voice wakes the speaker and reads new items when the browser voice
     };
     w.__starts = [];
     localStorage.setItem('flocafe:kds-voice', 'server:e2e-voice');
+    // The new-order beep itself wakes the speaker; this checks the hum used when nothing has played.
+    localStorage.setItem('flocafe:kds-sound-settings', JSON.stringify({ newOrderAlert: false }));
     w.AudioContext.prototype.createBufferSource = function (this: { currentTime: number }) {
       const currentTime = () => this.currentTime;
       const source = {
@@ -747,7 +748,8 @@ test('the POS voice wakes the speaker and reads new items when the browser voice
     },
   });
   expect(order.status()).toBe(201);
-  await expect.poll(async () => (await starts()).length, { timeout: 15000 }).toBeGreaterThan(seen);
+  // "New order", then the dish 0.6 seconds later, both in the POS voice.
+  await expect.poll(async () => (await starts()).length, { timeout: 15000 }).toBe(seen + 2);
   expect((await starts())[seen]).toBeGreaterThanOrEqual(0.7);
   // A quiet hum plays during that lead, since silence alone does not wake a sleeping speaker.
   expect((await sounds(page)).__hums).toBe(humsBefore + 1);
@@ -772,7 +774,7 @@ test('the POS voice wakes the speaker and reads new items when the browser voice
     },
   });
   expect(nextOrder.status()).toBe(201);
-  const announcement = `New order: 2 Rice ${run}`;
+  const announcement = 'New order';
   await expect.poll(async () => (await sounds(page)).__spoken).toContain(announcement);
   const fallback = page.waitForRequest(
     (request) =>
@@ -782,5 +784,5 @@ test('the POS voice wakes the speaker and reads new items when the browser voice
   );
   await page.clock.fastForward(20_000);
   await fallback;
-  await expect.poll(async () => (await starts()).length).toBe(seen + 2);
+  await expect.poll(async () => (await starts()).length).toBe(seen + 3);
 });

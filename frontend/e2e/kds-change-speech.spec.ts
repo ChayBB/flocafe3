@@ -74,6 +74,7 @@ test('the KDS reads out the table and dish of an item changed to take-away or ca
           w.__spoken.push(utterance.text);
           setTimeout(() => utterance.onend?.(), 0);
         },
+        cancel: () => {},
       },
     });
   });

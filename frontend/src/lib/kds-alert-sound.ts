@@ -5,6 +5,11 @@
  */
 type AudioContextClass = typeof AudioContext;
 
+// Speakers that have been quiet take a moment to wake, which swallowed the first word ("table").
+const AUDIO_WAKE_LEAD_S = 0.7;
+const AUDIO_IDLE_MS = 1500;
+let lastAudioEndedAt = -Infinity;
+
 let context: AudioContext | null = null;
 function getContext(): AudioContext | null {
   if (context || typeof window === 'undefined') return context;
@@ -42,13 +47,10 @@ export function playKdsAlert(beeps = 3): boolean {
     oscillator.start(start);
     oscillator.stop(start + 0.18);
   }
+  // The beeps wake the speaker, so speech right after them needs no wake lead.
+  lastAudioEndedAt = Date.now() + ((beeps - 1) * 0.3 + 0.18) * 1000;
   return true;
 }
-
-// Speakers that have been quiet take a moment to wake, which swallowed the first word ("table").
-const AUDIO_WAKE_LEAD_S = 0.7;
-const AUDIO_IDLE_MS = 1500;
-let lastAudioEndedAt = -Infinity;
 
 /** The ready-to-serve bells a KDS display can pick from; `none` reads the table without a bell. */
 export const KDS_READY_BELLS = {

@@ -111,6 +111,7 @@ export async function kdsVoicesFor(lang: string): Promise<SpeechSynthesisVoice[]
 const VOICE_WARMUP_IDLE_MS = 20000;
 const VOICE_WARMUP_TIMEOUT_MS = 4000;
 let lastDeviceSpeechAt = -Infinity;
+let voiceWarming: Promise<unknown> | null = null;
 
 function utter(
   text: string,
@@ -150,6 +151,7 @@ async function speakOnDevice(
 ): Promise<boolean> {
   // A browser voice also starts cold, so the speaker is woken first or it swallows the first word.
   await wakeKdsSpeaker();
+  if (voiceWarming) await voiceWarming;
   if (Date.now() - lastDeviceSpeechAt > VOICE_WARMUP_IDLE_MS) {
     await utter(text.split(/\s+/)[0] || text, lang, voice, 0, VOICE_WARMUP_TIMEOUT_MS);
   }
@@ -237,6 +239,30 @@ async function speakNow(rawText: string, lang: string): Promise<void> {
   if (await speakFromServer(text, lang)) return;
   const local = voices.find((voice) => voice !== preferred && voice.localService !== false);
   if (local) await speakOnDevice(text, lang, local);
+}
+
+/**
+ * Warms an idle online device voice with a silent `firstWord` as soon as an order arrives, so the
+ * warm-up overlaps the new-order beep instead of delaying the read-out after it.
+ */
+export function primeKdsVoice(firstWord: string, lang: string): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window) || voiceWarming) return;
+  if (Date.now() - lastDeviceSpeechAt <= VOICE_WARMUP_IDLE_MS || !firstWord) return;
+  const chosenName = readKdsVoiceName();
+  if (chosenName.startsWith(KDS_SERVER_VOICE_PREFIX)) return;
+  voiceWarming = kdsVoicesFor(lang)
+    .then((voices) => {
+      const voice =
+        voices.find((candidate) => candidate.name === chosenName) ?? voices.find(isNaturalVoice);
+      return voice ? utter(firstWord, lang, voice, 0, VOICE_WARMUP_TIMEOUT_MS) : false;
+    })
+    .then((warmed) => {
+      if (warmed) lastDeviceSpeechAt = Date.now();
+    })
+    .catch(() => {})
+    .finally(() => {
+      voiceWarming = null;
+    });
 }
 
 /** Runs a sound task after every announcement queued before it. */

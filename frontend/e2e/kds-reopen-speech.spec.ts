@@ -117,7 +117,7 @@ test('a reopened KDS does not read out items it already announced, but still rea
   const first = await placeOrder(3);
   await expect
     .poll(() => spokenAbout(page, productName), { timeout: 15000 })
-    .toEqual([`New order: 3 ${productName}`]);
+    .toEqual([`3 ${productName}`]);
 
   // Reloading the display shows the order again without reading it out.
   await page.reload();
@@ -140,7 +140,7 @@ test('a reopened KDS does not read out items it already announced, but still rea
   await placeOrder(5);
   await expect
     .poll(() => spokenAbout(page, productName), { timeout: 15000 })
-    .toEqual([`New order: 5 ${productName}`]);
+    .toEqual([`5 ${productName}`]);
 
   // After a dropped connection only the order that came in meanwhile is read out.
   await context.setOffline(true);
@@ -149,7 +149,7 @@ test('a reopened KDS does not read out items it already announced, but still rea
   await context.setOffline(false);
   await expect
     .poll(() => spokenAbout(page, productName), { timeout: 30000 })
-    .toEqual([`New order: 5 ${productName}`, `New order: 7 ${productName}`]);
+    .toEqual([`5 ${productName}`, `7 ${productName}`]);
   await page.waitForTimeout(2500);
   expect(await spokenAbout(page, productName)).toHaveLength(2);
 });
