@@ -190,7 +190,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
     await expect(tableModal).not.toBeVisible();
 
     // F2 does not open the table picker for takeaway orders
-    await page.getByRole('button', { name: 'Takeaway' }).click();
+    await page.getByRole('button', { name: 'Takeaway', exact: true }).click();
     await page.keyboard.press('F2');
     await expect(tableModal).not.toBeVisible();
 
@@ -205,7 +205,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
 
   test('F4 opens checkout modal, and Space tenders cash to complete order', async ({ page }) => {
     // Select Takeaway mode so checkout does not require table selection
-    await page.getByRole('button', { name: 'Takeaway' }).click();
+    await page.getByRole('button', { name: 'Takeaway', exact: true }).click();
 
     // Add simple product (E2E Coffee) to cart
     const productCard = page.getByTestId('pos-product-card').first();
@@ -251,7 +251,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
     await page.goto(`${BASE}/pos`);
     await expect(page.getByTestId('pos-product-grid')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Takeaway' }).click();
+    await page.getByRole('button', { name: 'Takeaway', exact: true }).click();
     await page.getByTestId('pos-product-card').first().click();
     const cartItem = page.getByTestId('cart-item').first();
     await expect(cartItem).toBeVisible({ timeout: 5_000 });
@@ -276,7 +276,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
   test('holding Space to open checkout or repeating Space/Enter inside modal does not auto-confirm until a fresh press', async ({
     page,
   }) => {
-    await page.getByRole('button', { name: 'Takeaway' }).click();
+    await page.getByRole('button', { name: 'Takeaway', exact: true }).click();
 
     const productCard = page.getByTestId('pos-product-card').first();
     await productCard.click();
@@ -433,7 +433,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
       expect(billsAfterData.pagination.total).toBe(paidBillsBeforeCount + 1);
 
       // Also verify fresh non-repeat Enter after keyup confirms once on a second order
-      await page.getByRole('button', { name: 'Takeaway' }).click();
+      await page.getByRole('button', { name: 'Takeaway', exact: true }).click();
       await productCard.click();
       await expect(page.getByTestId('cart-item').first()).toBeVisible({ timeout: 5_000 });
       await page.locator('body').click({ position: { x: 10, y: 10 } });
@@ -674,7 +674,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
   test('PrepaidCheckoutModal focused buttons are not hijacked by global Space/Enter quick-pay', async ({
     page,
   }) => {
-    await page.getByRole('button', { name: 'Takeaway' }).click();
+    await page.getByRole('button', { name: 'Takeaway', exact: true }).click();
     await page.getByTestId('pos-product-card').first().click();
     await expect(page.getByTestId('cart-item').first()).toBeVisible({ timeout: 5_000 });
 

@@ -557,7 +557,7 @@ test('prepaid checkout settles an undiscounted bill when discounts are disabled'
     await login(page);
     await page.goto(`${BASE}/pos`);
     // The seeded untaxed-by-product coffee carries no options: the card tap adds it.
-    await page.getByTestId('pos-product-card').click();
+    await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
 
     const settingsRequest = page.waitForRequest((request) => {
       const url = new URL(request.url());

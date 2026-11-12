@@ -143,7 +143,7 @@ test('adding an item to an occupied table only prints the newly appended item on
 
     // Add a second item to the cart, then send it to the already-occupied table.
     // A simple catalog item needs no choices, so the tap is the whole add.
-    await page.getByTestId('pos-product-card').click();
+    await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
     await page.getByRole('button', { name: /Select Table|Table: / }).click();
 
     await expect(page.getByRole('heading', { name: 'Select Table' })).toBeVisible();

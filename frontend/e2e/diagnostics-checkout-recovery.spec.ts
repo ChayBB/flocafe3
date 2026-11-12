@@ -30,7 +30,7 @@ async function loginAndOpenPos(page: Page): Promise<void> {
 }
 
 async function addOneProduct(page: Page): Promise<void> {
-  await page.getByTestId('pos-product-card').click();
+  await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
   const addToCart = page.getByRole('button', { name: /Add to Cart/ });
   if (await addToCart.count()) await addToCart.click();
 }

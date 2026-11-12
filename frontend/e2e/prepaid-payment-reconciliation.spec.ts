@@ -105,7 +105,7 @@ test('prepaid checkout uses the authoritative decimal bill total and settles in 
   await page.goto(`${BASE}/pos`);
 
   // E2E Coffee is a simple product, so the card tap lands it on the cart.
-  await page.getByTestId('pos-product-card').click();
+  await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
   await page.getByRole('button', { name: 'Place Order' }).click();
 
   await expect(page.getByRole('button', { name: 'Tax ฿4.20' })).toBeVisible();
@@ -187,7 +187,7 @@ test('prepaid checkout preserves the saved discount and bill when retrying after
     await setLanguage(page, 'en');
     await page.goto(`${BASE}/pos`);
 
-    await page.getByTestId('pos-product-card').click();
+    await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
     await page.getByRole('button', { name: 'Place Order' }).click();
 
     await expect(page.getByRole('button', { name: 'Confirm Payment · ฿64.20' })).toBeVisible();
@@ -296,7 +296,7 @@ test('prepaid checkout never reports success when the payment response is partia
   await page.goto(`${BASE}/pos`);
 
   // E2E Coffee is a simple product, so the card tap lands it on the cart.
-  await page.getByTestId('pos-product-card').click();
+  await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
   await page.getByRole('button', { name: 'Place Order' }).click();
   await expect(page.getByRole('button', { name: 'Confirm Payment · ฿64.20' })).toBeVisible();
   await page.getByRole('button', { name: 'Cash', exact: true }).click();
@@ -384,7 +384,7 @@ test('prepaid checkout fee choices use fresh quotes and fail closed when a quote
     await setLanguage(page, 'en');
     await page.goto(`${BASE}/pos`);
     // E2E Coffee is a simple product, so the card tap lands it on the cart.
-    await page.getByTestId('pos-product-card').click();
+    await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
     await page.getByRole('button', { name: 'Place Order' }).click();
 
     const summary = page.getByTestId('prepaid-checkout-summary');
