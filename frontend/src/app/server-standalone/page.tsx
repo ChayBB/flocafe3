@@ -1,6 +1,7 @@
 'use client';
 
 import axios, { AxiosInstance, type AxiosResponse } from 'axios';
+import dynamic from 'next/dynamic';
 import toast from 'react-hot-toast';
 import {
   ArrowRightLeft,
@@ -30,7 +31,6 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { parsePhone } from '@/lib/phone';
 import { useSyncServerLanguage, writeLanguageOverride } from '@/lib/i18n';
 import type { Language } from '@/lib/i18n/languages';
 import { usePosSettingsStore } from '@/store/pos-settings';
@@ -42,7 +42,6 @@ import { holdDarkClass } from '@/lib/kds-screen-mode';
 import { useTranslations } from 'use-intl';
 import { Ltr } from '@/components/layout/Ltr';
 import { StoreClock } from '@/components/layout/StoreClock';
-import GuestTableQrDialog from '@/components/tables/GuestTableQrDialog';
 import GuestAlerts from '@/components/tables/GuestAlerts';
 import {
   OrderedItemList,
@@ -66,7 +65,6 @@ import AddonModal from '@/components/pos/AddonModal';
 import ProductGrid, { type QuickFilter } from '@/components/pos/ProductGrid';
 import { hasTag } from '@/components/pos/DietaryBadge';
 import type { PosCategorySort, PosItemSort } from '@/lib/pos-sort';
-import MoveTableModal from '@/components/tables/MoveTableModal';
 import { tenantCan } from '@/lib/permissions';
 import type {
   Table as FullTable,
@@ -135,6 +133,12 @@ type ServerAppInfo = {
   item_sort?: PosItemSort;
 };
 
+// Staff-only dialogs load on first use so a guest phone does not download their printing code.
+const GuestTableQrDialog = dynamic(() => import('@/components/tables/GuestTableQrDialog'), {
+  ssr: false,
+});
+const MoveTableModal = dynamic(() => import('@/components/tables/MoveTableModal'), { ssr: false });
+
 const TOKEN_KEY = 'flocafe:server-app-token';
 const LANGUAGE_KEY = 'flocafe:server-app-language';
 const LIVE_REFRESH_MS = 5000;
@@ -146,6 +150,28 @@ const settle = <T,>(request: Promise<T>): Promise<Settled<T>> =>
     (response) => ({ response, error: null }),
     (error: unknown) => ({ response: null, error }),
   );
+
+type GuestJoinBody = {
+  table_id: string;
+  device_token?: string;
+  table_token?: string;
+  sticker?: string;
+  unlock_key?: string;
+};
+
+const guestJoinBody = (
+  tableId: string,
+  storedDevice: string | null,
+  tableToken: string | null,
+  sticker: string | null,
+  unlockKey: string | null,
+): GuestJoinBody => ({
+  table_id: tableId,
+  device_token: storedDevice ?? undefined,
+  table_token: tableToken ?? undefined,
+  sticker: sticker ?? undefined,
+  unlock_key: unlockKey ?? undefined,
+});
 
 const subscribeToNothing = () => () => {};
 
@@ -324,6 +350,7 @@ export default function ServerStandalonePage() {
   const guestMenuPrefetchRef = useRef<{
     startedAt: number;
     request: Promise<Settled<AxiosResponse>>;
+    join: { key: string; request: Promise<Settled<AxiosResponse>> } | null;
   } | null>(null);
   const [guestTable, setGuestTable] = useState<{ id: string; name: string } | null>(null);
   const [guestDeviceToken, setGuestDeviceToken] = useState<string | null>(null);
@@ -699,9 +726,22 @@ export default function ServerStandalonePage() {
     let cancelled = false;
     const hasStaffToken = Boolean(localStorage.getItem(TOKEN_KEY));
     if (guestTableId && !hasStaffToken && !guestMenuPrefetchRef.current) {
+      // Without a staff token the guest join cannot depend on /info or /me, so it races the menu.
+      const storedDevice = readGuestDevice(guestDeviceStorageKey(guestTableId));
+      const sticker = guestTableToken ? null : guestSticker;
+      const joinBody =
+        sticker && !storedDevice
+          ? null
+          : guestJoinBody(guestTableId, storedDevice, guestTableToken, sticker, null);
       guestMenuPrefetchRef.current = {
         startedAt: Date.now(),
         request: settle(api.get('/api/guest/menu')),
+        join: joinBody
+          ? {
+              key: JSON.stringify(joinBody),
+              request: settle(api.post('/api/guest/join', joinBody)),
+            }
+          : null,
       };
     }
     // A guest phone has no staff token, so it skips the guaranteed-401 /me round trip.
@@ -721,6 +761,7 @@ export default function ServerStandalonePage() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the QR address is read once on mount.
   }, [api, guestTableId]);
 
   const userId = user?.id;
@@ -970,18 +1011,23 @@ export default function ServerStandalonePage() {
     }
     const prefetched = guestMenuPrefetchRef.current;
     guestMenuPrefetchRef.current = null;
-    const menuPromise =
-      prefetched && Date.now() - prefetched.startedAt < GUEST_MENU_PREFETCH_MAX_AGE_MS
-        ? prefetched.request
-        : settle(api.get('/api/guest/menu'));
-    api
-      .post('/api/guest/join', {
-        table_id: guestTableId,
-        device_token: storedDevice ?? undefined,
-        table_token: guestTableToken ?? undefined,
-        sticker: sticker ?? undefined,
-        unlock_key: sticker && guestTapped ? guestUnlockKeyRef.current : undefined,
-      })
+    const fresh = prefetched && Date.now() - prefetched.startedAt < GUEST_MENU_PREFETCH_MAX_AGE_MS;
+    const menuPromise = fresh ? prefetched.request : settle(api.get('/api/guest/menu'));
+    const joinBody = guestJoinBody(
+      guestTableId,
+      storedDevice,
+      guestTableToken,
+      sticker,
+      sticker && guestTapped ? guestUnlockKeyRef.current : null,
+    );
+    const joinPromise =
+      fresh && prefetched.join?.key === JSON.stringify(joinBody)
+        ? prefetched.join.request.then((result) => {
+            if (!result.response) throw result.error;
+            return result.response;
+          })
+        : api.post('/api/guest/join', joinBody);
+    joinPromise
       .then(async (joinRes) => {
         if (cancelled) return;
         const table = joinRes.data.table as { id: string; name: string };
@@ -1525,7 +1571,9 @@ export default function ServerStandalonePage() {
     if (!name && !rawPhone) return null;
     let normalizedPhone: string | undefined = undefined;
     if (rawPhone) {
-      const parsed = regional?.country ? parsePhone(rawPhone, regional.country) : null;
+      const parsed = regional?.country
+        ? (await import('@/lib/phone')).parsePhone(rawPhone, regional.country)
+        : null;
       normalizedPhone = parsed ? parsed.e164 : rawPhone;
       try {
         const lookup = await api.get('/api/crm/lookup', {
