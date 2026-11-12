@@ -600,6 +600,7 @@ const PAYMENT_DISPLAY_CODES = [
   'payment_method_unavailable',
   'payment_input_invalid',
   'cash_session_required',
+  'day_already_closed',
   'card_transaction_id_required',
 ] as const;
 const CHARGE_DISPLAY_CODES = [

@@ -77,8 +77,10 @@ export function shiftUnpaidBillsInWindow(
   db: ReturnType<typeof getDatabase>,
   openedAt: string,
   end: string,
+  options: { endExclusive?: boolean } = {},
 ): ShiftUnpaidInWindowSummary {
   const minorFactor = getCurrencyMinorUnitFactor(getTenantCurrency(db));
+  const endOperator = options.endExclusive ? '<' : '<=';
   const row = db
     .prepare(
       `
@@ -90,7 +92,7 @@ export function shiftUnpaidBillsInWindow(
     WHERE b.payment_status NOT IN ('paid', 'refunded', 'partially_refunded')
       AND o.status != 'cancelled'
       AND COALESCE(b.balance, b.total, 0) > 0
-      AND b.created_at >= ? AND b.created_at <= ?
+      AND b.created_at >= ? AND b.created_at ${endOperator} ?
   `,
     )
     .get(minorFactor, openedAt, end) as { bill_count: number; pending_cents: number };
@@ -113,7 +115,7 @@ export function shiftUnpaidBillsInWindow(
     WHERE b.payment_status NOT IN ('paid', 'refunded', 'partially_refunded')
       AND o.status != 'cancelled'
       AND COALESCE(b.balance, b.total, 0) > 0
-      AND b.created_at >= ? AND b.created_at <= ?
+      AND b.created_at >= ? AND b.created_at ${endOperator} ?
     ORDER BY b.created_at DESC, b.id DESC
     LIMIT 5
   `,
@@ -137,6 +139,63 @@ export function shiftUnpaidBillsInWindow(
       created_at: String(item.created_at || ''),
     })),
   };
+}
+
+export interface OpenTradeBlockingDayClose {
+  unpaid_bill_count: number;
+  unbilled_order_count: number;
+}
+
+/**
+ * The store is still trading when the business day has unsettled bills or
+ * active orders that were never billed. Order status alone is not used:
+ * paid orders are often left at `served`/`ready`.
+ */
+export function openTradeBlockingDayClose(
+  db: ReturnType<typeof getDatabase>,
+  periodStart: string,
+  periodEnd: string,
+): OpenTradeBlockingDayClose | null {
+  const unpaidBillCount = shiftUnpaidBillsInWindow(db, periodStart, periodEnd, {
+    endExclusive: true,
+  }).bill_count;
+  const { n: unbilledOrderCount } = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM orders o
+        WHERE o.status NOT IN ('completed', 'cancelled')
+          AND o.created_at >= ? AND o.created_at < ?
+          AND NOT EXISTS (SELECT 1 FROM bills b WHERE b.order_id = o.id)`,
+    )
+    .get(periodStart, periodEnd) as { n: number };
+  if (unpaidBillCount === 0 && unbilledOrderCount === 0) return null;
+  return { unpaid_bill_count: unpaidBillCount, unbilled_order_count: unbilledOrderCount };
+}
+
+/** Whether any order was taken in [periodStart, periodEnd). */
+export function businessDayHadTrade(
+  db: ReturnType<typeof getDatabase>,
+  periodStart: string,
+  periodEnd: string,
+): boolean {
+  return !!db
+    .prepare(`SELECT 1 FROM orders WHERE created_at >= ? AND created_at < ? LIMIT 1`)
+    .get(periodStart, periodEnd);
+}
+
+/** Business date of the latest order taken before `before`, if any. */
+export function latestTradeBusinessDateBefore(
+  db: ReturnType<typeof getDatabase>,
+  before: string,
+): string | null {
+  const row = db
+    .prepare(`SELECT created_at FROM orders WHERE created_at < ? ORDER BY created_at DESC LIMIT 1`)
+    .get(before) as { created_at: string } | undefined;
+  if (!row) return null;
+  return localDateInTimezone(
+    parseDbTimestamp(row.created_at),
+    tenantTimezone(),
+    tenantBusinessDayStartTime(db),
+  );
 }
 
 export function findUnpaidInShiftOrders(

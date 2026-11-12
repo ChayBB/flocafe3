@@ -81,6 +81,7 @@ const PAYMENT_DISPLAY_CODES = [
   'payment_method_unavailable',
   'payment_input_invalid',
   'cash_session_required',
+  'day_already_closed',
 ] as const;
 const BILL_CHARGE_DISPLAY_CODES = [
   'charge_required',
@@ -125,6 +126,7 @@ const REFUND_DISPLAY_CODES = [
   'pin_rate_limited',
   'approver_pin_invalid',
   'cash_session_required',
+  'day_already_closed',
 ] as const;
 const CASH_SESSION_OPEN_DISPLAY_CODES = [
   'opening_float_invalid',
@@ -168,6 +170,8 @@ const CASH_DAY_CLOSE_DISPLAY_CODES = [
   'day_already_closed',
   'opening_float_mismatch',
   'open_shift_blocks_day_close',
+  'open_trade_blocks_day_close',
+  'no_trade_blocks_day_close',
 ] as const;
 const KDS_ITEM_STATUS_DISPLAY_CODES = [
   'invalid_status',

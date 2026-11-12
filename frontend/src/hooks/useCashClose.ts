@@ -401,7 +401,18 @@ export function useCashClose() {
     setCloseStep(3);
   }
 
-  const openCloseModal = useCallback((view: 'x-report' | 'z-report' | null = null) => {
+  const openCloseModal = useCallback(async (view: 'x-report' | 'z-report' | null = null) => {
+    // Closing defaults to the latest trading day still open, not the calendar day.
+    let suggestedDate: string | null = null;
+    if (view === null) {
+      try {
+        const res = await api.get('/cash-closures/default-date');
+        suggestedDate = typeof res.data?.business_date === 'string' ? res.data.business_date : null;
+      } catch {
+        suggestedDate = null;
+      }
+    }
+    setDateOverride(suggestedDate);
     setEntryView(view);
     setOpenToken((n) => n + 1);
     setCloseOpen(true);
@@ -605,6 +616,7 @@ export function useCashClose() {
           display_code?: string;
           error?: string;
           blocking_shift?: { id: number; opened_by_name: string };
+          blocking_trade?: { unpaid_bill_count: number; unbilled_order_count: number };
         };
         if (data?.display_code === 'open_shift_blocks_day_close') {
           const shift = data.blocking_shift;
@@ -615,6 +627,15 @@ export function useCashClose() {
                   name: shift.opened_by_name,
                 })
               : data.error || t('dayCloseOpenShiftBlocksGeneric'),
+          );
+        } else if (data?.display_code === 'no_trade_blocks_day_close') {
+          setSubmitError(t('dayCloseNoTrade'));
+        } else if (data?.display_code === 'open_trade_blocks_day_close') {
+          setSubmitError(
+            t('dayCloseStoreStillOpen', {
+              bills: data.blocking_trade?.unpaid_bill_count ?? 0,
+              orders: data.blocking_trade?.unbilled_order_count ?? 0,
+            }),
           );
         } else {
           // The backend's 409 carries alreadyClosed; surface the message and

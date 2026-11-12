@@ -21,7 +21,7 @@
  *  - Snapshots the result with the operator's counted cash and stores one
  *    immutable row in `cash_closures`. Duplicate POST against the same
  *    `business_date` (scope='day') is rejected with 409 via SELECT-then-INSERT
- *    inside `withTxn`; the partial index `cash_closures_one_day` is the
+ *    inside an immediate transaction; the partial index `cash_closures_one_day` is the
  *    concurrency safety net.
  *
  * Sales flow is deliberately untouched: `createRefund`, `shift_id`, and
@@ -45,7 +45,12 @@ import { requirePermission } from '../services/authorization';
 import * as whatsapp from '../services/whatsapp';
 import { nextZNumber } from '../db';
 import { getTenantCurrency } from '../services/refund';
-import { openSessionsBlockingDayClose } from '../services/cash-day-close-guards';
+import {
+  businessDayHadTrade,
+  latestTradeBusinessDateBefore,
+  openSessionsBlockingDayClose,
+  openTradeBlockingDayClose,
+} from '../services/cash-day-close-guards';
 import {
   getOpenSession,
   NO_CASH_SESSION_ID,
@@ -1290,6 +1295,29 @@ export function computePeriodAggregates(
   };
 }
 
+/**
+ * Close-day default: the current business date once it has traded, otherwise
+ * the latest earlier trading date that is still open.
+ */
+router.get('/default-date', requirePermission('cash.day-close'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const startTime = tenantStartTime(db);
+    const current = localDateInTimezone(clockNow(), tenantTimezone(), startTime);
+    const [periodStart, periodEnd] = dayBoundsInTimezone(current, tenantTimezone(), startTime);
+    let businessDate = current;
+    if (!businessDayHadTrade(db, periodStart, periodEnd)) {
+      const previous = latestTradeBusinessDateBefore(db, periodStart);
+      if (previous && !closedDayExists(db, previous)) businessDate = previous;
+    }
+    res.json({ business_date: businessDate });
+  } catch (error: any) {
+    res.locals.postHogError = error;
+    console.error('[CashClosures] Default date error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get(
   '/movements',
   requirePermission('cash.movements.manage'),
@@ -1534,7 +1562,6 @@ router.post('/', requirePermission('cash.day-close'), (req: Request, res: Respon
   let claimedZReport: whatsapp.ClaimedDayCloseZReportAttempt | null = null;
   try {
     const body = req.body || {};
-    const businessDate = validateBusinessDate(body.business_date);
     const requestedOpeningFloatCents = validateCents(
       body.opening_float_cents,
       'opening_float_cents',
@@ -1548,41 +1575,71 @@ router.post('/', requirePermission('cash.day-close'), (req: Request, res: Respon
     if (!closedBy) throw httpError('Authentication required', 401);
 
     const db = getDatabase();
-    const blockingSessions = openSessionsBlockingDayClose(db, businessDate);
-    const blockingSession = blockingSessions[0];
-    if (blockingSession) {
-      throw Object.assign(
-        httpError(
-          `Close open shift #${blockingSession.id} (${blockingSession.opened_by_name}) before closing business day ${businessDate}`,
-          409,
-          'open_shift_blocks_day_close',
-        ),
-        {
-          blockingShift: {
-            id: blockingSession.id,
-            opened_by_name: blockingSession.opened_by_name,
-            opened_at: blockingSession.opened_at,
+    // Lock out other writers before checking eligibility and taking the snapshot.
+    const closeDayTxn = db.transaction(() => {
+      const businessDate = validateBusinessDate(body.business_date);
+      const blockingSessions = openSessionsBlockingDayClose(db, businessDate);
+      const blockingSession = blockingSessions[0];
+      if (blockingSession) {
+        throw Object.assign(
+          httpError(
+            `Close open shift #${blockingSession.id} (${blockingSession.opened_by_name}) before closing business day ${businessDate}`,
+            409,
+            'open_shift_blocks_day_close',
+          ),
+          {
+            blockingShift: {
+              id: blockingSession.id,
+              opened_by_name: blockingSession.opened_by_name,
+              opened_at: blockingSession.opened_at,
+            },
+            blockingShifts: blockingSessions.map((s) => ({
+              id: s.id,
+              opened_by: s.opened_by,
+              opened_by_name: s.opened_by_name,
+              opened_at: s.opened_at,
+            })),
           },
-          blockingShifts: blockingSessions.map((s) => ({
-            id: s.id,
-            opened_by: s.opened_by,
-            opened_by_name: s.opened_by_name,
-            opened_at: s.opened_at,
-          })),
-        },
+        );
+      }
+      const [periodStart, periodEnd] = dayBoundsInTimezone(
+        businessDate,
+        tenantTimezone(),
+        tenantStartTime(db),
       );
-    }
-    const [periodStart, periodEnd] = dayBoundsInTimezone(
-      businessDate,
-      tenantTimezone(),
-      tenantStartTime(db),
-    );
+      // Only the current trading day can still be open; past days close as-is.
+      const currentBusinessDate = localDateInTimezone(
+        clockNow(),
+        tenantTimezone(),
+        tenantStartTime(db),
+      );
+      const openTrade =
+        businessDate === currentBusinessDate
+          ? openTradeBlockingDayClose(db, periodStart, periodEnd)
+          : null;
+      if (openTrade) {
+        throw Object.assign(
+          httpError(
+            `Store is still open: settle or cancel ${openTrade.unpaid_bill_count} unpaid bill(s) and ${openTrade.unbilled_order_count} unbilled order(s) before closing business day ${businessDate}`,
+            409,
+            'open_trade_blocks_day_close',
+          ),
+          { blockingTrade: openTrade },
+        );
+      }
+      // An empty current day is the one about to trade; closing it would
+      // lock cash for the coming service.
+      if (
+        businessDate === currentBusinessDate &&
+        !businessDayHadTrade(db, periodStart, periodEnd)
+      ) {
+        throw httpError(
+          `Business day ${businessDate} has no sales yet and cannot be closed`,
+          409,
+          'no_trade_blocks_day_close',
+        );
+      }
 
-    // SELECT-then-INSERT inside withTxn matches the customers.ts uniqueness
-    // pattern; the partial index `cash_closures_one_day ... WHERE scope='day'`
-    // is the concurrency safety net (a concurrent winner sees 409 here, a
-    // race that slips past SELECT hits SQLITE_CONSTRAINT, mapped below).
-    const result = withTxn(() => {
       const existing = db
         .prepare(`SELECT id FROM cash_closures WHERE business_date = ? AND scope = 'day' LIMIT 1`)
         .get(businessDate);
@@ -1738,6 +1795,7 @@ router.post('/', requirePermission('cash.day-close'), (req: Request, res: Respon
         created_at: createdAt,
       };
     });
+    const result = closeDayTxn.immediate();
     operationCommitted = true;
 
     res.status(201).json({ zReport: result });
@@ -1792,6 +1850,9 @@ router.post('/', requirePermission('cash.day-close'), (req: Request, res: Respon
     }
     if (error?.blockingShifts) {
       (payload as { blocking_shifts?: unknown }).blocking_shifts = error.blockingShifts;
+    }
+    if (error?.blockingTrade) {
+      (payload as { blocking_trade?: unknown }).blocking_trade = error.blockingTrade;
     }
     res.status(status).json(payload);
   }

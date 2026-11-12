@@ -225,8 +225,13 @@ export function useCashSession() {
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('flo-shift-changed'));
       await refresh();
     } catch (err: unknown) {
+      const data = axios.isAxiosError(err) ? err.response?.data : undefined;
       setSubmitError(
-        axios.isAxiosError(err) ? err.response?.data?.error || err.message : 'Open failed',
+        data?.display_code === 'day_already_closed'
+          ? t('shiftOpenDayClosed')
+          : axios.isAxiosError(err)
+            ? data?.error || err.message
+            : 'Open failed',
       );
     } finally {
       setSubmitting(false);

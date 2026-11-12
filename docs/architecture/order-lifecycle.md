@@ -350,7 +350,8 @@ Two gates sit between a valid request and the write:
 
 - **Shift gate.** When `require_open_shift` is on, a cash tender (including a custom method that
   resolves to cash) needs an open shift for the actor (see [business time](business-time.md#cash-closures)),
-  or the request is a `409`. The check runs after replay detection, so a committed payment can be
+  or the request is a `409` (`cash_session_required`, or `day_already_closed` when the current business
+  day is already closed and a shift can no longer open). The check runs after replay detection, so a committed payment can be
   re-read with the same key after its shift closed. A cash ledger line records the open
   `cash_session_id`.
 - **Kitchen-delivery gate.** When `require_kitchen_delivered_before_settlement` is on, `kds_enabled`

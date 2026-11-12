@@ -126,9 +126,10 @@ attributed to the business date on which it happened in the store, not the one i
 ### Cash closures
 
 `main/routes/cash-closures.ts` computes `todayLocal` the same way, and derives the start of the first
-day and the end of the last day from `dayBoundsInTimezone` at both ends. Cash movements, X-reports,
-and the day-close Z-report all key off the resulting `businessDate`, which is why a day-close total
-and a sales report for the same day agree.
+day and the end of the last day from `dayBoundsInTimezone` at both ends. Cash movements and live
+X-reports use the resulting `businessDate`. Day close stores its period and totals in the Z snapshot;
+historical Z reports retain those stored values. Changing the configured cutoff can change
+historical live-report windows without rewriting existing Z snapshots.
 
 Shift session closures (`scope = 'session'` in `main/routes/cash-sessions.ts`) record their actual
 UTC `[period_start, period_end]` window (`opened_at` to `closed_at`), but file `business_date` under
@@ -144,7 +145,13 @@ and close at most one shift of their own (`cash_sessions_one_open_per_user` on `
 Cash payments, cash refunds, drawer movements, and cash expense entries attach to the authenticated
 actor's open shift (`getOpenSession(db, userId)`). Day close (`POST /api/cash-closures`) is blocked
 (`409 open_shift_blocks_day_close`) until all shifts opened on or before that business date are
-closed, and reconciles the combined day totals across all shifts (summing per-staff shift opening
+closed. Eligibility checks and the day-close snapshot share an immediate write transaction.
+Closing the current business day is also blocked (`409 open_trade_blocks_day_close`, with
+`blocking_trade` counts) while that day still has unsettled bills or active orders without a bill,
+or (`409 no_trade_blocks_day_close`) while it has taken no orders yet, so a morning close cannot
+lock the coming service; past business days close as they are. The close dialog defaults to
+`GET /api/cash-closures/default-date`: the current business date once it has traded, otherwise the
+latest earlier trading date that is not yet closed. Day close reconciles the combined day totals across all shifts (summing per-staff shift opening
 floats into the day's `opening_float` drawer movement). Two concurrent shifts sharing a single
 physical cash drawer are permitted, though individual shift drawer counts cannot be physically
 isolated in a shared drawer. For cross-shift bill tax attribution on shift X/Z reports, see

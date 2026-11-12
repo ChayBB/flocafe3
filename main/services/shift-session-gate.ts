@@ -3,7 +3,14 @@
  * (bills, cash-closures, cash-sessions) import from here so no require
  * cycle exists between them.
  */
-import { getDatabase, getSettingValue } from '../db';
+import {
+  getDatabase,
+  getSettingValue,
+  localDateInTimezone,
+  tenantBusinessDayStartTime,
+} from '../db';
+import { clockNow } from '../lib/clock';
+import { closedDayExists, tenantTimezone } from './cash-drawer-movements';
 
 function httpError(message: string, statusCode: number, diagnosticCode?: string): Error {
   return Object.assign(new Error(message), {
@@ -88,6 +95,16 @@ export function isCashTender(db: ReturnType<typeof getDatabase>, payment: unknow
   return typeof row?.name === 'string' && row.name.toLowerCase() === 'cash';
 }
 
+// A shift cannot open on a closed business day, so say the day is closed
+// instead of sending the cashier to open a shift that will be refused.
+function throwNoOpenSession(db: ReturnType<typeof getDatabase>): never {
+  const today = localDateInTimezone(clockNow(), tenantTimezone(), tenantBusinessDayStartTime(db));
+  if (closedDayExists(db, today)) {
+    throw httpError('This business day is already closed', 409, 'day_already_closed');
+  }
+  throw httpError('No open shift: open a shift before taking cash', 409, 'cash_session_required');
+}
+
 /**
  * When the owner opted into `require_open_shift`, cash touching the drawer
  * needs an open session. Non-cash tenders are never gated. Missing setting
@@ -99,7 +116,7 @@ export function requireOpenSessionForCash(
 ): void {
   if (getSettingValue('require_open_shift') !== 'true') return;
   if (!getOpenSession(db, userId)) {
-    throw httpError('No open shift: open a shift before taking cash', 409, 'cash_session_required');
+    throwNoOpenSession(db);
   }
 }
 
@@ -114,6 +131,6 @@ export function requireOpenSessionForCashTender(
 ): void {
   if (getSettingValue('require_open_shift') !== 'true') return;
   if (payments.some((line) => isCashTender(db, line)) && !getOpenSession(db, userId)) {
-    throw httpError('No open shift: open a shift before taking cash', 409, 'cash_session_required');
+    throwNoOpenSession(db);
   }
 }

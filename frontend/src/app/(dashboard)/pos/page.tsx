@@ -896,6 +896,7 @@ export default function POSPage() {
       payment_method_unavailable: t('paymentMethodUnavailable'),
       payment_input_invalid: t('paymentInputInvalid'),
       cash_session_required: tExpenses('cashSessionClosed'),
+      day_already_closed: tExpenses('cashDayClosed'),
       card_transaction_id_required: t('cardTransactionIdMissing'),
     };
     const confirmedNotApplied = failure.trusted && failure.outcome === 'not_applied';

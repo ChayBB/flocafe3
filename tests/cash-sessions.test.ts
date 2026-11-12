@@ -408,6 +408,19 @@ async function main() {
   const { cashClosureRoutes } = require('../main/routes/cash-closures');
   const { settingsRoutes } = require('../main/routes/settings');
   app.use('/api/bills', billRoutes);
+  // These fixtures close days that took no real orders; a cancelled order marks
+  // the day as traded without adding open trade or sales.
+  let tradeSeq = 0;
+  app.use('/api/cash-closures', (req: any, _res: any, next: any) => {
+    if (req.method === 'POST' && req.path === '/') {
+      const at = now();
+      db.prepare(
+        `INSERT INTO orders (order_number, user_id, type, status, subtotal, total, created_at, updated_at)
+         VALUES (?, 'owner-sess', 'takeaway', 'cancelled', 0, 0, ?, ?)`,
+      ).run(`ORD-DAY-TRADE-${++tradeSeq}`, at, at);
+    }
+    next();
+  });
   app.use('/api/cash-closures', cashClosureRoutes);
   app.use('/api/settings', settingsRoutes);
   assert(
@@ -1643,6 +1656,10 @@ async function main() {
     ciCustomPay.status === 409,
     'enforcement on: custom "Cash" method without a session is 409',
   );
+  // An unpaid leftover would count as open trade in later same-day closes.
+  db.prepare(
+    `UPDATE orders SET status = 'cancelled' WHERE order_number = 'ORD-ENF-cicustom'`,
+  ).run();
   const customSession = await request(app)
     .post('/api/cash-sessions/open')
     .set('Authorization', `Bearer ${cashierToken}`)

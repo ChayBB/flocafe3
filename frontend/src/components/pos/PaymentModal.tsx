@@ -1340,6 +1340,7 @@ export default function PaymentModal({
         payment_method_unavailable: t('paymentMethodUnavailable'),
         payment_input_invalid: t('paymentInputInvalid'),
         cash_session_required: tExpenses('cashSessionClosed'),
+        day_already_closed: tExpenses('cashDayClosed'),
       };
       // The setting may be unreadable for this role; the backend's refusal still reveals it.
       if (failure.displayCode === 'card_transaction_id_required') {
