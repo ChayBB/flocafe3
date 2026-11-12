@@ -1,6 +1,6 @@
 'use client';
 
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, type AxiosResponse } from 'axios';
 import toast from 'react-hot-toast';
 import {
   ArrowRightLeft,
@@ -138,6 +138,14 @@ type ServerAppInfo = {
 const TOKEN_KEY = 'flocafe:server-app-token';
 const LANGUAGE_KEY = 'flocafe:server-app-language';
 const LIVE_REFRESH_MS = 5000;
+const GUEST_MENU_PREFETCH_MAX_AGE_MS = 30_000;
+
+type Settled<T> = { response: T; error: null } | { response: null; error: unknown };
+const settle = <T,>(request: Promise<T>): Promise<Settled<T>> =>
+  request.then(
+    (response) => ({ response, error: null }),
+    (error: unknown) => ({ response: null, error }),
+  );
 
 const subscribeToNothing = () => () => {};
 
@@ -313,6 +321,10 @@ export default function ServerStandalonePage() {
     () => new URLSearchParams(window.location.search).get('s'),
     () => null,
   );
+  const guestMenuPrefetchRef = useRef<{
+    startedAt: number;
+    request: Promise<Settled<AxiosResponse>>;
+  } | null>(null);
   const [guestTable, setGuestTable] = useState<{ id: string; name: string } | null>(null);
   const [guestDeviceToken, setGuestDeviceToken] = useState<string | null>(null);
   const [guestOrder, setGuestOrder] = useState<GuestOrder | null>(null);
@@ -685,25 +697,31 @@ export default function ServerStandalonePage() {
   useEffect(() => {
     if (!api) return;
     let cancelled = false;
-    api
-      .get<ServerAppInfo>('/api/server-app/info')
-      .then((infoResponse) => {
-        if (!cancelled) setRegional(infoResponse.data);
-        return api.get('/api/auth/me');
-      })
-      .then((res) => {
-        if (!cancelled) setUser(res.data.user);
-      })
-      .catch((error) => {
-        if (error.response?.status === 404) setDisabled(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const hasStaffToken = Boolean(localStorage.getItem(TOKEN_KEY));
+    if (guestTableId && !hasStaffToken && !guestMenuPrefetchRef.current) {
+      guestMenuPrefetchRef.current = {
+        startedAt: Date.now(),
+        request: settle(api.get('/api/guest/menu')),
+      };
+    }
+    // A guest phone has no staff token, so it skips the guaranteed-401 /me round trip.
+    void Promise.allSettled([
+      api.get<ServerAppInfo>('/api/server-app/info'),
+      hasStaffToken ? api.get('/api/auth/me') : Promise.resolve(null),
+    ]).then(([info, me]) => {
+      if (cancelled) return;
+      if (info.status === 'fulfilled') {
+        setRegional(info.value.data);
+        if (me.status === 'fulfilled' && me.value) setUser(me.value.data.user);
+      } else if ((info.reason as { response?: { status?: number } })?.response?.status === 404) {
+        setDisabled(true);
+      }
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, guestTableId]);
 
   const userId = user?.id;
 
@@ -950,6 +968,12 @@ export default function ServerStandalonePage() {
     if (guestTapped && !guestUnlockKeyRef.current) {
       guestUnlockKeyRef.current = createPaymentIdempotencyKey();
     }
+    const prefetched = guestMenuPrefetchRef.current;
+    guestMenuPrefetchRef.current = null;
+    const menuPromise =
+      prefetched && Date.now() - prefetched.startedAt < GUEST_MENU_PREFETCH_MAX_AGE_MS
+        ? prefetched.request
+        : settle(api.get('/api/guest/menu'));
     api
       .post('/api/guest/join', {
         table_id: guestTableId,
@@ -968,7 +992,9 @@ export default function ServerStandalonePage() {
         }
         const deviceToken = joinRes.data.device_token as string;
         writeGuestDevice(storageKey, deviceToken);
-        const menuRes = await api.get('/api/guest/menu');
+        const menuResult = await menuPromise;
+        if (!menuResult.response) throw menuResult.error;
+        const menuRes = menuResult.response;
         if (cancelled) return;
         setGuestDeviceToken(deviceToken);
         setGuestGate(null);

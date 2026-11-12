@@ -49,6 +49,8 @@ import { API_JSON_BODY_LIMIT, GUEST_JSON_BODY_LIMIT } from './http-limits';
 import { buildCspHeader } from './csp';
 import { readPosSortSettings } from './lib/pos-sort';
 import { resolveContainedPath } from './lib/path-containment';
+import { hashedStaticAssets } from './lib/hashed-static';
+import { sendCachedJson } from './lib/compressed-json';
 import { RegionalNotConfiguredError, resolveRegionalSnapshot } from './countries';
 import { nextDailyResetEpochSeconds } from './lib/daily-session-reset';
 import {
@@ -232,7 +234,14 @@ async function forwardToMainApiImpl(req: Request, res: Response, targetPath: str
     });
     const buffer = Buffer.from(await upstream.arrayBuffer());
     res.status(upstream.status);
-    res.type(upstream.headers.get('content-type') || 'application/json');
+    const contentType = upstream.headers.get('content-type') || 'application/json';
+    res.type(contentType);
+    if (contentType.startsWith('image/')) {
+      for (const header of ['cache-control', 'etag']) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+      }
+    }
     res.send(buffer);
   } catch (error: any) {
     if (getHttpRequestSignal(req)?.aborted) {
@@ -661,7 +670,7 @@ export function startServerApp(): Promise<void> {
           };
         });
         if (!menu) return res.status(502).json({ error: 'Could not load the menu' });
-        res.json(menu);
+        await sendCachedJson(req, res, menu);
       } catch (error: any) {
         if (getHttpRequestSignal(req)?.aborted) return res.status(503).end();
         console.error('[Server App] Guest menu failed:', error);
@@ -967,6 +976,7 @@ export function startServerApp(): Promise<void> {
         }
         next();
       });
+      app.use(hashedStaticAssets(staticDir));
       app.use(express.static(staticDir, { dotfiles: 'ignore', index: false }));
       app.get('/', (_req: Request, res: Response) => res.redirect('/server-standalone'));
       app.get('/*splat', staticRouteRateLimit(), (req: Request, res: Response) => {

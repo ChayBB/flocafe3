@@ -15,6 +15,7 @@ const CATALOG_WRITE_PATHS = [
 
 let cached: { menu: unknown; expiresAt: number } | null = null;
 let generation = 0;
+let pending: { generation: number; menu: Promise<unknown> } | null = null;
 
 export function invalidateGuestMenu(): void {
   generation += 1;
@@ -28,11 +29,18 @@ export async function guestMenu<T>(
 ): Promise<T | null> {
   if (cached && cached.expiresAt > now()) return cached.menu as T;
   const startedAt = generation;
-  const menu = await load();
-  if (menu !== null && startedAt === generation) {
-    cached = { menu, expiresAt: now() + GUEST_MENU_TTL_MS };
+  if (pending?.generation === startedAt) return pending.menu as Promise<T | null>;
+  const flight = { generation: startedAt, menu: Promise.resolve().then(load) };
+  pending = flight;
+  try {
+    const menu = await flight.menu;
+    if (menu !== null && startedAt === generation) {
+      cached = { menu, expiresAt: now() + GUEST_MENU_TTL_MS };
+    }
+    return menu;
+  } finally {
+    if (pending === flight) pending = null;
   }
-  return menu;
 }
 
 /** Drops the cached guest menu once a request that may change the catalog succeeds. */

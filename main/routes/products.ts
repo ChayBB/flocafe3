@@ -1349,7 +1349,10 @@ router.get(
         'Content-Type': contentType,
         'Content-Length': buffer.length,
         ETag: `"${etag}"`,
-        'Cache-Control': 'no-cache', // Always revalidate — instant cross-terminal updates
+        // `t` is the product's updated_at, which every image write bumps, so a versioned URL never changes content.
+        'Cache-Control': /^[1-9]\d*$/.test(String(req.query.t ?? ''))
+          ? 'public, max-age=31536000, immutable'
+          : 'no-cache',
       });
       res.send(buffer);
     } catch (error: any) {

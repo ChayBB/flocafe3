@@ -55,6 +55,38 @@ async function joinDevice(
 }
 
 test.describe('Server App guest from a table QR', () => {
+  test('loads the menu while joining but waits for the table session before enabling ordering', async ({
+    page,
+  }) => {
+    const table = await createTable(page);
+    await setEnglish(page);
+    let releaseJoin: () => void;
+    const joinGate = new Promise<void>((resolve) => {
+      releaseJoin = resolve;
+    });
+    let joinStarted = false;
+    let menuStarted = false;
+    await page.route('**/api/guest/join', async (route) => {
+      joinStarted = true;
+      await joinGate;
+      await route.continue();
+    });
+    await page.route('**/api/guest/menu', async (route) => {
+      menuStarted = true;
+      await route.continue();
+    });
+    try {
+      await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
+      await expect.poll(() => joinStarted && menuStarted).toBe(true);
+      await expect(page.getByTestId('pos-product-grid')).toHaveCount(0);
+    } finally {
+      releaseJoin!();
+    }
+    await expect(
+      page.getByTestId('pos-product-grid').getByPlaceholder('Search menu'),
+    ).toBeVisible();
+  });
+
   test('reopening after a lost submit response looks up the same request without sending again', async ({
     page,
   }) => {

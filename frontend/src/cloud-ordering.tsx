@@ -196,12 +196,20 @@ function Ordering() {
 
   const load = useCallback(async () => {
     try {
+      const params = new URLSearchParams(location.hash.slice(1));
+      const table = params.get('table');
+      const stored = table && sessionStorage.getItem(`flocafe-table-session:${table}`);
+      const preview =
+        table && uuid.test(table) && !params.has('table_token') && !stored
+          ? request('/api/v1/menu', { headers: { 'X-Flo-Table-Key': table } }).catch(() => null)
+          : null;
       const current = await session();
       const browse = async () => {
         const table = new URLSearchParams(location.hash.slice(1)).get('table');
         if (!table || !uuid.test(table)) throw new Error('กรุณาสแกน QR ประจำโต๊ะจากร้าน');
         const data = await readMenu(
-          await request('/api/v1/menu', { headers: { 'X-Flo-Table-Key': table } }),
+          (await preview) ??
+            (await request('/api/v1/menu', { headers: { 'X-Flo-Table-Key': table } })),
         );
         context.current = null;
         setMenu(data.items);
@@ -224,9 +232,12 @@ function Ordering() {
       context.current = { token, storageKey };
       setPending(saved ?? undefined);
       if (saved) setOpen(true);
-      const response = await request('/api/v1/menu', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const prefetched = await preview;
+      const response = prefetched?.ok
+        ? prefetched
+        : await request('/api/v1/menu', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
       if (response.status === 401) {
         if (cache && !saved) sessionStorage.removeItem(cache);
         setExpired(true);
@@ -308,7 +319,13 @@ function Ordering() {
 
   useEffect(() => {
     void Promise.resolve().then(load);
-    void request(assetUrl('./menu-presentation.json'))
+    void fetch(assetUrl('./menu-presentation.json'), {
+      credentials: 'omit',
+      cache: 'force-cache',
+      mode: 'same-origin',
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
+    })
       .then(async (response) => {
         if (!response.ok) return;
         const data = await response.json();
