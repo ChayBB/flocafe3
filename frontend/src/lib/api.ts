@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { API_BASE_URL } from './api-base';
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
@@ -100,9 +101,8 @@ export async function captureClientOperationFailure(input: {
   }
 }
 
-// Base URL derived from window.location.origin so LAN clients connect to host IP.
 const api = axios.create({
-  baseURL: typeof window !== 'undefined' ? `${window.location.origin}/api` : '/api',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
     Accept: 'application/json',

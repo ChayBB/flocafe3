@@ -51,11 +51,27 @@ const guestMessages: BunPlugin = {
   },
 };
 
+// Guests never sign in, so the staff auth store gets a request-free client instead of axios.
+const guestApi: BunPlugin = {
+  name: 'guest-api',
+  setup(build) {
+    build.onResolve({ filter: /^@\/lib\/api$/ }, () => ({
+      path: 'guest-api',
+      namespace: 'guest-api',
+    }));
+    build.onLoad({ filter: /.*/, namespace: 'guest-api' }, () => ({
+      loader: 'js',
+      contents: `const refuse = () => Promise.reject(new Error('Staff API is unavailable on the guest page'));
+export default { get: refuse, post: refuse, put: refuse, patch: refuse, delete: refuse, defaults: { baseURL: '/api' } };`,
+    }));
+  },
+};
+
 const result = await Bun.build({
   ...base,
   outdir,
   naming: { entry: 'order.js', chunk: 'chunks/[name]-[hash].[ext]' },
-  plugins: [guestMessages],
+  plugins: [guestMessages, guestApi],
 });
 if (!result.success) throw new AggregateError(result.logs, 'Browser build failed');
 

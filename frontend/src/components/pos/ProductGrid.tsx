@@ -1,13 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { List, Search, SlidersHorizontal } from 'lucide-react';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { Search, SlidersHorizontal } from 'lucide-react';
+import { categoryMenuButton, type CategoryMenuProps } from './CategoryMenuButton';
 import toast from 'react-hot-toast';
 import type { Category, Product, ProductVariant } from '@/lib/types';
 import { useCartStore } from '@/store/cart';
@@ -15,7 +19,7 @@ import { usePosSettingsStore } from '@/store/pos-settings';
 import { nameToColor } from '@/lib/image-utils';
 import TagBadge from './DietaryBadge';
 import { productNeedsCustomizer } from '@/lib/product-variants';
-import api from '@/lib/api';
+import { API_BASE_URL } from '@/lib/api-base';
 import { useTranslations } from 'use-intl';
 import { fractionalQuantityStep, parseDbTimestamp } from '@/lib/utils';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
@@ -83,53 +87,16 @@ function CategoryChip({
   );
 }
 
-/** The flat row's menu button: All and the quick filters; categories stay in the row. */
-function CategoryMenu({
-  label,
-  allLabel,
-  allSelected,
-  setSelectedCategory,
-  extraChips,
-}: {
-  label: string;
-  allLabel: string;
-  allSelected: boolean;
-  setSelectedCategory: (id: Category['id'] | null) => void;
-  extraChips: { key: string; label: string; active: boolean; onSelect: () => void }[];
-}) {
-  const itemClass = (active: boolean) =>
-    `py-2.5 text-[15px] ${active ? 'font-medium text-brand' : ''}`;
+const LazyCategoryMenu = lazy(() => import('./CategoryMenu'));
+
+/** The dropdown loads on the first tap, so guests opening the menu do not download it up front. */
+function CategoryMenu(props: CategoryMenuProps) {
+  const [loaded, setLoaded] = useState(false);
+  if (!loaded) return categoryMenuButton(props.label, { onClick: () => setLoaded(true) });
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-testid="pos-category-menu"
-          aria-label={label}
-          title={label}
-          className="mb-1 flex size-9 shrink-0 items-center justify-center rounded-full bg-muted/60 text-foreground transition-colors hover:bg-muted"
-        >
-          <List size={18} />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[60vh] min-w-44 overflow-y-auto">
-        <DropdownMenuItem
-          onSelect={() => setSelectedCategory(null)}
-          className={itemClass(allSelected)}
-        >
-          {allLabel}
-        </DropdownMenuItem>
-        {extraChips.map((chip) => (
-          <DropdownMenuItem
-            key={`quick:${chip.key}`}
-            onSelect={chip.onSelect}
-            className={itemClass(chip.active)}
-          >
-            {chip.label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Suspense fallback={categoryMenuButton(props.label)}>
+      <LazyCategoryMenu {...props} defaultOpen />
+    </Suspense>
   );
 }
 
@@ -788,7 +755,7 @@ export default function ProductGrid({
                 src={
                   imageOf
                     ? imageOf(product)
-                    : `${api.defaults.baseURL}/products/${product.id}/image?t=${product.updated_at ? parseDbTimestamp(product.updated_at).getTime() : 0}`
+                    : `${API_BASE_URL}/products/${product.id}/image?t=${product.updated_at ? parseDbTimestamp(product.updated_at).getTime() : 0}`
                 }
                 alt={product.name}
                 loading="lazy"
