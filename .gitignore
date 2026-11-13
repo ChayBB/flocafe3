@@ -50,3 +50,11 @@ test-results/
 # Local IDE cache and build bundles
 .vs/
 server-app-bundle.zip
+
+# Local Cloud QR artifacts and session build logs kept at the repo root
+/Cloud-QR-*.html
+/_redirects.txt
+/flocafe-*.png
+/flocafe-*.zip
+/kds-tablet-*.log
+/selected-kds-*.log
