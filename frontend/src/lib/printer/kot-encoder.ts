@@ -14,7 +14,6 @@ import {
   GENERIC_THERMAL_CAPABILITIES,
   isThermalTextRepresentable,
   mergeThermalCapabilities,
-  shouldUseOrderTypeFallback,
   thermalTextFallback,
   type ThermalPrinterCapabilities,
 } from '@print/thermal-capabilities';
@@ -162,56 +161,27 @@ export function buildKotBytes(
   enc.initialize();
   configureEncoderTextSize(enc, textSize);
 
-  // KOT Banner
-  enc.align('center').bold(true);
-  writeKotHeaderText(label('print.kot.banner'), 'KITCHEN ORDER TICKET', { isBanner: true });
-  enc.width(1).height(1).bold(false);
-
+  const orderNumber = String(order.order_number);
+  enc.align('center').bold(true).height(2);
   if (order.table?.name) {
     const tableName = String(order.table.name);
-    enc.bold(true).height(2);
     writeKotHeaderText(
       label('pos.tableLabel')
-        .replace(/[:：](?=\s*\{name\})/, '')
+        .replace(/[:：](?=s*{name})/, '')
         .replace('{name}', () => tableName),
       `Table ${thermalSafeMetadataValue(tableName, language, arabicShaping, opts.capabilities)}`,
     );
-    enc.height(1);
-  }
-
-  // Order details
-  enc.align('left').bold(true);
-  if (opts.stationName) {
-    const stationName = String(opts.stationName);
+  } else {
+    // Without a table the order number is the only way the kitchen can match the ticket.
     writeKotHeaderText(
-      `${label('print.kot.station')}: ${stationName}`,
-      `Station: ${thermalSafeMetadataValue(stationName, language, arabicShaping, opts.capabilities)}`,
+      formatOrderNumber(label('pos.orderNumber'), orderNumber),
+      `Order #${thermalSafeMetadataValue(orderNumber, language, arabicShaping, opts.capabilities)}`,
     );
   }
-  const orderNumber = String(order.order_number);
-  writeKotHeaderText(
-    formatOrderNumber(label('pos.orderNumber'), orderNumber),
-    `Order #${thermalSafeMetadataValue(orderNumber, language, arabicShaping, opts.capabilities)}`,
-  );
+  enc.height(1).bold(false);
 
-  const orderType = resolveOrderType(order.type, language);
-  const localizedOrderType = `${label('print.kot.type')}: ${orderType}`;
-  const fallbackOrderType = `Type: ${String(order.type).replace(/_/g, ' ').toUpperCase()}`;
-  if (shouldUseOrderTypeFallback(localizedOrderType, thermalCapabilities)) {
-    safePrinterText(
-      enc,
-      fallbackOrderType,
-      warnings,
-      false,
-      arabicShaping,
-      undefined,
-      cols,
-      language,
-    ).newline();
-  } else {
-    writeKotHeaderText(localizedOrderType, fallbackOrderType);
-  }
-
+  // Order details
+  enc.align('left');
   if (order.customer) {
     const customerName = String(order.customer.name);
     writeKotHeaderText(
@@ -232,7 +202,15 @@ export function buildKotBytes(
     'en-US',
     opts.timezone ? { timeZone: opts.timezone } : undefined,
   );
-  writeKotHeaderText(`${label('print.time')}: ${time}`, `Time: ${fallbackTime}`);
+  const stationName = opts.stationName ? String(opts.stationName) : '';
+  writeKotHeaderText(
+    stationName
+      ? `${label('print.kot.station')}: ${stationName} | ${label('print.time')}: ${time}`
+      : `${label('print.time')}: ${time}`,
+    stationName
+      ? `Station: ${thermalSafeMetadataValue(stationName, language, arabicShaping, opts.capabilities)} | Time: ${fallbackTime}`
+      : `Time: ${fallbackTime}`,
+  );
 
   const orderShape = order as Order & {
     order_notes?: unknown;
@@ -255,7 +233,6 @@ export function buildKotBytes(
       normalizeThermalText(`${noteLabel}: ${orderNotes}`, thermalCapabilities),
       Math.max(1, cols - 6),
     );
-    enc.newline();
     enc.bold(true).height(2);
     wrapped.forEach((line, index) => {
       safePrinterText(
@@ -394,8 +371,6 @@ export function buildKotBytes(
         });
       }
     }
-
-    enc.newline();
   }
 
   if (!hasItems) {
@@ -413,18 +388,6 @@ export function buildKotBytes(
 
   // ── Footer ─────────────────────────────────────────────────────────────────
   thermalRule(enc, 'single', cols, thermalCapabilities);
-  enc.align('center');
-  safePrinterText(
-    enc,
-    `--- ${label('print.kot.end')} ---`,
-    warnings,
-    false,
-    arabicShaping,
-    undefined,
-    cols,
-    language,
-  ).newline();
-
   enc.newline().newline().newline().cut();
 
   return enc.encode();
@@ -487,18 +450,6 @@ function thermalSafeHeaderText(
     arabicShaping,
   );
   return thermalTextFallback(value, fallback, merged);
-}
-
-function resolveOrderType(type: string, language: string): string {
-  const keys: Record<string, string> = {
-    dine_in: 'pos.orderTypeDineIn',
-    delivery: 'pos.orderTypeDelivery',
-    online: 'pos.orderTypeOnline',
-    takeaway: 'pos.orderTypeTakeaway',
-  };
-  const key = keys[type];
-  if (!key) return String(type).replace(/_/g, ' ').toUpperCase();
-  return printLabelResolver(key, language);
 }
 
 function formatOrderNumber(label: string, orderNumber: string): string {

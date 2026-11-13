@@ -111,12 +111,12 @@ async function run(): Promise<void> {
       stationName: 'Main Kitchen',
       timezone: 'UTC',
     });
-    assert.match(
+    assert.doesNotMatch(
       browserHtml,
       new RegExp(
         `>${printLabel(language, 'print.kot.banner').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[< ]`,
       ),
-      `${language}: browser banner`,
+      `${language}: browser KOT leaves out the banner`,
     );
     if (language === 'th') {
       assert.match(
@@ -125,7 +125,7 @@ async function run(): Promise<void> {
         `${language}: browser KOT keeps Thai font fallback available`,
       );
     }
-    assert.match(browserHtml, /KOT-PHASE3-001/, `${language}: browser order number`);
+    assert.match(browserHtml, /T3/, `${language}: browser table name`);
     assert.match(browserHtml, /Pending coffee/, `${language}: browser pending item`);
     assert.match(browserHtml, /Oat milk.*x3/, `${language}: browser preserves addon quantity`);
     assert.match(
@@ -145,10 +145,10 @@ async function run(): Promise<void> {
         stationName: 'Main Kitchen',
         timezone: 'UTC',
       });
-      assert.match(
+      assert.doesNotMatch(
         typeHtml,
         new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-        `${language}: browser order type ${label}`,
+        `${language}: browser KOT leaves out order type ${label}`,
       );
     }
 
@@ -168,21 +168,17 @@ async function run(): Promise<void> {
         language,
       ),
     );
-    assert.match(
-      thermalText,
-      /KOT-PHASE3-001/,
-      `${language}: thermal order number remains visible`,
-    );
+    assert.match(thermalText, /T3/, `${language}: thermal table name remains visible`);
     assert.match(thermalText, /Main Kitchen/, `${language}: thermal station remains visible`);
     assert.match(
       thermalText,
       /(?:Time|Hora|Uhrzeit|Saat|Oras|Heure|Ora|時刻|时间|시간|Waktu|Tijd|সময়|Thời gian|Lokaci|Wektu|Muda)/,
       `${language}: thermal time remains visible`,
     );
-    assert.match(
+    assert.doesNotMatch(
       thermalText,
       /KITCHEN ORDER TICKET|COMANDA DE COCINA|KUECHENBESTELLSCHEIN|BON DE COMMANDE CUISINE|COMANDA DE COZINHA|BIGLIETTO ORDINE DI CUCINA|キッチン伝票|厨房订单|廚房訂單|주방 주문지|TIKET PESANAN DAPUR|KEUKENBESTELBON|রান্নাঘরের অর্ডার টিকিট|POROSI E KUZHINES|PHIẾU BẾP|TAKARDAR ODAR GIRKI|TIKET PESENAN PAWON|TIKETI YA ODA YA JIKONI/,
-      `${language}: thermal banner remains visible`,
+      `${language}: thermal KOT leaves out the banner`,
     );
     if (language !== 'sq') {
       assert.doesNotMatch(
@@ -241,8 +237,8 @@ async function run(): Promise<void> {
         ),
       );
       assert.ok(
-        typeThermalText.includes(thermalTypeLine),
-        `${language}: thermal order type ${thermalTypeLine}`,
+        !typeThermalText.includes(thermalTypeLine),
+        `${language}: thermal KOT leaves out order type ${thermalTypeLine}`,
       );
     }
 
@@ -260,7 +256,7 @@ async function run(): Promise<void> {
         webUsbWarnings,
       ),
     ).toString('utf8');
-    assert.match(webUsbText, /KOT-PHASE3-001/, `${language}: WebUSB order number remains visible`);
+    assert.match(webUsbText, /T3/, `${language}: WebUSB table name remains visible`);
     assert.match(webUsbText, /Main Kitchen/, `${language}: WebUSB station remains visible`);
     assert.match(webUsbText, /Pending coffee/, `${language}: WebUSB pending item`);
     assert.match(webUsbText, /\+ Oat milk x3/, `${language}: WebUSB preserves addon quantity`);
@@ -302,8 +298,8 @@ async function run(): Promise<void> {
         ),
       ).toString('utf8');
       assert.ok(
-        typeWebUsbText.includes(webUsbTypeLine),
-        `${language}: WebUSB order type ${webUsbTypeLine}`,
+        !typeWebUsbText.includes(webUsbTypeLine),
+        `${language}: WebUSB KOT leaves out order type ${webUsbTypeLine}`,
       );
     }
   }
@@ -680,10 +676,10 @@ async function run(): Promise<void> {
     /Station: \[UNSUPPORTED\]/,
     'thermal KOT preserves non-ASCII station visibility with an explicit placeholder',
   );
-  assert.match(
+  assert.doesNotMatch(
     metadataThermalText,
-    /Order #\[UNSUPPORTED\]/,
-    'thermal KOT preserves non-ASCII order-number visibility with an explicit placeholder',
+    /Order #/,
+    'thermal KOT leaves the order number off a table ticket',
   );
   assert.match(
     metadataThermalText,
@@ -710,10 +706,10 @@ async function run(): Promise<void> {
     /Station: \[UNSUPPORTED\]/,
     'WebUSB KOT preserves non-ASCII station visibility with an explicit placeholder',
   );
-  assert.match(
+  assert.doesNotMatch(
     metadataWebUsbText,
-    /Order #\[UNSUPPORTED\]/,
-    'WebUSB KOT preserves non-ASCII order-number visibility with an explicit placeholder',
+    /Order #/,
+    'WebUSB KOT leaves the order number off a table ticket',
   );
   assert.match(
     metadataWebUsbText,
@@ -752,10 +748,10 @@ async function run(): Promise<void> {
     /Station: \[UNSUPPORTED\]/,
     'shaped thermal KOT preserves non-Arabic station visibility',
   );
-  assert.match(
+  assert.doesNotMatch(
     shapedMetadataThermalText,
-    /Order #\[UNSUPPORTED\]/,
-    'shaped thermal KOT preserves non-Arabic order-number visibility',
+    /Order #/,
+    'shaped thermal KOT leaves the order number off a table ticket',
   );
   assert.match(
     shapedMetadataThermalText,
@@ -782,10 +778,10 @@ async function run(): Promise<void> {
     /Station: \[UNSUPPORTED\]/,
     'shaped WebUSB KOT preserves non-Arabic station visibility',
   );
-  assert.match(
+  assert.doesNotMatch(
     shapedMetadataWebUsbText,
-    /Order #\[UNSUPPORTED\]/,
-    'shaped WebUSB KOT preserves non-Arabic order-number visibility',
+    /Order #/,
+    'shaped WebUSB KOT leaves the order number off a table ticket',
   );
   assert.match(
     shapedMetadataWebUsbText,
@@ -1038,11 +1034,7 @@ async function run(): Promise<void> {
       'th',
     ),
   );
-  assert.match(
-    thGenericText,
-    /Type: DINE IN/,
-    'generic thermal path keeps an ASCII order type fallback',
-  );
+  assert.doesNotMatch(thGenericText, /Type:/, 'generic thermal KOT leaves out the order type');
 
   console.log(
     `Phase 3 print regressions: ${languages.length} locales covered across browser, backend thermal-safe, and WebUSB KOT paths.`,

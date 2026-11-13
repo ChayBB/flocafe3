@@ -229,8 +229,11 @@ function run(): void {
   {
     const order = { ...buildOrder(), table: { name: '3' } };
     const text = escPosToText(formatKOT(order, order.items, 'Grill', 48));
-    assert('default KOT banner stays English', text.includes('KITCHEN ORDER TICKET'));
-    assert('default KOT type label stays English', text.includes('Type: Dine in'));
+    assert('default KOT table label stays English', text.includes('Table 3'));
+    assert(
+      'default KOT station and time labels stay English',
+      text.includes('Station: Grill | Time:'),
+    );
     assert(
       'Albanian Ë/ë and Ç/ç normalize for ASCII thermal output',
       normalizeThermalText('Ëmbëlsirë Çaj', GENERIC_THERMAL_CAPABILITIES) === 'Embelsire Caj',

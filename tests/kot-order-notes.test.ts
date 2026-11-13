@@ -140,7 +140,7 @@ async function runAsyncTests() {
     } as any,
     { language: 'th' },
   );
-  assert.match(thaiTableTicket, /ใบสั่งอาหาร โต๊ะ <strong style="font-size:1.5em;">T1<\/strong>/);
+  assert.match(thaiTableTicket, />โต๊ะ <strong style="font-size:1.5em;">T1<\/strong>/);
 
   // 1. generateKotHtml tests
   const htmlWithSpecialInstructions = frontend.kotWebPrint.generateKotHtml({

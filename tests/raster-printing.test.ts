@@ -3212,11 +3212,8 @@ async function run(): Promise<void> {
         ),
       ).toString('latin1');
       assert.ok(unavailableCanvasKotWarn.length > 0);
-      assert.ok(unavailableCanvasKotText.includes('KITCHEN ORDER TICKET'));
       assert.ok(unavailableCanvasKotText.includes('Station: [UNSUPPORTED]'));
-      assert.ok(unavailableCanvasKotText.includes('Order #[UNSUPPORTED]'));
       assert.ok(unavailableCanvasKotText.includes('Table [UNSUPPORTED]'));
-      assert.ok(unavailableCanvasKotText.includes('Type: DINE IN'));
       assert.ok(unavailableCanvasKotText.includes('Customer: [UNSUPPORTED]'));
 
       // Detailed receipt fails closed if browser canvas context is unavailable on Turkish financial row
@@ -3239,11 +3236,8 @@ async function run(): Promise<void> {
         ),
       ).toString('latin1');
       assert.ok(failedCanvasKotWarn.length > 0);
-      assert.ok(failedCanvasKotText.includes('KITCHEN ORDER TICKET'));
       assert.ok(failedCanvasKotText.includes('Station: [UNSUPPORTED]'));
-      assert.ok(failedCanvasKotText.includes('Order #[UNSUPPORTED]'));
       assert.ok(failedCanvasKotText.includes('Table [UNSUPPORTED]'));
-      assert.ok(failedCanvasKotText.includes('Type: DINE IN'));
       assert.ok(failedCanvasKotText.includes('Customer: [UNSUPPORTED]'));
 
       const failedDetailedWarn: any[] = [];

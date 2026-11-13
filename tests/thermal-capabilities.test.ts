@@ -261,8 +261,10 @@ function run(): void {
   assert.deepEqual(latinPair.webusbWarnings, []);
 
   const genericPair = outputPair(GENERIC_THERMAL_CAPABILITIES, false);
-  assert.match(genericPair.backend, /Type: DINE IN|Type: Dine in/);
-  assert.match(genericPair.webusb, /Type: Dine in/);
+  assert.match(genericPair.backend, /Time:/);
+  assert.match(genericPair.webusb, /Time:/);
+  assert.doesNotMatch(genericPair.backend, /Type:/);
+  assert.doesNotMatch(genericPair.webusb, /Type:/);
   assert.ok(genericPair.backendWarnings.some((warning) => warning.text.includes('چای')));
   assert.ok(genericPair.webusbWarnings.some((warning) => warning.text.includes('چای')));
 

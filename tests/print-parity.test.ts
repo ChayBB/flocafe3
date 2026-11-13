@@ -1515,10 +1515,7 @@ function run(): void {
     );
     const kotText = escPosToText(migratedBuf);
     warn(kotText.includes('Main Kitchen'), `${label}: station block rendered`);
-    warn(
-      kotText.includes('Order #ORD-PARITY-001'),
-      `${label}: shared order-number format rendered`,
-    );
+    warn(!kotText.includes('Order #'), `${label}: table ticket leaves out the order number`);
     warn(kotText.includes('2x  Espresso Doppio'), `${label}: item rows with quantity prefix`);
     warn(kotText.includes('+ Oat milk'), `${label}: addon lines rendered`);
     warn(kotText.includes('>> Less sugar'), `${label}: instruction lines rendered`);
@@ -1543,10 +1540,7 @@ function run(): void {
       'en',
     ),
   );
-  warn(
-    typedKotText.includes('Type: Dine in'),
-    'kot-document/order-type: localized order type rendered when present',
-  );
+  warn(!typedKotText.includes('Type:'), 'kot-document/order-type: order type left off the ticket');
 
   // ------------------------------------------------------------------
   // 5. Receipt/KOT language routing (#443): a Thai receipt on a generic

@@ -1657,11 +1657,19 @@ console.log('\n✅ Test 6: KOT (Kitchen Order Ticket)');
   const buf = formatKOT(fixtureOrder, fixtureOrder.items, 'Main Kitchen', 48);
   const text = buf.toString('utf8');
 
-  assert('renders KOT header', text.includes('KITCHEN ORDER TICKET'));
+  assert('leaves out the KOT banner', !text.includes('KITCHEN ORDER TICKET'));
   assert('renders station name', text.includes('Main Kitchen'));
-  assert('renders order number', text.includes('ORD-20260421-0001'));
+  assert('leaves out the order number on a table ticket', !text.includes('ORD-20260421-0001'));
   assert('renders table number', text.includes('T3'));
-  assert('renders localized order type', text.includes('Type: Dine in'));
+  assert('leaves out the order type', !text.includes('Type:'));
+  assert('puts station and time on one line', text.includes('Station: Main Kitchen | Time:'));
+  const noTable = formatKOT(
+    { ...fixtureOrder, table: null },
+    fixtureOrder.items,
+    'Main Kitchen',
+    48,
+  ).toString('utf8');
+  assert('shows the order number when there is no table', noTable.includes('ORD-20260421-0001'));
   assert('renders each item with qty prefix', text.includes('2x  Cheeseburger'));
   assert('renders addon "Extra Cheese"', text.includes('+ Extra Cheese'));
   assert('renders addon "Bacon"', text.includes('+ Bacon'));

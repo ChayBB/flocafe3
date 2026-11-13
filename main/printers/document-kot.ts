@@ -20,7 +20,6 @@ import {
   GENERIC_THERMAL_CAPABILITIES,
   isThermalTextRepresentable,
   mergeThermalCapabilities,
-  shouldUseOrderTypeFallback,
   thermalTextFallback,
 } from '../../shared/print/thermal-capabilities';
 import { detectPrintLanguageDirection } from './document-classic';
@@ -226,14 +225,6 @@ function kotHeaderLines(
     hourCycle: 'h23' as const,
     ...(options.timezone ? { timeZone: options.timezone } : {}),
   };
-  const thermalCapabilities = mergeThermalCapabilities(options.capabilities, options.arabicShaping);
-  const banner = thermalSafeText(
-    labelOf(header.banner),
-    'KITCHEN ORDER TICKET',
-    options.language,
-    options.arabicShaping,
-    options.capabilities,
-  );
   const station = thermalSafeText(
     `${labelOf(header.stationLabel)}: ${header.stationName.text}`,
     `Station: ${thermalSafeMetadataValue(header.stationName.text, options.language, options.arabicShaping, options.capabilities)}`,
@@ -250,21 +241,6 @@ function kotHeaderLines(
         options.capabilities,
       )
     : null;
-  const orderType = header.orderType
-    ? (() => {
-        const localized = `${labelOf(header.orderType.label)}: ${header.orderType.value.text}`;
-        const fallback = `Type: ${header.orderType.code.replace(/_/g, ' ').trim().toUpperCase()}`;
-        return shouldUseOrderTypeFallback(localized, thermalCapabilities)
-          ? fallback
-          : thermalSafeText(
-              localized,
-              fallback,
-              options.language,
-              options.arabicShaping,
-              options.capabilities,
-            );
-      })()
-    : null;
   const time = parseDbTimestamp(header.timestamp.text).toLocaleTimeString(
     (options.locale ?? 'en-US') + '-u-nu-latn',
     tzOptions,
@@ -277,78 +253,45 @@ function kotHeaderLines(
     options.capabilities,
   );
 
+  const orderNumber = formatOrderNumberLabel(
+    header.orderNumberLabel,
+    header.orderNumber.text,
+    options.language,
+    options.arabicShaping,
+    options.capabilities,
+  );
+  // Without a table the order number is the only way the kitchen can match the ticket.
+  const title = table && header.table ? table : orderNumber;
   lines.push(
-    '{CENTER}{BOLD}' +
+    '{CENTER}{DOUBLE_HEIGHT}{BOLD}' +
       truncateShapedLine(
-        banner,
+        title,
         cols,
         options.arabicShaping,
         options.language,
         options.capabilities,
       ) +
-      '{/BOLD}{/CENTER}',
+      '{/BOLD}{/DOUBLE_HEIGHT}{/CENTER}',
   );
-  sourceLines?.push(labelOf(header.banner));
+  sourceLines?.push(
+    table && header.table
+      ? formatTableLabel(header.table.label, header.table.name.text)
+      : labelOf(header.orderNumberLabel).replace('{number}', header.orderNumber.text),
+  );
   sourceControlLines?.push(lines.at(-1) ?? '');
-  if (table && header.table) {
-    lines.push(
-      '{CENTER}{DOUBLE_HEIGHT}{BOLD}' +
-        truncateShapedLine(
-          table,
-          cols,
-          options.arabicShaping,
-          options.language,
-          options.capabilities,
-        ) +
-        '{/BOLD}{/DOUBLE_HEIGHT}{/CENTER}',
-    );
-    sourceLines?.push(formatTableLabel(header.table.label, header.table.name.text));
-    sourceControlLines?.push(lines.at(-1) ?? '');
-  }
-  lines.push('');
-  sourceLines?.push('');
-  sourceControlLines?.push('');
   lines.push(
     truncateShapedLine(
-      station,
+      `${station} | ${timeLine}`,
       cols,
       options.arabicShaping,
       options.language,
       options.capabilities,
     ),
   );
-  sourceLines?.push(`${labelOf(header.stationLabel)}: ${header.stationName.text}`);
-  sourceControlLines?.push(lines.at(-1) ?? '');
-  lines.push(
-    truncateShapedLine(
-      formatOrderNumberLabel(
-        header.orderNumberLabel,
-        header.orderNumber.text,
-        options.language,
-        options.arabicShaping,
-        options.capabilities,
-      ),
-      cols,
-      options.arabicShaping,
-      options.language,
-      options.capabilities,
-    ),
+  sourceLines?.push(
+    `${labelOf(header.stationLabel)}: ${header.stationName.text} | ${labelOf(header.timeLabel)}: ${time}`,
   );
-  sourceLines?.push(labelOf(header.orderNumberLabel).replace('{number}', header.orderNumber.text));
   sourceControlLines?.push(lines.at(-1) ?? '');
-  if (orderType) {
-    lines.push(
-      truncateShapedLine(
-        orderType,
-        cols,
-        options.arabicShaping,
-        options.language,
-        options.capabilities,
-      ),
-    );
-    sourceLines?.push(`${labelOf(header.orderType!.label)}: ${header.orderType!.value.text}`);
-    sourceControlLines?.push(lines.at(-1) ?? '');
-  }
   if (header.customer) {
     const customer = thermalSafeText(
       `${labelOf(header.customer.label)}: ${header.customer.name.text}`,
@@ -369,17 +312,6 @@ function kotHeaderLines(
     sourceLines?.push(`${labelOf(header.customer.label)}: ${header.customer.name.text}`);
     sourceControlLines?.push(lines.at(-1) ?? '');
   }
-  lines.push(
-    truncateShapedLine(
-      timeLine,
-      cols,
-      options.arabicShaping,
-      options.language,
-      options.capabilities,
-    ),
-  );
-  sourceLines?.push(`${labelOf(header.timeLabel)}: ${time}`);
-  sourceControlLines?.push(lines.at(-1) ?? '');
   if (header.orderNotes) {
     const noteLabel = thermalSafeText(
       labelOf(header.orderNotes.label),
@@ -391,9 +323,6 @@ function kotHeaderLines(
     const noteText = `${noteLabel}: ${header.orderNotes.text.text}`;
     const wrapped: string[] = [];
     pushWrapped(wrapped, noteText, Math.max(1, cols - 6), options.language, options.capabilities);
-    lines.push('');
-    sourceLines?.push('');
-    sourceControlLines?.push(lines.at(-1) ?? '');
     wrapped.forEach((text, index) => {
       lines.push(
         '{DOUBLE_HEIGHT}{BOLD}' + (index === 0 ? '!! ' : '   ') + text + '{/BOLD}{/DOUBLE_HEIGHT}',
@@ -495,7 +424,6 @@ export function renderKotDocumentToLines(
     });
   }
   lines.push(bar);
-  lines.push('');
 
   if (items) {
     for (const [rowIndex, row] of items.rows.entries()) {
@@ -523,7 +451,6 @@ export function renderKotDocumentToLines(
     }
   }
 
-  lines.push('');
   lines.push(bar);
   lines.push('{CUT}');
 
