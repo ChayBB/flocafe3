@@ -65,7 +65,7 @@ test('a small store logo uploads under the app CSP and is saved', async ({ page 
   await expect(page.getByTestId('settings-store-branding')).toHaveCount(0);
 });
 
-test('staff see the configured logo and cover in the local POS and Server App', async ({
+test('POS omits store branding while Server App keeps the logo and cover without the name', async ({
   page,
   context,
 }) => {
@@ -128,25 +128,7 @@ test('staff see the configured logo and cover in the local POS and Server App', 
     await page.locator('#password').fill(E2E_OPERATIONAL_PASSWORD);
     await page.locator('button[type="submit"]').click();
     await page.waitForURL(/\/pos\/?$/);
-    await expect(page.getByTestId('pos-store-logo')).toHaveAttribute('src', image);
-    await expect(page.getByTestId('pos-store-cover')).toHaveAttribute('src', image);
-    const bannerBounds = await page.getByTestId('pos-store-banner').boundingBox();
-    const coverBounds = await page.getByTestId('pos-store-cover').boundingBox();
-    const logoBounds = await page.getByTestId('pos-store-logo').boundingBox();
-    expect(coverBounds!.height).toBeGreaterThanOrEqual(192);
-    expect(
-      Math.abs(logoBounds!.x + logoBounds!.width / 2 - (bannerBounds!.x + bannerBounds!.width / 2)),
-    ).toBeLessThan(2);
-    expect(logoBounds!.y).toBeLessThan(coverBounds!.y + coverBounds!.height);
-    expect(logoBounds!.y + logoBounds!.height).toBeGreaterThan(
-      coverBounds!.y + coverBounds!.height,
-    );
-
-    expect(
-      await page
-        .getByTestId('pos-store-logo')
-        .evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
-    ).toBe(true);
+    await expect(page.getByTestId('pos-store-banner')).toHaveCount(0);
     const server = await context.newPage();
     await server.goto(`${SERVER_APP}/server-standalone`);
     await server.evaluate(
@@ -154,6 +136,7 @@ test('staff see the configured logo and cover in the local POS and Server App', 
       getE2eToken('e2e-server', 'server@flo.local', 'server'),
     );
     await server.reload();
+    await expect(server.getByTestId('server-app-header-name')).toHaveCount(0);
     await expect(server.getByTestId('server-app-header-logo')).toBeVisible();
     await expect(server.getByTestId('server-app-header-cover')).toBeVisible();
     expect(

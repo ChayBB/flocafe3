@@ -1,7 +1,6 @@
 'use client';
 
 import PrinterStatus from './PrinterStatus';
-import PosStoreBanner from './PosStoreBanner';
 import CustomerSearch from './CustomerSearch';
 import CustomerTopItems from './CustomerTopItems';
 import {
@@ -93,13 +92,11 @@ export default function PosTopbar({
   const tDashboard = useTranslations('dashboard');
   const tProducts = useTranslations('products');
   const lock = useAuthStore((s) => s.lock);
-  const tenantId = useAuthStore((s) => s.currentTenant?.id);
 
   return (
     // Identity/search first, the action buttons end-aligned next to it, and the
     // customer favorites row full-width beneath both.
     <div className="flex flex-col gap-1.5 border-b bg-card shrink-0 px-3 py-2 sm:px-4 sm:py-2.5">
-      <PosStoreBanner key={tenantId} />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex-1 min-w-0">
           <CustomerSearch variant="topbar" onModalOpenChange={onCustomerModalOpenChange} />
