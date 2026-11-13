@@ -29,6 +29,7 @@ import {
 } from '../services/promotions';
 import { notifyKdsUpdate, notifyOrderUpdated } from '../services/kds';
 import { printReceipt } from '../services/receipt';
+import { sortBillItems } from '../lib/bill-item-order';
 import { cloudSync } from '../services/cloud-sync';
 import * as whatsapp from '../services/whatsapp';
 import { hasPermission, requirePermission } from '../services/authorization';
@@ -849,11 +850,16 @@ export function getOrderWithItems(
   const table = order.table_id
     ? (db.prepare('SELECT * FROM tables WHERE id = ?').get(order.table_id) as {
         number?: string | number;
+        kitchen_station_id?: number | string | null;
       } | null)
     : null;
   return {
     ...order,
-    items: attachEffectiveAddons(db, childScopedItems.map(parseItemJson)),
+    items: sortBillItems(
+      db,
+      attachEffectiveAddons(db, childScopedItems.map(parseItemJson)),
+      table?.kitchen_station_id,
+    ),
     ...(table ? { table: { name: table.number } } : {}),
   };
 }

@@ -10,6 +10,10 @@ compliance template contract see
 constraints that apply to translated label text, see the
 [translation terminology reference](../reference/translation-terminology.md).
 
+Bill item snapshots keep food before items in drink categories or routed to a drinks station,
+with ice last. Each group keeps its original order. The bill API applies this ordering before the
+browser and thermal renderers consume it; kitchen tickets retain their own item order.
+
 ## The kernel
 
 The print kernel is `shared/print/**`. It contains types and pure functions only: no Electron, no
@@ -199,9 +203,9 @@ precomputed thermal data; `bill_show_logo` controls whether a bill renderer incl
 The store settings image card manages the logo for receipts, the Server App, and the table-QR menu.
 Uploading a logo saves `store_logo`, `receipt_logo`, and `receipt_logo_raster` together through
 `PUT /api/settings/branding`; removing it clears all three together. The card also shows the thermal
-preview. Existing receipt images remain available until replaced or removed. The POS top bar and
-Server App ordering header display the same store logo and cover. Both refresh branding when the
-window regains focus or becomes visible. The POS also reacts to local branding-save events;
+preview. Existing receipt images remain available until replaced or removed. The Server App
+ordering header displays the store logo and cover without the business name and refreshes branding
+when the window regains focus or becomes visible. The POS top bar has no store branding banner;
 image loading failures leave order entry usable.
 `processReceiptLogoFile()` uses a browser canvas to composite transparency on white, trim
 surrounding transparent or white margins with a 4 px pad (`findLogoContentBounds()`), scale the
@@ -364,6 +368,9 @@ on restart) per order and station, with the item ids that missed, the failure re
 `needs_attention`, `offline`, `timeout`, `error`), and the network printer it failed on. A later
 failure for the same order and station adds its items to the same entry; a ticket that prints
 removes only its own items. Kitchen displays get a `kot_unprinted` alert carrying the reason.
+The POS shows a single waiting ticket directly. Multiple tickets start in a collapsed count
+that staff can expand into a scrollable list, capped at 40% of the viewport height; dialogs
+remain above it. Collapsing the list keeps every waiting ticket available.
 
 While an entry waits, its network printer is probed every 5 seconds with the same status request
 through the printer's queue. Once the printer reports paper with the cover closed (or, for a
