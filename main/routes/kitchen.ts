@@ -23,7 +23,7 @@ import { requireKdsEnabled } from '../middleware/security';
 import { requirePermission } from '../services/authorization';
 import { ROLE_ACCESS, hasRole } from '../../shared/role-permissions';
 import { parseCategoryIds } from './auth';
-import { recentKdsAlerts } from '../services/kds-alerts';
+import { kdsAlertsForStations } from '../services/kds-alerts';
 
 const router = Router();
 
@@ -209,7 +209,7 @@ router.get('/orders', (req: Request, res: Response) => {
     res.json({
       orders: annotateKdsItems(db, ordersWithItems),
       counts: countMap,
-      alerts: recentKdsAlerts(),
+      alerts: kdsAlertsForStations(db, stationIds),
     });
   } catch (error: any) {
     res.locals.postHogError = error;

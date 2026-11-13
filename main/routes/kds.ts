@@ -34,7 +34,7 @@ import {
 import { hasPermission, requirePermission } from '../services/authorization';
 import { parseCategoryIds } from './auth';
 import { notifyKdsUpdate } from '../services/kds';
-import { recentKdsAlerts } from '../services/kds-alerts';
+import { kdsAlertsForStations } from '../services/kds-alerts';
 import { handleKdsSpeech, handleKdsSpeechEngine } from '../services/kds-speech';
 import { handleKdsDismissKot, handleKdsReprintKot } from '../services/kds-kot-actions';
 import { reconcileActiveOrderStatusFromItems } from '../services/orders';
@@ -270,7 +270,11 @@ router.get('/orders', requireKdsEnabled, (req: Request, res: Response) => {
     for (const order of ordersWithItems) {
       for (const item of order.items) counts[item.status] = (counts[item.status] || 0) + 1;
     }
-    res.json({ orders: annotateKdsItems(db, ordersWithItems), counts, alerts: recentKdsAlerts() });
+    res.json({
+      orders: annotateKdsItems(db, ordersWithItems),
+      counts,
+      alerts: kdsAlertsForStations(db, userStationIds),
+    });
   } catch (error: any) {
     res.locals.postHogError = error;
     console.error('[API] Internal error:', error);

@@ -33,7 +33,12 @@ const {
 const { getJWTSecret } = require('../main/routes/auth');
 const { kdsRoutes } = require('../main/routes/kds');
 const { kdsAlertRoutes } = require('../main/routes/kds-alerts');
-const { recentKdsAlerts, clearKdsAlertsForTest } = require('../main/services/kds-alerts');
+const {
+  recentKdsAlerts,
+  clearKdsAlertsForTest,
+  addKdsAlert,
+  kdsAlertsForStations,
+} = require('../main/services/kds-alerts');
 
 function seedUser(db: any, id: string, name: string, role: string) {
   db.prepare(`
@@ -68,7 +73,11 @@ async function main() {
     assertEqualOrThrow(recentKdsAlerts().length, 0, 'refused alerts are not kept');
 
     const sent = await send({ message: '  ไฟไหม้ที่ห้องครัว  ', table: '5' });
-    assertEqualOrThrow(sent.status, 201, `a server sends an emergency alert (${JSON.stringify(sent.data)})`);
+    assertEqualOrThrow(
+      sent.status,
+      201,
+      `a server sends an emergency alert (${JSON.stringify(sent.data)})`,
+    );
     assertEqualOrThrow(sent.data.alert.kind, 'emergency', 'the alert is an emergency');
     assertEqualOrThrow(sent.data.alert.message, 'ไฟไหม้ที่ห้องครัว', 'the message is trimmed');
     assertEqualOrThrow(sent.data.alert.table, '5', 'the table is kept');
@@ -84,7 +93,11 @@ async function main() {
       'kitchen displays receive the alerts with their orders',
     );
 
-    assertEqualOrThrow(recentKdsAlerts(Date.now() + 31 * 60 * 1000).length, 0, 'alerts drop off after 30 minutes');
+    assertEqualOrThrow(
+      recentKdsAlerts(Date.now() + 31 * 60 * 1000).length,
+      0,
+      'alerts drop off after 30 minutes',
+    );
     assertOrThrow(Array.isArray(recentKdsAlerts()), 'the alert list stays readable');
 
     console.log('\nAll KDS alert checks passed');

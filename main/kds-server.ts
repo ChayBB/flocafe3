@@ -71,7 +71,7 @@ import {
 import { recordClockIn, recordClockOut } from './services/attendance';
 import { handleKdsSpeech, handleKdsSpeechEngine } from './services/kds-speech';
 import { handleKdsDismissKot, handleKdsReprintKot } from './services/kds-kot-actions';
-import { recentKdsAlerts } from './services/kds-alerts';
+import { kdsAlertsForStations } from './services/kds-alerts';
 
 let kdsServer: http.Server | null = null;
 let kdsWss: WebSocketServer | null = null;
@@ -547,7 +547,7 @@ export function startKdsServer(): Promise<void> {
         res.json({
           orders: annotateKdsItems(db, ordersWithItems),
           counts,
-          alerts: recentKdsAlerts(),
+          alerts: kdsAlertsForStations(db, stationIds),
         });
       } catch (error: any) {
         console.error('[API] Internal error:', error);

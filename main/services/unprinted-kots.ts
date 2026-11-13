@@ -88,6 +88,7 @@ export function recordUnprintedKot(input: {
     table: input.table ?? null,
     ref: id,
     reason,
+    station: input.station,
   });
   notifyKdsUpdate();
   watchPrinters();
@@ -167,6 +168,7 @@ export async function checkUnprintedKotPrinters(): Promise<void> {
         table: entry.table,
         ref: entry.id,
         reason: entry.reason,
+        station: entry.station,
       });
       notifyKdsUpdate();
     }
