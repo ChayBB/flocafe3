@@ -15,7 +15,7 @@ export function KdsScrollArea({
     <div
       ref={dropRef}
       data-testid="kds-scroll-area"
-      className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-auto ${className}`}
+      className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-auto [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-thumb]:rounded-full ${className}`}
     >
       {children}
     </div>
