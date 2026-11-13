@@ -639,11 +639,17 @@ a receipt and retries `POST /api/v1/connectors/ack-receipt` independently of POS
 Cloud commits delivery and order status together and replays the same receipt safely.
 
 **Cloud table stickers.** Settings → OrderFlow → Cloud QR Ordering lists every POS table and shows
-which tables are inactive. Staff can open an active POS table for three hours. The scoped
+which tables are inactive. Staff can open an active POS table until the returned expiry. The scoped
 connector API registers the POS table ID and returns a stable, public sticker
 identifier. The customer site exchanges that identifier for a short-lived table session only while
 the table is open. Closing Cloud ordering for that table revokes its Cloud guest sessions. Cloud
 orders for mapped tables can only be accepted into their linked POS table. The local Server App
+and integrated Cloud ordering reject new items while a printed bill awaits cashier receipt
+confirmation. The connector synchronizes this hold through `POST /api/v1/connectors/table-qr`
+with `action: payment-state`; Cloud rejects new submissions with `409 bill_awaiting_payment`
+and exposes the hold in `GET /api/v1/table-session/orders`. The customer page displays the
+payment warning and retains unsent items. Accepted idempotent replays remain valid, and the POS
+checks the hold again before placement even if Cloud synchronization is delayed. The local Server App
 stickers use their own local table sessions. Set `QR_ORDERING_PUBLIC_ORIGIN` on the Cloud API to
 the HTTPS origin serving the customer site. The customer site's proxy must forward
 `POST /api/v1/table-qr/session` alongside the existing customer menu and order routes.

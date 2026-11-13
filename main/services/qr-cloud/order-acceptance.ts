@@ -302,6 +302,12 @@ export async function acceptCloudOrder(
     signal: automatic && AbortSignal.any([automatic.signal, AbortSignal.timeout(15000)]),
   });
   if (result.kind !== 'placed' || !result.orderNumber) {
+    if (
+      (result.kind === 'held' && result.body.code === 'bill_awaiting_payment') ||
+      (result.kind === 'failed' && result.code === 'bill_awaiting_payment')
+    ) {
+      throw new CloudOrderError('bill_awaiting_payment');
+    }
     if (result.kind === 'failed' && result.error === 'pos_price_changed') {
       throw new CloudOrderError(result.error);
     }

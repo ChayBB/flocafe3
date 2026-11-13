@@ -14,7 +14,7 @@ test.skipIf(!testUrl)('Cloud order reads enforce tenant, branch and pending deli
   try {
     await db.begin(async (tx) => {
       await tx`CREATE TEMP TABLE orders (id uuid, tenant_id uuid, branch_id uuid, table_session_id uuid,
-        status text, created_at timestamptz DEFAULT now(), total_satang int) ON COMMIT DROP`;
+        status text, created_at timestamptz DEFAULT now(), total_satang int, note text) ON COMMIT DROP`;
       await tx`CREATE TEMP TABLE outbox_events (id uuid, tenant_id uuid, branch_id uuid, kind text,
         payload jsonb, created_at timestamptz DEFAULT now()) ON COMMIT DROP`;
       await tx`CREATE TEMP TABLE connector_deliveries (event_id uuid, tenant_id uuid, branch_id uuid,

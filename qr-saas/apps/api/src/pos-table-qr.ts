@@ -19,6 +19,16 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
       const identity = await authorize(request);
       if (!identity) return reply(401, { error: 'unauthorized' });
       const { tenantId, branchId, installationId } = identity;
+      if (body.action === 'payment-state') {
+        if (typeof body.awaiting_payment !== 'boolean') return reply(400, { error: 'payment state required' });
+        const [table] = await sql`
+          UPDATE dining_tables SET bill_awaiting_payment = ${body.awaiting_payment}
+          WHERE tenant_id = ${tenantId} AND branch_id = ${branchId} AND pos_table_id = ${body.pos_table_id}
+            AND pos_installation_id IS NOT DISTINCT FROM ${installationId}::uuid
+          RETURNING bill_awaiting_payment
+        `;
+        return table ? reply(200, { awaiting_payment: table.bill_awaiting_payment }) : reply(404, { error: 'table not found' });
+      }
       if (body.action === 'close') {
         await sql.begin(async (tx) => {
           const [table] = await tx`
@@ -41,12 +51,13 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
       }
       const [table] = await sql<{ qr_public_id: string; qr_ordering_until: Date }[]>`
         INSERT INTO dining_tables (tenant_id, branch_id, name, pos_table_id, pos_installation_id,
-          qr_ordering_until, qr_session_generation)
+          qr_ordering_until, qr_session_generation, bill_awaiting_payment)
         VALUES (${tenantId}, ${branchId}, ${body.name}, ${body.pos_table_id}, ${installationId},
-          now() + interval '365 days', gen_random_uuid())
+          now() + interval '365 days', gen_random_uuid(), ${body.awaiting_payment ?? false})
         ON CONFLICT (tenant_id, branch_id, pos_table_id) DO UPDATE
         SET name = excluded.name, pos_installation_id = excluded.pos_installation_id,
           qr_ordering_until = excluded.qr_ordering_until,
+          bill_awaiting_payment = coalesce(${body.awaiting_payment ?? null}::boolean, dining_tables.bill_awaiting_payment),
           qr_session_generation = CASE WHEN dining_tables.qr_ordering_until > now()
             THEN coalesce(dining_tables.qr_session_generation, excluded.qr_session_generation)
             ELSE excluded.qr_session_generation END
@@ -59,7 +70,8 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
       url.hash = new URLSearchParams({ table: table.qr_public_id }).toString();
       return reply(200, { url: url.href, expires_at: table.qr_ordering_until });
     }, { body: t.Object({
-      action: t.Union([t.Literal('open'), t.Literal('close')]),
+      action: t.Union([t.Literal('open'), t.Literal('close'), t.Literal('payment-state')]),
+      awaiting_payment: t.Optional(t.Boolean()),
       pos_table_id: t.String({ minLength: 1, maxLength: 128 }),
       name: t.String({ minLength: 1, maxLength: 80 }),
     }) })

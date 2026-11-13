@@ -2,6 +2,16 @@ import type Database from 'better-sqlite3';
 
 export const GUEST_USER_ID = 'guest-self-order';
 
+export function tableAwaitingBillPayment(db: Database.Database, tableId: string | number): boolean {
+  return Boolean(
+    db
+      .prepare(`SELECT 1 FROM orders WHERE table_id = ? AND type = 'dine_in'
+    AND status NOT IN ('completed', 'cancelled')
+    AND bill_requested_at IS NOT NULL AND bill_payment_received_at IS NULL LIMIT 1`)
+      .get(tableId),
+  );
+}
+
 /** All the Guest account may do, whatever its role or overrides say: read the menu and order. */
 export const GUEST_PERMISSION_IDS: ReadonlySet<string> = new Set([
   'catalog.view',

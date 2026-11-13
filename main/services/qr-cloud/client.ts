@@ -228,7 +228,12 @@ export function fetchConnectorOrder(
 
 export function manageConnectorTableQr(
   options: FetchEventsOptions,
-  table: { action: 'open' | 'close'; pos_table_id: string; name: string },
+  table: {
+    action: 'open' | 'close' | 'payment-state';
+    pos_table_id: string;
+    name: string;
+    awaiting_payment?: boolean;
+  },
 ): Promise<unknown> {
   return requestConnectorJson(options, '/api/v1/connectors/table-qr', JSON.stringify(table));
 }

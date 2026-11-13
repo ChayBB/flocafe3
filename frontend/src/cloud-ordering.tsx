@@ -183,6 +183,7 @@ function Ordering() {
   }>();
   const [orderNote, setOrderNote] = useState('');
   const [sent, setSent] = useState<SentOrder[]>([]);
+  const [billAwaitingPayment, setBillAwaitingPayment] = useState(false);
   const announced = useRef(new Map<string, string | null>());
   const [pending, setPending] = useState<Attempt>();
   const [open, setOpen] = useState(false);
@@ -271,8 +272,10 @@ function Ordering() {
         headers: { Authorization: `Bearer ${current.token}` },
       });
       if (!response.ok) return;
-      const orders = readSentOrders(await response.json());
+      const body = await response.json();
+      const orders = readSentOrders(body);
       if (!orders) return;
+      setBillAwaitingPayment(body.bill_awaiting_payment === true);
       const seen = announced.current;
       for (const order of orders) {
         order.items.forEach((item, index) => {
@@ -298,25 +301,16 @@ function Ordering() {
       }
       setSent(orders);
     } catch {
-      // The sent list is informational; ordering keeps working without it.
+      // Keep the last known payment lock while the Cloud is unreachable.
     }
   }, [t]);
 
   useEffect(() => {
-    if (ready && !expired) void refreshSent();
-  }, [ready, expired, refreshSent]);
-
-  const cooking = sent.some(
-    (order) =>
-      order.status !== 'cancelled' &&
-      order.items.some((item) => item.status !== 'served' && item.status !== 'cancelled'),
-  );
-  useEffect(() => {
-    if (!(open || cooking) || !ready || expired) return;
+    if (!ready || expired) return;
     void refreshSent();
     const timer = window.setInterval(() => void refreshSent(), 15_000);
     return () => window.clearInterval(timer);
-  }, [open, cooking, ready, expired, refreshSent]);
+  }, [ready, expired, refreshSent]);
 
   useEffect(() => {
     void Promise.resolve().then(load);
@@ -467,6 +461,10 @@ function Ordering() {
   async function send() {
     const current = context.current;
     if (!current || flight.current || expired || !lines.length) return;
+    if (billAwaitingPayment && !pending) {
+      toast.error(t('tableAwaitingPaymentLocked'));
+      return;
+    }
     let attempt = pending;
     if (!attempt) {
       if (!window.confirm(`ยืนยันส่ง ${count} ชิ้นให้ร้านหรือไม่?`)) return;
@@ -496,6 +494,15 @@ function Ordering() {
         body: JSON.stringify(attempt.body),
       });
       const result = await response.json();
+      if (response.status === 409 && result.code === 'bill_awaiting_payment') {
+        sessionStorage.removeItem(current.storageKey);
+        setCart(attempt.body.items);
+        setOrderNote(attempt.body.note ?? '');
+        setPending(undefined);
+        setBillAwaitingPayment(true);
+        setStatus('');
+        return;
+      }
       if (
         (response.status === 409 && result.error === 'menu revision changed') ||
         (response.status === 400 &&
@@ -551,7 +558,7 @@ function Ordering() {
       match: (product: Product) => Boolean(product.tags?.includes('promotion')),
     },
   ];
-  const disabled = Boolean(pending) || expired || sending;
+  const disabled = Boolean(pending) || expired || sending || billAwaitingPayment;
   return (
     <main className="mx-auto flex h-dvh max-w-5xl flex-col bg-background px-3 text-foreground">
       {snapshot?.staffUrl && (
@@ -562,6 +569,11 @@ function Ordering() {
       {status && (
         <p className="my-2 rounded-lg bg-muted px-3 py-2 text-sm break-all" role="status">
           {status}
+        </p>
+      )}
+      {billAwaitingPayment && (
+        <p role="alert" className="my-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-950">
+          {t('tableAwaitingPaymentLocked')}
         </p>
       )}
       {canReload && (
@@ -626,6 +638,11 @@ function Ordering() {
           <DrawerContent className="max-h-[90vh] text-foreground">
             <div className="max-h-[85vh] overflow-y-auto px-3">
               <DrawerTitle className="py-3 text-sm font-semibold">{t('currentTicket')}</DrawerTitle>
+              {billAwaitingPayment && (
+                <p role="alert" className="mb-2 rounded-lg bg-amber-100 p-2 text-sm text-amber-950">
+                  {t('tableAwaitingPaymentLocked')}
+                </p>
+              )}
               {status && (
                 <p role="status" className="mb-2 rounded-lg bg-muted p-2 text-sm">
                   {status}
@@ -782,7 +799,7 @@ function Ordering() {
                 <button
                   type="button"
                   onClick={() => void send()}
-                  disabled={!count || sending || expired}
+                  disabled={!count || sending || expired || (billAwaitingPayment && !pending)}
                   className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-brand font-semibold text-white disabled:opacity-50"
                 >
                   <Send size={17} />

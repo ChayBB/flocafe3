@@ -10,7 +10,7 @@ import {
 import { getJWTSecret } from '../security/jwt-secret';
 import { getServerPort } from '../server-state';
 import { getHttpRequestSignal, trackHttpRequestWork } from '../shutdown';
-import { GUEST_USER_ID } from './guest-order';
+import { GUEST_USER_ID, tableAwaitingBillPayment } from './guest-order';
 
 /** Calls the main API on behalf of the Guest account that table-QR visitors order as. */
 export async function callMainApiAsGuest(
@@ -108,7 +108,7 @@ export type GuestOrderOutcome =
       itemIds: number[];
     }
   | { kind: 'held'; status: number; body: Record<string, unknown> }
-  | { kind: 'failed'; status: number; error: string };
+  | { kind: 'failed'; status: number; error: string; code?: string };
 
 /**
  * Places a table-QR order as the Guest account: a retry answers from the stored result, then
@@ -138,6 +138,17 @@ export async function placeGuestOrder(
         result: { status: 201, data: JSON.parse(stored.response_json) },
         existingItemIds: new Set<number>(),
         replayed: true,
+      };
+    }
+    if (tableAwaitingBillPayment(db, input.tableId)) {
+      return {
+        held: {
+          status: 409,
+          body: {
+            code: 'bill_awaiting_payment',
+            error: 'This table is waiting for the cashier to receive its payment',
+          },
+        },
       };
     }
     const held = gate?.();
@@ -183,6 +194,7 @@ export async function placeGuestOrder(
       kind: 'failed',
       status: result.status >= 400 ? result.status : 502,
       error: result.data?.error || 'Could not send the order',
+      ...(typeof result.data?.code === 'string' ? { code: result.data.code } : {}),
     };
   }
   const order = result.data.order;

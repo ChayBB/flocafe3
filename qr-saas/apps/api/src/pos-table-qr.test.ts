@@ -17,6 +17,7 @@ test.skipIf(!testUrl)('POS stickers retain their table key and require an open t
       id uuid DEFAULT gen_random_uuid(), qr_public_id uuid DEFAULT gen_random_uuid(),
       tenant_id uuid, branch_id uuid, name text, pos_table_id text, pos_installation_id uuid,
       qr_ordering_until timestamptz, qr_session_generation uuid,
+      bill_awaiting_payment boolean NOT NULL DEFAULT false,
       UNIQUE(tenant_id, branch_id, pos_table_id)
     )`;
     await sql`CREATE TEMP TABLE table_sessions (

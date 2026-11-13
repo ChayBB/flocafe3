@@ -737,7 +737,9 @@ export function startServerApp(): Promise<void> {
           if (outcome.kind === 'held') return res.status(outcome.status).json(outcome.body);
           if (outcome.kind === 'failed') {
             if (counted) releaseGuestOrderQuota(db, found.session.id, quantity);
-            return res.status(outcome.status).json({ error: outcome.error });
+            return res
+              .status(outcome.status)
+              .json({ error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}) });
           }
           res
             .status(201)

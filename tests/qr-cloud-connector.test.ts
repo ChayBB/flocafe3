@@ -194,6 +194,7 @@ async function verifyOrderAcceptance() {
   let pageBody: unknown = order;
   const acknowledgements: { pos_receipt_id: string }[] = [];
   const kitchenReports: { order_id: string; statuses: string[] }[] = [];
+  const paymentStates: boolean[] = [];
   https.request = (
     options: { method: string; path: string; rejectUnauthorized: boolean },
     callback: (response: unknown) => void,
@@ -216,6 +217,11 @@ async function verifyOrderAcceptance() {
       if (tableAction) {
         response.statusCode = 200;
         callback(response);
+        if (tableAction.action === 'payment-state') {
+          paymentStates.push(tableAction.awaiting_payment);
+          response.end(JSON.stringify({ awaiting_payment: tableAction.awaiting_payment }));
+          return;
+        }
         response.end(
           JSON.stringify(
             tableAction.action === 'close'
@@ -425,6 +431,60 @@ async function verifyOrderAcceptance() {
       3,
       'POS kitchen progress reaches the Cloud order once per change',
     );
+
+    db.prepare(
+      "UPDATE orders SET bill_requested_at = datetime('now'), bill_payment_received_at = NULL WHERE id = ?",
+    ).run(placed.id);
+    const { placeGuestOrder } = require('../main/lib/guest-order-placement');
+    const guestInput = {
+      source: 'cloud',
+      key: 'payment-lock-fixture',
+      tableId: 'cloud-table-a',
+      note: null,
+      items: [{ product_id: 'cloud-product', quantity: 1 }],
+    };
+    const paymentHold = await placeGuestOrder(undefined, guestInput);
+    assert.equal(paymentHold.kind, 'held');
+    assert.equal(paymentHold.status, 409);
+    assert.equal(paymentHold.body.code, 'bill_awaiting_payment');
+    assert.equal(lines().length, 1, 'a locked table receives no additional items');
+    const paymentReplay = await placeGuestOrder(undefined, { ...guestInput, key: orderId });
+    assert.equal(paymentReplay.kind, 'placed');
+    assert.equal(paymentReplay.replayed, true, 'an accepted retry remains safe while locked');
+    const heldEventId = crypto.randomUUID();
+    const heldOrderId = crypto.randomUUID();
+    inbox.storeEvents([
+      { id: heldEventId, kind: 'order.created', payload: { order_id: heldOrderId } },
+    ]);
+    pageBody = { ...order, order_id: heldOrderId };
+    const heldAcceptance = await fetch(
+      `http://127.0.0.1:${port}/api/qr-cloud/inbox/orders/${heldEventId}/accept`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ table_id: 'cloud-table-a', confirmed: true }),
+      },
+    );
+    assert.equal(heldAcceptance.status, 409);
+    assert.equal((await heldAcceptance.json()).code, 'bill_awaiting_payment');
+    assert.equal(orders().length, 1);
+    jobDb.prepare('DELETE FROM inbox_events WHERE event_id = ?').run(heldEventId);
+    jobDb
+      .prepare('INSERT INTO open_table_qr (cloud_url, pos_table_id, name) VALUES (?, ?, ?)')
+      .run(config.readConfig().cloudUrl, 'cloud-table-a', 'QA-A');
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.deepEqual(paymentStates, [true]);
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.deepEqual(paymentStates, [true], 'unchanged payment locks are not re-sent');
+    db.prepare("UPDATE orders SET bill_payment_received_at = datetime('now') WHERE id = ?").run(
+      placed.id,
+    );
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.deepEqual(paymentStates, [true, false]);
+    jobDb.prepare('DELETE FROM open_table_qr WHERE pos_table_id = ?').run('cloud-table-a');
+    db.prepare(
+      'UPDATE orders SET bill_requested_at = NULL, bill_payment_received_at = NULL WHERE id = ?',
+    ).run(placed.id);
 
     const automatic = config.updateConfig({ automatic: true });
     const older = crypto.randomUUID();

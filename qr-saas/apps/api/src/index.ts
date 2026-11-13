@@ -201,6 +201,8 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  return await sql.begin(async tx=>{
    // Serialize the branch idempotency key even when the buyer changes table sessions.
    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([session.tenant_id,session.branch_id,key])}, 0))`;
+   const [table]=await tx`SELECT bill_awaiting_payment FROM dining_tables
+     WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id} FOR SHARE`;
    const [locked]=await tx`SELECT id FROM table_sessions WHERE id=${session.id} AND expires_at>now() AND revoked_at IS NULL FOR UPDATE`;
    if(!locked)return err(401,'invalid session');
    const [prior]=await tx`SELECT i.request_hash,i.order_id,s.table_id,s.qr_generation,s.id AS session_id FROM idempotency_records i
@@ -212,6 +214,9 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
     if(prior.request_hash!==hash||prior.table_id!==session.table_id||!sameCycle)return err(409,'idempotency key reused with different table or payload');
     return {order_id:prior.order_id,replayed:true};
    }
+   if(!table)return err(409,'table closed');
+   if(table.bill_awaiting_payment)return Response.json({error:'bill_awaiting_payment',code:'bill_awaiting_payment'},
+     {status:409,headers:{'Cache-Control':'no-store'}});
    const [branch]=await tx`SELECT menu_revision FROM branches WHERE tenant_id=${session.tenant_id} AND id=${session.branch_id} FOR SHARE`;
    if(branch?.menu_revision && branch.menu_revision!==body.menu_revision)return err(409,'menu revision changed');
    if(body.items.reduce((sum,line)=>sum+line.quantity,0)>100)return err(400,'order exceeds quantity limit');
@@ -254,7 +259,9 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
    WHERE o.tenant_id=${session.tenant_id} AND o.branch_id=${session.branch_id} AND s.table_id=${session.table_id}
      AND (CASE WHEN ${session.qr_generation}::uuid IS NULL THEN s.id=${session.id} ELSE s.qr_generation=${session.qr_generation}::uuid END)
    ORDER BY o.created_at DESC LIMIT 20`;
- return Response.json({orders},{headers:{'Cache-Control':'no-store'}});
+ const [table]=await sql`SELECT bill_awaiting_payment FROM dining_tables
+   WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id}`;
+ return Response.json({orders,bill_awaiting_payment:table?.bill_awaiting_payment===true},{headers:{'Cache-Control':'no-store'}});
 })
 .get('/api/v1/orders/:id',async({request,params})=>{
  const secret=bearer(request);if(!secret)return err(401,'missing session');

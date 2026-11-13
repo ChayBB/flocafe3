@@ -26,6 +26,7 @@ test.skipIf(!testUrl)('M3 migrations, scoped credentials, catalog revisions and 
     const [legacyTable] = await sql`INSERT INTO dining_tables(tenant_id,branch_id,name,pos_table_id)
       VALUES (${legacyTenant.id},${legacyBranch.id},'07','legacy-07') RETURNING id`;
     for (const file of files.filter((file) => file >= '003')) await migrate(file);
+    expect((await sql`SELECT bill_awaiting_payment FROM dining_tables WHERE id = ${legacyTable.id}`)[0].bill_awaiting_payment).toBe(false);
     expect((await sql`SELECT pos_table_id, pos_installation_id FROM dining_tables WHERE id = ${legacyTable.id}`)[0])
       .toEqual({ pos_table_id: 'legacy-07', pos_installation_id: null });
     const [tenant] = await sql`INSERT INTO tenants(name) VALUES ('Fixture') RETURNING id`;

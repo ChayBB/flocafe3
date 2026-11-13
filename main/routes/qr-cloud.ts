@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import * as QRCode from 'qrcode';
 import { randomUUID } from 'node:crypto';
 import { getDatabase } from '../db';
+import { tableAwaitingBillPayment } from '../lib/guest-order';
 import { getHttpRequestSignal } from '../shutdown';
 import { requirePermission } from '../services/authorization';
 import { rateLimit } from '../middleware/security';
@@ -335,7 +336,14 @@ router.post(
         const signal = requestSignal ? AbortSignal.any([deadline, requestSignal]) : deadline;
         const result = (await manageConnectorTableQr(
           { config, token, caPem, signal },
-          { action, pos_table_id: table.id, name: table.number },
+          {
+            action,
+            pos_table_id: table.id,
+            name: table.number,
+            ...(action === 'open'
+              ? { awaiting_payment: tableAwaitingBillPayment(getDatabase(), table.id) }
+              : {}),
+          },
         )) as { closed?: unknown; url?: unknown; expires_at?: unknown } | null;
         if (action === 'close' && result?.closed === true) {
           openInbox()
