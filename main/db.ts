@@ -12630,7 +12630,25 @@ export function projectKdsItem(item: any, restricted: boolean): any {
       return safeAddon;
     });
   }
+  // The size name lets the screen tell the chosen options from the cook's note; its price stays out.
+  const variant = parseKdsVariant(item.variant_selection);
+  if (variant) projected.variant_selection = variant;
   return projected;
+}
+
+function parseKdsVariant(value: unknown): { name: string; sku?: string } | null {
+  let candidate = value;
+  if (typeof candidate === 'string') {
+    try {
+      candidate = JSON.parse(candidate);
+    } catch {
+      return null;
+    }
+  }
+  if (!candidate || typeof candidate !== 'object') return null;
+  const { name, sku } = candidate as { name?: unknown; sku?: unknown };
+  if (typeof name !== 'string' || !name.trim()) return null;
+  return typeof sku === 'string' && sku ? { name, sku } : { name };
 }
 
 /** Avoid exposing printer/network credentials in restricted KDS station metadata. */

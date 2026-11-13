@@ -127,6 +127,21 @@ assert.ok(
   'orderNotes camelCase property is used',
 );
 
+{
+  const { itemLine } = require('../shared/item-line');
+  const soup = 'ข้าวต้ม หมู/กุ้ง/ไก่/ปลาหมึก';
+  const withSize = itemLine(soup, { name: 'จานเล็ก' }, [{ name: 'หมู' }], 'จานเล็ก หมู');
+  assert.equal(withSize.name, 'ข้าวต้มหมู (จานเล็ก)');
+  assert.equal(withSize.instructions, '');
+  // Without the size snapshot the note keeps the size but not the option the name already says.
+  assert.equal(itemLine(soup, null, [{ name: 'หมู' }], 'จานเล็ก หมู').instructions, 'จานเล็ก');
+  assert.equal(
+    itemLine(soup, null, [{ name: 'หมู' }], 'จานเล็ก หมู | ไม่ใส่ผัก').instructions,
+    'จานเล็ก | ไม่ใส่ผัก',
+  );
+  assert.equal(itemLine('ข้าวผัด', null, [{ name: 'ไข่ดาว' }], 'ไม่เผ็ด').instructions, 'ไม่เผ็ด');
+}
+
 async function runAsyncTests() {
   const frontend = loadFrontendModules();
   await frontend.loadLocaleMessages('en');

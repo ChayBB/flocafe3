@@ -1531,7 +1531,12 @@ export async function printOrderKot(
     // A reprint covers only the items whose ticket failed; the rest already came out.
     const retryEntry = retryStation ? findUnprintedKot(order.id, retryStation) : undefined;
     const retryIds = retryEntry?.item_ids.length ? new Set(retryEntry.item_ids) : null;
-    const kotSourceItems = (Array.isArray(items) ? items : orderItems).filter(
+    // Stored rows carry the chosen size and options, so a caller's slimmer copy of an item prints the same.
+    const storedById = new Map(orderItems.map((item: any) => [String(item?.id), item]));
+    const requestedItems = Array.isArray(items)
+      ? items.map((item: any) => storedById.get(String(item?.id)) ?? item)
+      : orderItems;
+    const kotSourceItems = requestedItems.filter(
       (item: any) =>
         isKotItemPending(item?.status) && (!retryIds || retryIds.has(Number(item?.id))),
     );

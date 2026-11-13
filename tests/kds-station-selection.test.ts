@@ -22,7 +22,7 @@ Module._load = function (requestName: string, parent: unknown, isMain: boolean) 
 };
 
 import { startKdsServer, stopKdsServer, getKdsPort } from '../main/kds-server';
-import { initDatabase, closeDatabase, getDatabase, now } from '../main/db';
+import { initDatabase, closeDatabase, getDatabase, now, projectKdsItem } from '../main/db';
 import { clearRevokedTokens } from '../main/middleware/security';
 import { getJWTSecret } from '../main/routes/auth';
 import {
@@ -196,6 +196,21 @@ async function run() {
       stale.auth.user.stationIds.length,
       0,
       'a removed station falls back to all stations',
+    );
+
+    const projected = projectKdsItem(
+      {
+        id: 1,
+        product_name: 'ข้าวต้ม หมู/กุ้ง',
+        special_instructions: 'จานเล็ก หมู',
+        variant_selection: '{"id":"v1","name":"จานเล็ก","price":60,"sku":null}',
+      },
+      true,
+    );
+    assertEqualOrThrow(
+      JSON.stringify(projected.variant_selection),
+      JSON.stringify({ name: 'จานเล็ก' }),
+      'a station-filtered KDS item keeps its size name but not its price',
     );
 
     console.log('kds-station-selection tests passed');

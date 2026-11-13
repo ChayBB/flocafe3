@@ -133,9 +133,36 @@ export function itemLine(
     : joinsOptions
       ? dishWithOptions(productName, print.joined, 'x')
       : productName;
+  const name = variantName ? `${dish} (${variantName})${sku ? ` [${sku}]` : ''}` : dish;
   return {
-    name: variantName ? `${dish} (${variantName})${sku ? ` [${sku}]` : ''}` : dish,
-    instructions: withoutOptionsNote(specialInstructions, optionsNote(variantName, addons)),
+    name,
+    instructions: withoutNamedOptions(
+      withoutOptionsNote(specialInstructions, optionsNote(variantName, addons)),
+      name,
+      addons,
+    ),
     joinsOptions,
   };
+}
+
+/**
+ * Drops, from the options part of a note (before the first separator), any chosen option the line
+ * already names, so "จานเล็ก หมู" under "ข้าวต้มหมู" reads "จานเล็ก". The cook's own note is kept.
+ */
+function withoutNamedOptions(
+  instructions: string,
+  name: string,
+  addons: NamedOption[] | null | undefined,
+): string {
+  const named = new Set(
+    (addons ?? [])
+      .map((addon) => cleanItemText(String(addon?.name ?? '')))
+      .filter((option) => option && name.includes(option)),
+  );
+  if (!instructions || named.size === 0) return instructions;
+  const [head, ...rest] = instructions.split(NOTE_SEPARATOR);
+  const words = head.split(/\s+/).filter(Boolean);
+  const kept = words.filter((word) => !named.has(word));
+  if (kept.length === words.length) return instructions;
+  return [kept.join(' '), ...rest].filter((part) => part.trim()).join(NOTE_SEPARATOR);
 }
