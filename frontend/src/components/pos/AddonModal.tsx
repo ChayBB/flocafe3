@@ -325,7 +325,9 @@ export default function AddonModal({
           {groups.map((group) => {
             const count = getGroupTotalQuantity(group.id);
             const activeAddons = (group.addons || []).filter((a) => a.is_active);
-            const allowMultiple = Boolean(group.allow_multiple_quantities);
+            // A choose-one group never takes a quantity, whatever its multiple-quantity setting says.
+            const allowMultiple =
+              Boolean(group.allow_multiple_quantities) && group.max_selection !== 1;
             // A one-kind choice folds to the picked option until it is dialled back to 0.
             const folded = count > 0 && (allowMultiple || group.max_selection === 1);
             const shownAddons = folded
