@@ -113,12 +113,12 @@ export function KdsWorkspace({
   const screen = useKdsScreenMode();
 
   // Sound needs one tap per page in a browser; any tap or key press on the display unlocks it.
+  // A touch only counts as a gesture on pointerup/touchend/click in mobile browsers, not on pointerdown.
   useEffect(() => {
-    window.addEventListener('pointerdown', unlockKdsAlertSound);
-    window.addEventListener('keydown', unlockKdsAlertSound);
+    const events = ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown'] as const;
+    for (const event of events) window.addEventListener(event, unlockKdsAlertSound, true);
     return () => {
-      window.removeEventListener('pointerdown', unlockKdsAlertSound);
-      window.removeEventListener('keydown', unlockKdsAlertSound);
+      for (const event of events) window.removeEventListener(event, unlockKdsAlertSound, true);
     };
   }, []);
   const flashRef = useRef<HTMLDivElement>(null);
@@ -377,12 +377,14 @@ export function KdsWorkspace({
     const repeatMs = readKdsReadyDelay('repeat') * 1000;
     const lastReadyAt = lastReadyAtRef.current;
     const readyPhrases = new Map<string, string>();
+    // With the ready stage switched off, a tap sends a dish straight to served, which is its ready moment.
+    const readyStatuses = inactiveStatuses.includes('ready') ? ['ready', 'served'] : ['ready'];
     for (const order of orders) {
       const turnedReady = liveItems(order).some(
         (item) =>
-          item.status === 'ready' &&
+          readyStatuses.includes(item.status || '') &&
           knownStatuses.has(item.id) &&
-          knownStatuses.get(item.id) !== 'ready',
+          !['ready', 'served'].includes(knownStatuses.get(item.id) ?? ''),
       );
       if (!turnedReady) continue;
       const key = order.table?.name ? `table:${order.table.name}` : `order:${order.id}`;
@@ -433,7 +435,7 @@ export function KdsWorkspace({
     knownStatusesRef.current = new Map(
       allLive.map((item) => [item.id, item.status || ''] as const),
     );
-  }, [orders, conn.orders, ordersSynced, stationId, t]);
+  }, [orders, conn.orders, ordersSynced, stationId, inactiveStatuses, t]);
 
   return (
     <div data-testid="kds-workspace" className="relative h-full flex-1 flex flex-col">
