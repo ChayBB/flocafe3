@@ -432,23 +432,24 @@ export function OrderCard({
                   </DropdownMenuItem>
                 )}
 
-                {!['completed', 'cancelled'].includes(order.status) && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() => onCancelOrder(order)}
-                      disabled={cancellingOrderId === order.id}
-                      className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/40"
-                    >
-                      {!cancelRequiresPin ? (
-                        <XCircle size={14} className="me-2" />
-                      ) : (
-                        <Lock size={14} className="me-2" />
-                      )}
-                      {cancellingOrderId === order.id ? tOrders('cancelling') : tCommon('cancel')}
-                    </DropdownMenuItem>
-                  </>
-                )}
+                {!['completed', 'cancelled', 'preparing'].includes(order.status) &&
+                  !order.items?.some((item) => item.status === 'preparing') && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => onCancelOrder(order)}
+                        disabled={cancellingOrderId === order.id}
+                        className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/40"
+                      >
+                        {!cancelRequiresPin ? (
+                          <XCircle size={14} className="me-2" />
+                        ) : (
+                          <Lock size={14} className="me-2" />
+                        )}
+                        {cancellingOrderId === order.id ? tOrders('cancelling') : tCommon('cancel')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -769,17 +770,16 @@ export function OrderCard({
                               <Trash2 size={14} />
                             </button>
                           )}
-                          {(item.status === 'preparing' || item.status === 'ready') &&
-                            onVoidItem && (
-                              <button
-                                type="button"
-                                onClick={() => onVoidItem(order.id, item.id, heading)}
-                                className="size-8 flex items-center justify-center text-red-400 hover:text-red-600 active:scale-95 rounded-md hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors touch-manipulation"
-                                title={tOrders('voidItem')}
-                              >
-                                <Ban size={14} />
-                              </button>
-                            )}
+                          {item.status === 'ready' && onVoidItem && (
+                            <button
+                              type="button"
+                              onClick={() => onVoidItem(order.id, item.id, heading)}
+                              className="size-8 flex items-center justify-center text-red-400 hover:text-red-600 active:scale-95 rounded-md hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors touch-manipulation"
+                              title={tOrders('voidItem')}
+                            >
+                              <Ban size={14} />
+                            </button>
+                          )}
                         </div>
                       )}
                   </div>

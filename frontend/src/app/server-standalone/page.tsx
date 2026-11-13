@@ -764,6 +764,33 @@ export default function ServerStandalonePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the QR address is read once on mount.
   }, [api, guestTableId]);
 
+  useEffect(() => {
+    if (!api) return;
+    const controller = new AbortController();
+    let refreshing = false;
+    const refreshBranding = async () => {
+      if (refreshing || document.visibilityState === 'hidden') return;
+      refreshing = true;
+      try {
+        const { data } = await api.get<ServerAppInfo>('/api/server-app/info', {
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) setRegional(data);
+      } catch {
+        // Keep the current ordering screen usable when a refresh cannot connect.
+      } finally {
+        refreshing = false;
+      }
+    };
+    window.addEventListener('focus', refreshBranding);
+    document.addEventListener('visibilitychange', refreshBranding);
+    return () => {
+      controller.abort();
+      window.removeEventListener('focus', refreshBranding);
+      document.removeEventListener('visibilitychange', refreshBranding);
+    };
+  }, [api]);
+
   const userId = user?.id;
 
   useEffect(() => {

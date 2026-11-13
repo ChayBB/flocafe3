@@ -2,13 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import type { AxiosInstance } from 'axios';
-import toast from 'react-hot-toast';
-import { Loader2, Printer, RefreshCw, X, XCircle } from 'lucide-react';
-import { useLocale, useTranslations } from 'use-intl';
-import { Button } from '@/components/ui/button';
-import { printHtmlInFrame } from '@/lib/printer/print-html-frame';
-import { escapeHtml } from '@/lib/printer/web-print';
-import { parseDbTimestamp } from '@/lib/utils';
+import { Loader2, X } from 'lucide-react';
+import { useTranslations } from 'use-intl';
 
 interface GuestSession {
   table: { id: string; name: string };
@@ -18,12 +13,6 @@ interface GuestSession {
   store_timezone?: string;
   server_app_enabled: boolean;
   guest_ordering_enabled: boolean;
-}
-
-interface AuditEvent {
-  action: string;
-  created_at: string;
-  actor_name: string | null;
 }
 
 interface Props {
@@ -38,11 +27,8 @@ interface Props {
 export default function GuestTableQrDialog({ tableId, api, apiPrefix, onClose }: Props) {
   const t = useTranslations('tables');
   const tCommon = useTranslations('common');
-  const locale = useLocale();
   const [data, setData] = useState<GuestSession | null>(null);
   const [failed, setFailed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [history, setHistory] = useState<AuditEvent[] | null>(null);
   const path = `${apiPrefix}/tables/${encodeURIComponent(tableId)}/guest-session`;
 
   useEffect(() => {
@@ -60,182 +46,34 @@ export default function GuestTableQrDialog({ tableId, api, apiPrefix, onClose }:
     };
   }, [api, path]);
 
-  // Managers see who changed the table's QR; staff without table management get no history.
-  useEffect(() => {
-    if (!data) return;
-    let cancelled = false;
-    api
-      .get(`${apiPrefix}/tables/${encodeURIComponent(tableId)}/guest-qr-audit`)
-      .then((res) => {
-        if (!cancelled) setHistory((res.data.events || []).slice(0, 10));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [api, apiPrefix, tableId, data]);
-
-  const formatTime = (value: string) =>
-    new Intl.DateTimeFormat(locale, {
-      ...(data?.store_timezone ? { timeZone: data.store_timezone } : {}),
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(parseDbTimestamp(value));
-
-  const renew = async () => {
-    setBusy(true);
-    try {
-      const res = await api.post(path, { renew: true });
-      setData(res.data as GuestSession);
-      toast.success(t('guestQrRenewed'));
-    } catch {
-      toast.error(t('tableQrFailed'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const validUntil = data
-    ? new Intl.DateTimeFormat(locale, {
-        ...(data.store_timezone ? { timeZone: data.store_timezone } : {}),
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-      }).format(parseDbTimestamp(data.session.expires_at))
-    : '';
-
-  const printInBrowser = () => {
-    if (!data) return;
-    printHtmlInFrame(
-      `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(t('guestQrTitle'))}</title><style>
-        body{font-family:sans-serif;max-width:80mm;margin:0 auto;padding:4mm;text-align:center;color:#000}
-        .name{font-size:22pt;font-weight:700}img{width:60mm;max-width:100%}
-      </style></head><body><div class="name">${escapeHtml(t('tableQrTable', { name: data.table.name }))}</div>
-      <div>${escapeHtml(t('guestQrScan'))}</div><img src="${data.data_url}" alt="QR">
-      <div>${escapeHtml(t('guestQrValidUntil', { time: validUntil }))}</div>
-      <div>${escapeHtml(t('guestQrHint'))}</div></body></html>`,
-    );
-  };
-
-  const print = async () => {
-    setBusy(true);
-    try {
-      await api.post(`${path}/print`);
-      toast.success(t('guestQrPrinted'));
-    } catch (error: unknown) {
-      const code = (error as { response?: { data?: { code?: string } } })?.response?.data?.code;
-      if (code === 'no_printer' || code === 'document_printer') printInBrowser();
-      else toast.error(t('guestQrPrintFailed'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const closeCode = async () => {
-    setBusy(true);
-    try {
-      await api.delete(path);
-      toast.success(t('guestQrClosed'));
-      onClose();
-    } catch {
-      toast.error(t('tableQrFailed'));
-      setBusy(false);
-    }
-  };
-
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
     >
       <div
-        className="flex w-full max-w-sm flex-col items-center gap-3 rounded-2xl bg-card p-6 text-foreground shadow-2xl"
+        className="relative flex w-full max-w-sm flex-col items-center gap-3 rounded-2xl bg-card p-6 text-foreground shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={t('guestQrTitle')}
         data-testid="guest-table-qr"
       >
-        <div className="flex w-full items-start justify-between gap-3">
-          <h2 className="text-lg font-bold">
-            {data ? t('tableQrTable', { name: data.table.name }) : t('guestQrTitle')}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={tCommon('close')}
-            className="touch-target rounded-full text-muted-foreground hover:text-foreground"
-          >
-            <X size={18} />
-          </button>
-        </div>
-        {data && (!data.server_app_enabled || !data.guest_ordering_enabled) && (
-          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-            {t(data.server_app_enabled ? 'guestQrOrderingOff' : 'tableQrServerAppOff')}
-          </p>
-        )}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={tCommon('close')}
+          className="touch-target absolute end-2 top-2 rounded-full text-muted-foreground hover:text-foreground"
+        >
+          <X size={18} />
+        </button>
         {failed ? (
           <p className="py-6 text-center text-sm text-red-500">{t('tableQrFailed')}</p>
         ) : !data ? (
           <Loader2 size={22} className="my-10 animate-spin text-muted-foreground" />
         ) : (
-          <>
-            <img src={data.data_url} alt="QR" className="w-56 rounded-lg bg-white p-2" />
-            <p className="text-sm font-medium" data-testid="guest-table-qr-valid-until">
-              {t('guestQrValidUntil', { time: validUntil })}
-            </p>
-            <p className="text-center text-xs text-muted-foreground">{t('guestQrHint')}</p>
-          </>
+          <img src={data.data_url} alt="QR" className="w-56 rounded-lg bg-white p-2" />
         )}
-        {history && history.length > 0 && (
-          <details className="w-full text-xs" data-testid="guest-table-qr-history">
-            <summary className="cursor-pointer font-medium text-muted-foreground">
-              {t('guestQrHistory')}
-            </summary>
-            <ul className="mt-1 space-y-0.5">
-              {history.map((event, index) => (
-                <li key={index} className="flex justify-between gap-2">
-                  <span>
-                    {t('guestQrAuditAction', { action: event.action })}
-                    {event.actor_name ? ` · ${event.actor_name}` : ''}
-                  </span>
-                  <span className="shrink-0 tabular-nums text-muted-foreground">
-                    {formatTime(event.created_at)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-        <div className="grid w-full grid-cols-3 gap-2">
-          <Button type="button" size="sm" disabled={!data || busy} onClick={() => void print()}>
-            <Printer size={15} className="me-1" />
-            {t('tableQrPrint')}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!data || busy}
-            onClick={() => void renew()}
-          >
-            <RefreshCw size={15} className="me-1" />
-            {t('guestQrRenew')}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!data || busy}
-            onClick={() => void closeCode()}
-          >
-            <XCircle size={15} className="me-1" />
-            {t('guestQrClose')}
-          </Button>
-        </div>
       </div>
     </div>
   );
