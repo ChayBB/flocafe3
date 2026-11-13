@@ -43,7 +43,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         INSERT INTO dining_tables (tenant_id, branch_id, name, pos_table_id, pos_installation_id,
           qr_ordering_until, qr_session_generation)
         VALUES (${tenantId}, ${branchId}, ${body.name}, ${body.pos_table_id}, ${installationId},
-          now() + interval '3 hours', gen_random_uuid())
+          now() + interval '365 days', gen_random_uuid())
         ON CONFLICT (tenant_id, branch_id, pos_table_id) DO UPDATE
         SET name = excluded.name, pos_installation_id = excluded.pos_installation_id,
           qr_ordering_until = excluded.qr_ordering_until,

@@ -29,7 +29,7 @@ async function createTableSession(scope: typeof tableSessionScope.static) {
   const secret = token();
   const [row] = await sql<{ id: string; expires_at: Date }[]>`
     INSERT INTO table_sessions(tenant_id, branch_id, table_id, token_hash, expires_at)
-    SELECT tenant_id, branch_id, id, ${sha256(secret)}, now() + interval '3 hours'
+    SELECT tenant_id, branch_id, id, ${sha256(secret)}, now() + interval '365 days'
     FROM dining_tables
     WHERE id = ${scope.table_id} AND tenant_id = ${scope.tenant_id} AND branch_id = ${scope.branch_id}
     RETURNING id, expires_at

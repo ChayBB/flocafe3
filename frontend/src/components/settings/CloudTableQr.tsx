@@ -213,12 +213,7 @@ export function CloudTableQr() {
               {table.closed && <p>{t('qcTableQrClosed')}</p>}
               {table.data_url && table.expires_at && (
                 <>
-                  <p>
-                    {t('qcTableQrReady', {
-                      table: table.number,
-                      time: new Date(table.expires_at).toLocaleString(),
-                    })}
-                  </p>
+                  <p>{t('qcTableQrReady', { table: table.number })}</p>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={table.data_url} width={160} height={160} alt={t('qcTableQrTitle')} />
                   <a
@@ -236,12 +231,7 @@ export function CloudTableQr() {
       )}
       {qr && tableName && (
         <div className="space-y-2">
-          <p role="status">
-            {t('qcTableQrReady', {
-              table: tableName,
-              time: new Date(qr.expires_at).toLocaleString(),
-            })}
-          </p>
+          <p role="status">{t('qcTableQrReady', { table: tableName })}</p>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={qr.data_url} width={260} height={260} alt={t('qcTableQrTitle')} />
           <a href={qr.data_url} download={`cloud-qr-${tableName}.png`} className="underline">
