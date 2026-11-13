@@ -3,7 +3,6 @@
 import { PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDraggable, type DragEndEvent } from '@dnd-kit/react';
 import { KdsScrollArea } from './KdsScrollArea';
-import { parseDbTimestamp } from '@/lib/utils';
 import { Clock } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import toast from 'react-hot-toast';
@@ -232,11 +231,6 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
     <div
       ref={ref}
       style={{ touchAction: 'auto' }}
-      data-kds-scroll-time={Math.max(
-        ...items.map((item) =>
-          parseDbTimestamp(item.updated_at || item.created_at || order.created_at).getTime(),
-        ),
-      )}
       className={`select-none cursor-grab active:cursor-grabbing transition ${
         isDragging ? 'opacity-40' : ''
       } ${busy ? 'pointer-events-none opacity-60' : ''}`}
@@ -345,10 +339,7 @@ function VoidedColumn({ groups }: { groups: Array<{ order: KdsOrder; items: KdsO
           {count}
         </span>
       </div>
-      <KdsScrollArea
-        className="border border-border border-t-0 p-2 space-y-2 bg-muted/40"
-        hasItems={count > 0}
-      >
+      <KdsScrollArea className="border border-border border-t-0 rounded-b-lg p-2 space-y-2 bg-muted/40">
         {groups.map(({ order, items }) => (
           <div
             key={order.id}

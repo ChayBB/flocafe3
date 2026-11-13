@@ -588,9 +588,6 @@
     "costUnknown": "Cost unknown"
   },
   "kds": {
-    "scrollUp": "Scroll up",
-    "scrollDown": "Scroll down",
-    "scrollLatest": "Latest",
     "enterFullscreen": "Expand screen",
     "exitFullscreen": "Exit full screen",
     "addonsLabel": "Add-ons",
@@ -2007,7 +2004,11 @@
     "orderHistory": "Order history",
     "orderHistoryEmpty": "Nothing ordered at this table yet.",
     "orderHistoryLoading": "Loading…",
-    "orderHistoryTotal": "Total"
+    "orderHistoryTotal": "Total",
+    "showQr": "Show QR",
+    "staffButton": "Staff",
+    "darkMode": "Dark mode",
+    "customerHonorific": "{name}"
   },
   "settings": {
     "aboutDescription": "FloPOS is a free forever, open-source restaurant POS for cafes, restaurants, bakeries, food trucks, cloud kitchens, and bars. It includes ordering, tables, menus, kitchen display, receipt printing, staff access, and local data storage. Download it, run service, keep your data, and own your POS.",
@@ -3790,7 +3791,9 @@
     "guestAlertUnlockTitle": "Table {table}: guest scanned the QR",
     "guestAlertUnlocked": "Table unlocked for QR orders",
     "guestQrHistory": "QR history",
-    "guestQrAuditAction": "{action, select, opened {Opened} unlocked {Unlocked after a scan} renewed {New code} ended {Ended by staff} table_freed {Ended: table freed} expired {Ended at the daily reset} sticker_replaced {Sticker replaced} all_codes_cancelled {All table QR codes cancelled} other {Changed}}"
+    "guestQrAuditAction": "{action, select, opened {Opened} unlocked {Unlocked after a scan} renewed {New code} ended {Ended by staff} table_freed {Ended: table freed} expired {Ended at the daily reset} sticker_replaced {Sticker replaced} all_codes_cancelled {All table QR codes cancelled} other {Changed}}",
+    "shareQrTitle": "Share the QR with friends",
+    "shareQrHint": "Just have your friends scan the QR code"
   },
   "tax": {
     "actionActivate": "Pack activated",

@@ -588,9 +588,6 @@
     "costUnknown": "ไม่ทราบต้นทุน"
   },
   "kds": {
-    "scrollUp": "เลื่อนขึ้น",
-    "scrollDown": "เลื่อนลง",
-    "scrollLatest": "ล่าสุด",
     "enterFullscreen": "ขยายเต็มจอ",
     "exitFullscreen": "ย่อจอ",
     "addonsLabel": "ตัวเลือกเพิ่ม",
@@ -2007,7 +2004,11 @@
     "orderHistory": "ประวัติการสั่ง",
     "orderHistoryEmpty": "โต๊ะนี้ยังไม่ได้สั่งอะไร",
     "orderHistoryLoading": "กำลังโหลด…",
-    "orderHistoryTotal": "รวม"
+    "orderHistoryTotal": "รวม",
+    "showQr": "แสดง QR",
+    "staffButton": "พนักงาน",
+    "darkMode": "โหมดมืด",
+    "customerHonorific": "คุณ {name}"
   },
   "settings": {
     "aboutDescription": "FloPOS คือระบบ POS ร้านอาหารแบบโอเพนซอร์สและใช้ฟรีตลอดชีวิต สำหรับร้านกาแฟ ร้านอาหาร เบเกอรี่ รถขายอาหาร ครัวคลาวด์ และบาร์ ระบบครอบคลุมการสั่งซื้อ โต๊ะ เมนู จอแสดงผลในครัว การพิมพ์ใบเสร็จ การเข้าถึงของพนักงาน และการจัดเก็บข้อมูลในเครื่อง ดาวน์โหลด เปิดให้บริการ เก็บข้อมูลของคุณ และเป็นเจ้าของระบบ POS ของคุณเอง",
@@ -3790,7 +3791,9 @@
     "guestAlertUnlockTitle": "โต๊ะ {table}: ลูกค้าสแกน QR",
     "guestAlertUnlocked": "ปลดล็อกโต๊ะให้สั่งผ่าน QR แล้ว",
     "guestQrHistory": "ประวัติ QR",
-    "guestQrAuditAction": "{action, select, opened {เปิด QR} unlocked {ปลดล็อกหลังลูกค้าสแกน} renewed {รหัสใหม่} ended {พนักงานปิด QR} table_freed {ปิดเอง: โต๊ะว่าง} expired {ปิดเอง: ครบเวลารีเซ็ตรายวัน} sticker_replaced {เปลี่ยนสติกเกอร์} all_codes_cancelled {ยกเลิก QR ทุกโต๊ะ} other {เปลี่ยนแปลง}}"
+    "guestQrAuditAction": "{action, select, opened {เปิด QR} unlocked {ปลดล็อกหลังลูกค้าสแกน} renewed {รหัสใหม่} ended {พนักงานปิด QR} table_freed {ปิดเอง: โต๊ะว่าง} expired {ปิดเอง: ครบเวลารีเซ็ตรายวัน} sticker_replaced {เปลี่ยนสติกเกอร์} all_codes_cancelled {ยกเลิก QR ทุกโต๊ะ} other {เปลี่ยนแปลง}}",
+    "shareQrTitle": "แชร์ QR ให้เพื่อน",
+    "shareQrHint": "เพียงให้เพื่อนสแกน QR Code"
   },
   "tax": {
     "actionActivate": "เปิดใช้แพ็กแล้ว",
