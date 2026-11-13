@@ -77,6 +77,7 @@ import type {
 } from '@/lib/types';
 import { cartItemToOrderItem } from '@/lib/cart-order-item';
 import { playSoundFile, unlockKdsAlertSound } from '@/lib/kds-alert-sound';
+import { kdsItemLine } from '@/lib/item-options-note';
 
 const SERVE_CONFIRM_BELL = '/sounds/serve-confirm-bell.wav';
 
@@ -2236,26 +2237,24 @@ export default function ServerStandalonePage() {
               <div key={line.id} className="rounded-lg border border-border p-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
-                      {line.variant
-                        ? `${line.product.name} (${line.variant.name})`
-                        : line.product.name}
-                    </span>
-                    {line.addons.length > 0 && (
-                      <div className="mt-0.5 space-y-0.5">
-                        {line.addons.map((addon) => (
-                          <p key={addon.id} className="truncate text-xs text-muted-foreground">
-                            + {addon.name}
-                            {(addon.quantity || 1) > 1 ? ` x${addon.quantity}` : ''}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                    {line.special_instructions && (
-                      <p className="mt-0.5 truncate text-xs italic text-muted-foreground">
-                        {line.special_instructions}
-                      </p>
-                    )}
+                    {(() => {
+                      const shown = kdsItemLine({
+                        product_name: line.product.name,
+                        variant_selection: line.variant,
+                        addons: line.addons,
+                        special_instructions: line.special_instructions,
+                      });
+                      return (
+                        <>
+                          <span className="block truncate text-sm font-medium">{shown.name}</span>
+                          {shown.instructions && (
+                            <p className="mt-0.5 truncate text-xs italic text-muted-foreground">
+                              {shown.instructions}
+                            </p>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                   <button
                     disabled={sending}

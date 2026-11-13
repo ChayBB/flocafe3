@@ -16,6 +16,7 @@ import {
   type PosMenuPresentation,
 } from '@/lib/cloud-menu-presentation';
 import { productNeedsCustomizer } from '@/lib/product-variants';
+import { kdsItemLine } from '@/lib/item-options-note';
 import type { Addon, Product, ProductVariant } from '@/lib/types';
 import messages from '@/lib/i18n/messages/th.json';
 
@@ -371,12 +372,20 @@ function Ordering() {
         (candidate) => presentation.orderItemIds.get(candidate.id) === line.menu_item_id,
       );
     const variant = product?.variants?.find((candidate) => candidate.id === line.menu_item_id);
-    const name = product
-      ? variant
-        ? `${product.name} (${variant.name})`
-        : product.name
-      : (item?.name ?? 'รายการที่รอยืนยัน');
-    return { product, variant, name };
+    if (!product)
+      return { product, variant, name: item?.name ?? 'รายการที่รอยืนยัน', note: line.note ?? '' };
+    const all = product.addon_groups?.flatMap((group) => group.addons ?? []) ?? [];
+    const addons = (line.addons ?? []).flatMap((selected) => {
+      const addon = all.find((candidate) => candidate.id === selected.id);
+      return addon ? [{ name: addon.name, quantity: selected.quantity }] : [];
+    });
+    const shown = kdsItemLine({
+      product_name: product.name,
+      variant_selection: variant,
+      addons,
+      special_instructions: line.note,
+    });
+    return { product, variant, name: shown.name, note: shown.instructions };
   };
   const limitError = () => toast.error('จำนวนรายการหรือตัวเลือกเกินขีดจำกัด กรุณาลดจำนวนแล้วลองใหม่');
   const changeQty = (key: string, delta: number) => {
@@ -642,9 +651,9 @@ function Ordering() {
                               <span className="block truncate text-sm font-medium">
                                 {info.name}
                               </span>
-                              {line.note && (
+                              {info.note && (
                                 <p className="mt-0.5 truncate text-xs italic text-muted-foreground">
-                                  {line.note}
+                                  {info.note}
                                 </p>
                               )}
                             </div>
