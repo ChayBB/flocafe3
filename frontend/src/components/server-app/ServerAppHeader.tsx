@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { Prompt } from 'next/font/google';
-import { ChefHat, LayoutGrid, Moon, Sun } from 'lucide-react';
+import { ChefHat, ChevronDown, Moon, Sun } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import {
   DropdownMenu,
@@ -15,6 +15,9 @@ import { LanguageFlag } from './LanguageFlag';
 
 // A soft, rounded Thai and Latin face that keeps the header relaxed and easy to read.
 const headerFont = Prompt({ subsets: ['thai', 'latin'], weight: ['400', '500'], display: 'swap' });
+
+const TABLE_CHIP =
+  'flex min-w-0 items-center gap-2 rounded-2xl bg-[#F4EDE4] py-2 ps-2 pe-3 text-[15px] text-neutral-800 shadow-md';
 
 const ICON_BUTTON =
   'flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 disabled:opacity-50';
@@ -64,6 +67,27 @@ export function ServerAppHeader({
   const languages = (Object.keys(LANGUAGES) as Language[]).filter(
     (code) => LANGUAGES[code].selectable,
   );
+  const chipBody = (
+    <>
+      <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-brand ring-1 ring-black/5">
+        {logoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={logoUrl} alt="" className="size-full object-contain" />
+        ) : (
+          <ChefHat size={15} />
+        )}
+      </span>
+      <span className="truncate">{tableText}</span>
+      {customerName && (
+        <>
+          <span aria-hidden="true" className="h-4 w-px shrink-0 bg-neutral-300" />
+          <span data-testid="server-app-header-customer" className="min-w-0 truncate">
+            {customerName}
+          </span>
+        </>
+      )}
+    </>
+  );
   return (
     <header
       data-testid="server-app-header"
@@ -81,20 +105,33 @@ export function ServerAppHeader({
         )}
         <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/35 to-transparent" />
         <div className="relative mx-auto flex w-full max-w-6xl items-start gap-2 px-3 pt-3">
-          <p
-            data-testid="server-app-header-table"
-            className="flex min-w-0 items-center gap-2.5 rounded-2xl bg-white/95 px-4 py-2 text-[15px] text-neutral-800 shadow-md"
-          >
-            <span className="truncate">{tableText}</span>
-            {customerName && (
-              <>
-                <span aria-hidden="true" className="h-4 w-px shrink-0 bg-neutral-300" />
-                <span data-testid="server-app-header-customer" className="min-w-0 truncate">
-                  {customerName}
-                </span>
-              </>
-            )}
-          </p>
+          {onTables ? (
+            <button
+              type="button"
+              onClick={onTables}
+              aria-expanded={tablesExpanded}
+              aria-label={t('selectTable')}
+              title={t('selectTable')}
+              data-testid="server-app-table-button"
+              className={`${TABLE_CHIP} transition-colors hover:bg-[#EDE3D6]`}
+            >
+              <span
+                data-testid="server-app-header-table"
+                className="flex min-w-0 items-center gap-2"
+              >
+                {chipBody}
+              </span>
+              <ChevronDown
+                size={18}
+                aria-hidden="true"
+                className={`shrink-0 text-neutral-500 transition-transform ${tablesExpanded ? 'rotate-180' : ''}`}
+              />
+            </button>
+          ) : (
+            <p data-testid="server-app-header-table" className={TABLE_CHIP}>
+              {chipBody}
+            </p>
+          )}
           <div className="ms-auto flex shrink-0 items-center rounded-full border-2 border-white/80 bg-black/45 px-1 shadow-md">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -121,19 +158,6 @@ export function ServerAppHeader({
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-            {onTables && (
-              <button
-                type="button"
-                onClick={onTables}
-                aria-expanded={tablesExpanded}
-                aria-label={t('selectTable')}
-                title={t('selectTable')}
-                data-testid="server-app-table-button"
-                className={ICON_BUTTON}
-              >
-                <LayoutGrid size={22} />
-              </button>
-            )}
             {onDark && (
               <button
                 type="button"
