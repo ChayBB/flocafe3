@@ -29,6 +29,7 @@ export interface KdsMessage {
 /** Where a menu item sits on the board: its order, that order's table or number, and any service change. */
 export interface KdsItemPlace {
   orderId: number;
+  placeKey: string;
   place: string;
   change: string | null;
   /** The dish as the board shows it, with the chosen option ("ข้าวผัดหมู"). */
@@ -49,9 +50,16 @@ export function kdsItemPlaces(
   const places = new Map<number, KdsItemPlace>();
   for (const order of orders) {
     const place = placeOf(order);
+    const placeKey =
+      order.table_id != null
+        ? `table:${order.table_id}`
+        : order.table?.name
+          ? `table-name:${order.table.name}`
+          : `order:${order.id}`;
     for (const item of order.items || []) {
       places.set(item.id, {
         orderId: order.id,
+        placeKey,
         place,
         change: item.service_change ?? null,
         name: kdsItemLine(item).name,
@@ -79,10 +87,10 @@ export function detectKdsBoardChanges(
   for (const [itemId, now] of after) {
     const was = before.get(itemId);
     if (!was) continue;
-    if (was.orderId === now.orderId && was.place !== now.place) {
+    if (was.orderId === now.orderId && was.placeKey !== now.placeKey) {
       const key = `move:${now.orderId}:${now.place}`;
       changes.set(key, { kind: 'move', key, from: was.place, to: now.place });
-    } else if (was.orderId !== now.orderId && was.place !== now.place) {
+    } else if (was.orderId !== now.orderId && was.placeKey !== now.placeKey) {
       const key = `merge:${was.place}:${now.place}`;
       changes.set(key, { kind: 'merge', key, from: was.place, to: now.place });
     }

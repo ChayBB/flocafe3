@@ -219,6 +219,9 @@ parameter. The in-dashboard KDS polls `GET /api/kitchen/orders`; `/kds-standalon
 The frames, the handshake, and the server-side conditions live in
 [the API reference](../reference/api.md#kds-websocket-kds).
 
+The KDS message bar detects table moves and merges from table and order identities, independently
+of translated labels. Loading the store language or renaming a table does not create a move notice.
+
 ## The permission model
 
 ### Two catalogs, and which one you are looking at
