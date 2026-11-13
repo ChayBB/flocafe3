@@ -238,6 +238,17 @@ export function manageConnectorTableQr(
   return requestConnectorJson(options, '/api/v1/connectors/table-qr', JSON.stringify(table));
 }
 
+export function syncConnectorTableStates(
+  options: FetchEventsOptions,
+  tables: { pos_table_id: string; name: string; active: boolean; awaiting_payment: boolean }[],
+): Promise<unknown> {
+  return requestConnectorJson(
+    options,
+    '/api/v1/connectors/table-states',
+    JSON.stringify({ tables }),
+  );
+}
+
 export function acknowledgeConnectorOrder(
   options: FetchEventsOptions,
   receipt: {

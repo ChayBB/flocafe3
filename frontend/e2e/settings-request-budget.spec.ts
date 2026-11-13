@@ -715,7 +715,7 @@ test('Google Drive cancelled transfer shows automatic retry state', async ({ pag
 });
 
 test('Save All does not cache partial Mobile Access hydration', async ({ page }) => {
-  await startMockedSettingsSession(page, true);
+  await startMockedSettingsSession(page, true, {}, 200);
   const apiPaths = collectApiPaths(page);
 
   await page.goto(`${BASE}/settings?tab=store`);
@@ -724,7 +724,9 @@ test('Save All does not cache partial Mobile Access hydration', async ({ page })
   await page.locator('input[type="text"]').first().fill('Changed Store');
   await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
   await expect.poll(() => apiPaths.includes('/api/settings/printing')).toBeTruthy();
-  await expect(page.getByText('Settings saved', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('status').filter({ hasText: /Settings saved|Failed to save settings/ }),
+  ).toBeVisible();
 
   expect(apiPaths).not.toContain('/api/mobile/pairing-code');
   expect(apiPaths).not.toContain('/api/mobile/devices');

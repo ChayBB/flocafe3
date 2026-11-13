@@ -639,14 +639,18 @@ a receipt and retries `POST /api/v1/connectors/ack-receipt` independently of POS
 Cloud commits delivery and order status together and replays the same receipt safely.
 
 **Cloud table stickers.** Settings → OrderFlow → Cloud QR Ordering lists every POS table and shows
-which tables are inactive. Staff can open an active POS table until the returned expiry. The scoped
-connector API registers the POS table ID and returns a stable, public sticker
-identifier. The customer site exchanges that identifier for a short-lived table session only while
-the table is open. Closing Cloud ordering for that table revokes its Cloud guest sessions. Cloud
-orders for mapped tables can only be accepted into their linked POS table. The local Server App
-and integrated Cloud ordering reject new items while a printed bill awaits cashier receipt
-confirmation. The connector synchronizes this hold through `POST /api/v1/connectors/table-qr`
-with `action: payment-state`; Cloud rejects new submissions with `409 bill_awaiting_payment`
+which tables are inactive. Staff create a reusable sticker once; active POS tables accept orders
+without a manual opening step, including when a paid table becomes free. The scoped connector API
+registers the POS table ID and returns a stable, public sticker identifier. The customer site
+exchanges that identifier for a short-lived table session. The connector synchronizes every POS
+table's activation and bill hold through `POST /api/v1/connectors/table-states`, including free
+tables and previously closed stickers. Inactive tables reject sessions and revoke existing ones.
+Resetting guest sessions revokes current tokens; active tables resume after POS synchronization.
+The customer page renews a revoked cached session automatically when no submission has an unknown
+outcome. Cloud orders for mapped tables can only be accepted into their linked POS table.
+The local Server App and integrated Cloud ordering reject new items only while a printed bill
+awaits cashier receipt confirmation. Confirmation clears the hold without reopening the table.
+Cloud rejects new submissions with `409 bill_awaiting_payment`
 and exposes the hold in `GET /api/v1/table-session/orders`. The customer page displays the
 payment warning and retains unsent items. Accepted idempotent replays remain valid, and the POS
 checks the hold again before placement even if Cloud synchronization is delayed. The local Server App

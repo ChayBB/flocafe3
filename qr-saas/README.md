@@ -14,7 +14,7 @@
 ## Notes
 - No card data is processed or stored. PromptPay integration is a Codex P0 task, not a working payment gateway.
 - Cash confirmation route is a bootstrap example only; replace with authenticated branch-scoped staff permissions before launch.
-- Cloud stickers use a public table ID. The guest session endpoint issues short-lived tokens only while staff have opened the table.
+- Cloud stickers use a public table ID. The guest session endpoint issues short-lived tokens for active POS tables without a manual opening step. POS synchronization repairs previously closed stickers. Ordering pauses only while a printed bill awaits cashier receipt confirmation.
 - `outbox_events` are durably handed off to `connector_deliveries`; Redis Pub/Sub is only an optimization.
 - Never expose PostgreSQL or Redis ports to the Internet.
 - Backups: `bash scripts/backup.sh`, encrypt and send offsite, test restore. Local backups alone are insufficient.

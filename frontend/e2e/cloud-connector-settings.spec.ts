@@ -91,7 +91,7 @@ test('OrderFlow keeps one table sticker panel across connector status refreshes'
   await page.waitForResponse((response) => response.url() === connectorApi && response.ok());
   await expect(panel).toHaveCount(1);
   await expect(page.getByLabel('POS table', { exact: true })).toHaveValue('fixture-qr');
-  await page.getByRole('button', { name: 'Open table and show Cloud QR' }).click();
+  await page.getByRole('button', { name: 'Create and show Cloud QR' }).click();
   await expect(page.getByRole('link', { name: 'Download table sticker' })).toBeVisible();
 });
 

@@ -11,6 +11,7 @@ const delay = Number(process.env.ORDERING_API_DELAY_MS || 200);
 const table = '11111111-1111-4111-8111-111111111111';
 const item = '22222222-2222-4222-8222-222222222222';
 const token = 'a'.repeat(43);
+const renewedToken = 'b'.repeat(43);
 const samples = [];
 let requests = [];
 let scenario = 'ok';
@@ -41,7 +42,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(409).end(JSON.stringify({ code: 'bill_awaiting_payment' }));
       return;
     }
-    if (url.pathname.endsWith('/session') && scenario === 'closed') {
+    if (url.pathname.endsWith('/session') && (scenario === 'closed' || scenario === 'expired')) {
       res.writeHead(409).end('{}');
       return;
     }
@@ -49,7 +50,12 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(429).end('{}');
       return;
     }
-    if (url.pathname.endsWith('/menu') && req.headers.authorization && scenario === 'expired') {
+    if (
+      url.pathname.endsWith('/menu') &&
+      req.headers.authorization &&
+      (scenario === 'expired' ||
+        (scenario === 'renewed' && req.headers.authorization === `Bearer ${token}`))
+    ) {
       res.writeHead(401).end('{}');
       return;
     }
@@ -62,7 +68,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const data = url.pathname.endsWith('/session')
-      ? { table_token: token }
+      ? { table_token: scenario === 'renewed' ? renewedToken : token }
       : url.pathname.endsWith('/menu')
         ? {
             items: [{ id: item, name: 'Benchmark Coffee', price_satang: 5000, category: 'Drinks' }],
@@ -150,6 +156,7 @@ async function main() {
         'closed',
         'limited',
         'expired',
+        'renewed',
         'preview-failed',
         'token-only',
       ]) {
@@ -158,7 +165,7 @@ async function main() {
         const page = await context.newPage();
         const errors = [];
         page.on('pageerror', (error) => errors.push(error.message));
-        if (current === 'expired') {
+        if (current === 'expired' || current === 'renewed') {
           await context.addInitScript(
             ({ table, token }) => sessionStorage.setItem(`flocafe-table-session:${table}`, token),
             { table, token },
@@ -178,11 +185,22 @@ async function main() {
             .first()
             .waitFor();
           if (current === 'closed' || current === 'expired') {
-            await page.getByRole('status').filter({ hasText: 'โต๊ะนี้ยังไม่เปิดรับออเดอร์' }).waitFor();
+            await page.getByRole('status').filter({ hasText: 'QR โต๊ะนี้ไม่พร้อมใช้งาน' }).waitFor();
             assert.equal(
               await page.getByRole('button', { name: labels.currentTicket, exact: true }).count(),
               0,
             );
+          }
+          if (current === 'renewed') {
+            await page.getByRole('button', { name: labels.currentTicket, exact: true }).waitFor();
+            assert.equal(
+              await page.evaluate(
+                (key) => sessionStorage.getItem(`flocafe-table-session:${key}`),
+                table,
+              ),
+              renewedToken,
+            );
+            assert.equal(requests.filter((request) => request.path.endsWith('/session')).length, 1);
           }
           if (current === 'preview-failed' || current === 'token-only') {
             assert(

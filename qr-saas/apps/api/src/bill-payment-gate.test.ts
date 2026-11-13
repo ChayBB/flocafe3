@@ -77,11 +77,23 @@ test.skipIf(!databaseUrl || !redisUrl)(
           },
           body: JSON.stringify({ ...table, ...body }),
         });
+      const sync = (active: boolean, awaiting_payment: boolean, authorized = true) =>
+        fetch(`${base}/api/v1/connectors/table-states`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authorized ? { Authorization: `Bearer ${connector}` } : {}),
+          },
+          body: JSON.stringify({ tables: [{ ...table, active, awaiting_payment }] }),
+        });
       const opened = await manage({ action: 'open', awaiting_payment: false });
       expect(opened.status).toBe(200);
       const tableKey = new URLSearchParams(new URL((await opened.json()).url).hash.slice(1)).get(
         'table',
       );
+      expect((await manage({ action: 'close' })).status).toBe(200);
+      expect((await sync(true, false, false)).status).toBe(401);
+      expect((await sync(true, false)).status).toBe(200);
       const joined = await fetch(`${base}/api/v1/table-qr/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -106,7 +118,7 @@ test.skipIf(!databaseUrl || !redisUrl)(
       expect(
         (await manage({ action: 'payment-state', awaiting_payment: true }, false)).status,
       ).toBe(401);
-      expect((await manage({ action: 'payment-state', awaiting_payment: true })).status).toBe(200);
+      expect((await sync(true, true)).status).toBe(200);
       expect((await manage({ action: 'open' })).status).toBe(200);
       const blocked = await order(randomUUID());
       expect(blocked.status).toBe(409);
@@ -122,9 +134,20 @@ test.skipIf(!databaseUrl || !redisUrl)(
         (await sql`SELECT COUNT(*)::int AS count FROM outbox_events WHERE kind='order.created'`)[0]
           .count,
       ).toBe(1);
-      expect((await manage({ action: 'payment-state', awaiting_payment: false })).status).toBe(200);
+      expect((await sync(true, false)).status).toBe(200);
       expect((await order(randomUUID())).status).toBe(200);
       expect((await sql`SELECT COUNT(*)::int AS count FROM orders`)[0].count).toBe(2);
+      expect((await sync(false, false)).status).toBe(200);
+      expect((await order(randomUUID())).status).toBe(401);
+      const join = () =>
+        fetch(`${base}/api/v1/table-qr/session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ table_key: tableKey }),
+        });
+      expect((await join()).status).toBe(409);
+      expect((await sync(true, false)).status).toBe(200);
+      expect((await join()).status).toBe(200);
     } finally {
       if (api) {
         api.kill();

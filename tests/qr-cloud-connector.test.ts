@@ -194,7 +194,7 @@ async function verifyOrderAcceptance() {
   let pageBody: unknown = order;
   const acknowledgements: { pos_receipt_id: string }[] = [];
   const kitchenReports: { order_id: string; statuses: string[] }[] = [];
-  const paymentStates: boolean[] = [];
+  const tableStates: { pos_table_id: string; active: boolean; awaiting_payment: boolean }[][] = [];
   https.request = (
     options: { method: string; path: string; rejectUnauthorized: boolean },
     callback: (response: unknown) => void,
@@ -207,6 +207,13 @@ async function verifyOrderAcceptance() {
       const ack = options.path.endsWith('/ack-receipt');
       const receipt = ack ? JSON.parse(body!) : null;
       const tableAction = options.path.endsWith('/table-qr') ? JSON.parse(body!) : null;
+      if (options.path.endsWith('/table-states')) {
+        tableStates.push(JSON.parse(body!).tables);
+        response.statusCode = 200;
+        callback(response);
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
       if (options.path.endsWith('/order-status')) {
         kitchenReports.push(JSON.parse(body!));
         response.statusCode = 200;
@@ -218,7 +225,6 @@ async function verifyOrderAcceptance() {
         response.statusCode = 200;
         callback(response);
         if (tableAction.action === 'payment-state') {
-          paymentStates.push(tableAction.awaiting_payment);
           response.end(JSON.stringify({ awaiting_payment: tableAction.awaiting_payment }));
           return;
         }
@@ -469,19 +475,28 @@ async function verifyOrderAcceptance() {
     assert.equal((await heldAcceptance.json()).code, 'bill_awaiting_payment');
     assert.equal(orders().length, 1);
     jobDb.prepare('DELETE FROM inbox_events WHERE event_id = ?').run(heldEventId);
-    jobDb
-      .prepare('INSERT INTO open_table_qr (cloud_url, pos_table_id, name) VALUES (?, ?, ?)')
-      .run(config.readConfig().cloudUrl, 'cloud-table-a', 'QA-A');
+    const latestTable = () =>
+      tableStates.at(-1)?.find((table) => table.pos_table_id === 'cloud-table-a');
     await processCloudOrderDelivery(config.readConfig(), signal);
-    assert.deepEqual(paymentStates, [true]);
-    await processCloudOrderDelivery(config.readConfig(), signal);
-    assert.deepEqual(paymentStates, [true], 'unchanged payment locks are not re-sent');
+    assert.equal(latestTable()?.awaiting_payment, true);
+    assert.equal(latestTable()?.active, true);
     db.prepare("UPDATE orders SET bill_payment_received_at = datetime('now') WHERE id = ?").run(
       placed.id,
     );
+    db.prepare("UPDATE tables SET status = 'free' WHERE id = ?").run('cloud-table-a');
     await processCloudOrderDelivery(config.readConfig(), signal);
-    assert.deepEqual(paymentStates, [true, false]);
-    jobDb.prepare('DELETE FROM open_table_qr WHERE pos_table_id = ?').run('cloud-table-a');
+    assert.equal(
+      latestTable()?.awaiting_payment,
+      false,
+      'cashier confirmation releases a free table without opening its QR',
+    );
+    assert.equal(latestTable()?.active, true);
+    assert.equal(
+      outbound.includes('POST /api/v1/connectors/table-qr'),
+      false,
+      'settlement never closes guest ordering',
+    );
+    db.prepare("UPDATE tables SET status = 'occupied' WHERE id = ?").run('cloud-table-a');
     db.prepare(
       'UPDATE orders SET bill_requested_at = NULL, bill_payment_received_at = NULL WHERE id = ?',
     ).run(placed.id);

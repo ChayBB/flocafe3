@@ -3,7 +3,7 @@ import { tableAwaitingBillPayment } from '../../lib/guest-order';
 import { isTerminalItemStatus } from '../../../shared/order-item-status';
 import {
   acknowledgeConnectorOrder,
-  manageConnectorTableQr,
+  syncConnectorTableStates,
   QrCloudClientError,
   reportConnectorKitchenStatus,
 } from './client';
@@ -13,7 +13,6 @@ import { acceptCloudOrder, CloudOrderError } from './order-acceptance';
 import { readApprovedCa } from './tls';
 
 const STATUS_SYNC_WINDOW_MS = 24 * 60 * 60 * 1000;
-const tablePaymentStates = new Map<string, boolean>();
 
 /** The guest-facing stage of a POS order item; a row no longer on the bill counts as cancelled. */
 export function kitchenStatusOf(status: string | undefined): string {
@@ -127,73 +126,27 @@ export async function processCloudOrderDelivery(config: QrCloudConfig, signal: A
 
   // Kitchen progress is informational for guests; it must never fail order delivery.
   await syncKitchenStatus(config, signal).catch(() => undefined);
-  await closeSettledTableQr(config, signal).catch(() => undefined);
+  await syncTableStates(config, signal).catch(() => undefined);
 }
 
-/**
- * A table's Cloud QR stays open until the bill is settled: once the POS table has been occupied
- * and is free again, its QR ordering is closed.
- */
-async function closeSettledTableQr(config: QrCloudConfig, signal: AbortSignal) {
-  const db = openInbox();
-  const rows = db
-    .prepare(
-      'SELECT pos_table_id, name, seen_occupied, retry_at FROM open_table_qr WHERE cloud_url = ?',
-    )
-    .all(config.cloudUrl) as {
-    pos_table_id: string;
-    name: string;
-    seen_occupied: number;
-    retry_at: number;
-  }[];
-  if (!rows.length) return;
+async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {
   const pos = getDatabase();
-  for (const row of rows) {
+  const tables = pos.prepare('SELECT id, number, is_active FROM tables ORDER BY id').all() as {
+    id: string;
+    number: string;
+    is_active: number;
+  }[];
+  for (let offset = 0; offset < tables.length; offset += 250) {
     if (signal.aborted || readConfig().cloudUrl !== config.cloudUrl) return;
-    const table = pos.prepare('SELECT status FROM tables WHERE id = ?').get(row.pos_table_id) as
-      | { status: string }
-      | undefined;
-    if (table?.status === 'occupied') {
-      const awaiting = tableAwaitingBillPayment(pos, row.pos_table_id);
-      const key = `${config.cloudUrl}:${row.pos_table_id}`;
-      if (tablePaymentStates.get(key) !== awaiting) {
-        try {
-          const result = (await manageConnectorTableQr(
-            { config, token: readConnectorSetting(), caPem: readApprovedCa()?.pem, signal },
-            {
-              action: 'payment-state',
-              pos_table_id: row.pos_table_id,
-              name: row.name,
-              awaiting_payment: awaiting,
-            },
-          )) as { awaiting_payment?: unknown } | null;
-          if (result?.awaiting_payment === awaiting) tablePaymentStates.set(key, awaiting);
-        } catch {
-          // A later connector pass retries; local bill safety does not depend on the Cloud.
-        }
-      }
-      if (!row.seen_occupied)
-        db.prepare(
-          'UPDATE open_table_qr SET seen_occupied = 1 WHERE cloud_url = ? AND pos_table_id = ?',
-        ).run(config.cloudUrl, row.pos_table_id);
-      continue;
-    }
-    if ((table && !row.seen_occupied) || row.retry_at > Date.now()) continue;
-    try {
-      await manageConnectorTableQr(
-        { config, token: readConnectorSetting(), caPem: readApprovedCa()?.pem, signal },
-        { action: 'close', pos_table_id: row.pos_table_id, name: row.name },
-      );
-      db.prepare('DELETE FROM open_table_qr WHERE cloud_url = ? AND pos_table_id = ?').run(
-        config.cloudUrl,
-        row.pos_table_id,
-      );
-      tablePaymentStates.delete(`${config.cloudUrl}:${row.pos_table_id}`);
-    } catch {
-      db.prepare(
-        'UPDATE open_table_qr SET retry_at = ? WHERE cloud_url = ? AND pos_table_id = ?',
-      ).run(Date.now() + 60_000, config.cloudUrl, row.pos_table_id);
-    }
+    await syncConnectorTableStates(
+      { config, token: readConnectorSetting(), caPem: readApprovedCa()?.pem, signal },
+      tables.slice(offset, offset + 250).map((table) => ({
+        pos_table_id: table.id,
+        name: table.number,
+        active: Boolean(table.is_active),
+        awaiting_payment: tableAwaitingBillPayment(pos, table.id),
+      })),
+    );
   }
 }
 

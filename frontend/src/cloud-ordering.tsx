@@ -196,7 +196,7 @@ function Ordering() {
   const context = useRef<{ token: string; storageKey: string; revision?: string } | null>(null);
   const presentation = useMemo(() => presentCloudMenu(menu, snapshot), [menu, snapshot]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async function loadSession(renewed = false): Promise<void> {
     try {
       const params = new URLSearchParams(location.hash.slice(1));
       const table = params.get('table');
@@ -219,7 +219,7 @@ function Ordering() {
         setReady(true);
         setExpired(true);
         setCanReload(true);
-        setStatus('ดูเมนูได้ โต๊ะนี้ยังไม่เปิดรับออเดอร์ กรุณาแจ้งพนักงาน');
+        setStatus('ดูเมนูได้ QR โต๊ะนี้ไม่พร้อมใช้งาน กรุณาแจ้งพนักงาน');
       };
       if (!current) {
         await browse();
@@ -245,6 +245,10 @@ function Ordering() {
         setExpired(true);
         if (saved) throw new Error('QR หมดอายุและยังไม่ทราบผล กรุณาให้พนักงานตรวจสอบออเดอร์');
         if (cache) {
+          if (!renewed) {
+            await loadSession(true);
+            return;
+          }
           await browse();
           return;
         }
@@ -313,7 +317,7 @@ function Ordering() {
   }, [ready, expired, refreshSent]);
 
   useEffect(() => {
-    void Promise.resolve().then(load);
+    void Promise.resolve().then(() => load());
     void fetch(assetUrl('./menu-presentation.json'), {
       credentials: 'omit',
       cache: 'force-cache',
