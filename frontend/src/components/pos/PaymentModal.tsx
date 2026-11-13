@@ -61,6 +61,12 @@ import { isScheduledOrderEditLocked } from '@/lib/order-payment-state';
 import { ApproverSelect } from '@/components/ApproverSelect';
 import { isAwaitingBillPayment } from '@/lib/bill-print-flow';
 import { useManagerApprovers } from '@/hooks/useManagerApprovers';
+import {
+  OWNER_OVERRIDE_REFUSAL_CODES,
+  OwnerOverrideDialog,
+  ownerOverrideRefusalMessage,
+  type OwnerOverrideInput,
+} from './OwnerOverrideDialog';
 
 interface Props {
   bill: Bill;
@@ -316,6 +322,12 @@ export default function PaymentModal({
     null,
   );
   const [appliedEqualShare, setAppliedEqualShare] = useState<AppliedEqualShare | null>(null);
+  const [ownerOverrideAttempt, setOwnerOverrideAttempt] = useState<{
+    attempt: PendingPaymentAttempt;
+    dayClosed: boolean;
+  } | null>(null);
+  const [ownerOverrideOpen, setOwnerOverrideOpen] = useState(false);
+  const [ownerOverrideError, setOwnerOverrideError] = useState<string | null>(null);
   useEffect(() => {
     void loadCharges();
   }, [loadCharges]);
@@ -1164,11 +1176,18 @@ export default function PaymentModal({
    * partial payment starts a fresh key next time); anything uncertain keeps the
    * attempt and its key, so Pay replays the identical request.
    */
-  const submitPaymentAttempt = async (attempt: PendingPaymentAttempt) => {
+  const submitPaymentAttempt = async (
+    attempt: PendingPaymentAttempt,
+    ownerOverride?: OwnerOverrideInput,
+  ) => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     setProcessing(true);
     setRequestFailure(null);
+    if (!ownerOverride) setOwnerOverrideAttempt(null);
+    const ownerOverrideBody = ownerOverride
+      ? { owner_override_pin: ownerOverride.pin, owner_override_reason: ownerOverride.reason }
+      : {};
     const effectiveKitchenApproverId = kitchenApproverId ?? managerApprovers.selectedApproverId;
     if (kitchenOverridePin) {
       if (
@@ -1193,16 +1212,23 @@ export default function PaymentModal({
               customer_id: attempt.customerId,
               override_pin: kitchenOverridePin || undefined,
               approver_id: kitchenOverridePin ? effectiveKitchenApproverId || undefined : undefined,
+              ...ownerOverrideBody,
             }
           : {
               payments: attempt.lines,
               customer_id: attempt.customerId,
               override_pin: kitchenOverridePin || undefined,
               approver_id: kitchenOverridePin ? effectiveKitchenApproverId || undefined : undefined,
+              ...ownerOverrideBody,
             },
         { headers: { 'Idempotency-Key': attempt.key, ...operationHeaders(attempt.operationId) } },
       );
       const updatedBill = res.data?.bill as Bill | undefined;
+      if (ownerOverride) {
+        setOwnerOverrideOpen(false);
+        setOwnerOverrideAttempt(null);
+        setOwnerOverrideError(null);
+      }
       if (!updatedBill) {
         // A 2xx without a bill is no evidence of an outcome: replay the attempt.
         lockAttempt(attempt);
@@ -1341,6 +1367,9 @@ export default function PaymentModal({
         payment_input_invalid: t('paymentInputInvalid'),
         cash_session_required: tExpenses('cashSessionClosed'),
         day_already_closed: tExpenses('cashDayClosed'),
+        owner_pin_invalid: t('ownerOverridePinInvalid'),
+        owner_override_reason_required: t('ownerOverrideReasonRequired'),
+        pin_rate_limited: t('ownerOverrideRateLimited'),
       };
       // The setting may be unreadable for this role; the backend's refusal still reveals it.
       if (failure.displayCode === 'card_transaction_id_required') {
@@ -1374,7 +1403,16 @@ export default function PaymentModal({
           status: failure.status,
         });
       };
-      if (payload?.code === 'KITCHEN_ITEMS_UNDELIVERED') {
+      const ownerOverrideRefused = Boolean(
+        ownerOverride &&
+        failure.displayCode &&
+        OWNER_OVERRIDE_REFUSAL_CODES.has(failure.displayCode),
+      );
+      if (ownerOverride && !ownerOverrideRefused) setOwnerOverrideOpen(false);
+      if (ownerOverrideRefused && failure.displayCode) {
+        lockAttempt(null);
+        setOwnerOverrideError(ownerOverrideRefusalMessage(failure.displayCode, t));
+      } else if (payload?.code === 'KITCHEN_ITEMS_UNDELIVERED') {
         // The kitchen gate runs before any write: nothing committed, and the
         // cashier must be able to retry with a manager PIN.
         lockAttempt(null);
@@ -1398,6 +1436,15 @@ export default function PaymentModal({
       } else if (knownNotApplied && payload?.error !== IDEMPOTENCY_CONFLICT_ERROR) {
         lockAttempt(null);
         setFailure('not_applied');
+        if (
+          failure.displayCode === 'cash_session_required' ||
+          failure.displayCode === 'day_already_closed'
+        ) {
+          setOwnerOverrideAttempt({
+            attempt,
+            dayClosed: failure.displayCode === 'day_already_closed',
+          });
+        }
         toast.error(reasonMessage);
       } else if (failure.trusted && failure.outcome === 'applied') {
         lockAttempt(attempt);
@@ -1626,6 +1673,18 @@ export default function PaymentModal({
           >
             <p className="text-sm font-medium">{requestFailure.message}</p>
             <p className="mt-1 text-xs">{requestFailure.nextStep}</p>
+            {ownerOverrideAttempt && (
+              <button
+                type="button"
+                onClick={() => {
+                  setOwnerOverrideError(null);
+                  setOwnerOverrideOpen(true);
+                }}
+                className="mt-2 rounded-md border border-amber-400 px-3 py-1.5 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/40"
+              >
+                {t('ownerOverrideButton')}
+              </button>
+            )}
             <details className="mt-2 text-xs">
               <summary className="cursor-pointer">{t('operationTechnicalDetails')}</summary>
               <pre className="mt-1 whitespace-pre-wrap break-all font-mono">
@@ -1638,6 +1697,18 @@ export default function PaymentModal({
             </details>
           </div>
         )}
+
+        <OwnerOverrideDialog
+          open={ownerOverrideOpen}
+          note={ownerOverrideAttempt?.dayClosed ? t('ownerOverrideDayClosedNote') : undefined}
+          error={ownerOverrideError}
+          submitting={processing}
+          onCancel={() => setOwnerOverrideOpen(false)}
+          onConfirm={(input) => {
+            if (ownerOverrideAttempt)
+              void submitPaymentAttempt(ownerOverrideAttempt.attempt, input);
+          }}
+        />
 
         <div className="px-5 pt-3 pb-2 max-h-[75vh] overflow-y-auto sm:max-h-none sm:flex-1 sm:min-h-0 lg:grid lg:grid-cols-2 lg:gap-5">
           {kitchenOverrideRequired && (

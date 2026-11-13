@@ -3813,6 +3813,20 @@ router.patch(
         LIMIT 1
       `)
             .get(req.params.id) !== undefined;
+        if (
+          status === 'cancelled' &&
+          (currentOrder.status === 'preparing' ||
+            db
+              .prepare(
+                "SELECT 1 FROM order_items WHERE order_id = ? AND status = 'preparing' LIMIT 1",
+              )
+              .get(req.params.id))
+        ) {
+          throw Object.assign(new Error('Cannot cancel an order while items are preparing'), {
+            statusCode: 409,
+            code: 'ITEM_PREPARING',
+          });
+        }
         const statusOrder = ['pending', 'preparing', 'ready', 'served', 'completed'];
         const currentStatusIndex = statusOrder.indexOf(currentOrder.status);
 
@@ -6270,7 +6284,13 @@ router.patch(
         return res.status(404).json({ error: 'Item not found in this order' });
       }
 
-      const isItemVoidInProgress = ['preparing', 'ready'].includes(item.status);
+      const isItemVoidInProgress = item.status === 'ready';
+      if (item.status === 'preparing') {
+        return res.status(409).json({
+          error: 'Cannot cancel an item while it is preparing',
+          code: 'ITEM_PREPARING',
+        });
+      }
       const suppliedApproverIds = [req.body.approver_id, req.body.manager_id, req.body.user_id]
         .filter((val) => val !== undefined && val !== null && String(val).trim() !== '')
         .map((val) => String(val).trim());
@@ -6406,8 +6426,14 @@ router.patch(
           });
         }
 
-        // Voiding items in preparation requires manager PIN and records a void adjustment line.
-        const isItemVoid = ['preparing', 'ready'].includes(currentItem.status);
+        // Preparation cannot be cancelled, even with manager approval.
+        if (currentItem.status === 'preparing') {
+          throw Object.assign(new Error('Cannot cancel an item while it is preparing'), {
+            statusCode: 409,
+            code: 'ITEM_PREPARING',
+          });
+        }
+        const isItemVoid = currentItem.status === 'ready';
         const requiredPermission = isItemVoid ? 'orders.item.void' : 'orders.item.cancel';
         if (!hasPermission(actorId, requiredPermission)) {
           throw Object.assign(new Error('Only owner or manager can cancel this item'), {

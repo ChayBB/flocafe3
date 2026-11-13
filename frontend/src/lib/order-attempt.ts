@@ -601,6 +601,9 @@ const PAYMENT_DISPLAY_CODES = [
   'payment_input_invalid',
   'cash_session_required',
   'day_already_closed',
+  'owner_override_reason_required',
+  'owner_pin_invalid',
+  'pin_rate_limited',
   'card_transaction_id_required',
 ] as const;
 const CHARGE_DISPLAY_CODES = [

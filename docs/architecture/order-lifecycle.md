@@ -354,6 +354,12 @@ Two gates sit between a valid request and the write:
   day is already closed and a shift can no longer open). The check runs after replay detection, so a committed payment can be
   re-read with the same key after its shift closed. A cash ledger line records the open
   `cash_session_id`.
+  An owner may let one refused cash payment through by sending `owner_override_pin` and
+  `owner_override_reason` (3-200 characters) with the request. Only an active `owner` PIN is accepted
+  (manager PINs are not), it is checked on every request under the shared PIN lockout, and the use is
+  written to `order_audit_log` and `auth_audit_log` as `owner_cash_override`. Cash taken this way after
+  the day closed keeps its real payment time and leaves the stored Z unchanged; it is added as a
+  `pay_in` drawer movement on the next business date so that day's drawer count includes it.
 - **Kitchen-delivery gate.** When `require_kitchen_delivered_before_settlement` is on, `kds_enabled`
   is not `false`, and `billing_type` is not `prepaid`, paying while kitchen items are undelivered
   is a `409` with code `KITCHEN_ITEMS_UNDELIVERED` unless a manager PIN is supplied as `override_pin`.

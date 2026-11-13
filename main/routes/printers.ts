@@ -75,6 +75,12 @@ import { hasPermission, requirePermission, requireAnyPermission } from '../servi
 import { getOrderServeConfirmation } from '../services/orders';
 import { getOpenSession, listOpenSessions } from '../services/shift-session-gate';
 import {
+  readOwnerCashOverride,
+  recordOwnerCashOverrideUse,
+  verifyOwnerCashOverride,
+  type VerifiedOwnerCashOverride,
+} from '../services/owner-cash-override';
+import {
   formatCurrencyForTenant,
   formatDateForTenant,
   getCountryByCode,
@@ -652,9 +658,34 @@ router.post(
       const hasOpenShift =
         Boolean(getOpenSession(db, actorUserId)) ||
         ((actorRole === 'owner' || actorRole === 'manager') && listOpenSessions(db).length > 0);
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      let ownerOverride: VerifiedOwnerCashOverride | null = null;
       if (!hasOpenShift) {
-        return res.status(409).json({ error: 'open_cash_shift_required' });
+        const overrideRequest = readOwnerCashOverride(req.body);
+        if (!overrideRequest) {
+          return res.status(409).json({ error: 'open_cash_shift_required' });
+        }
+        try {
+          ownerOverride = await verifyOwnerCashOverride(db, overrideRequest, {
+            clientIp,
+            actorUserId,
+            action: 'drawer_kick',
+          });
+        } catch (error: any) {
+          return res
+            .status(error.statusCode || 500)
+            .json({ error: error.diagnosticCode || 'Internal server error' });
+        }
       }
+      const recordOverride = () => {
+        if (!ownerOverride) return;
+        recordOwnerCashOverrideUse(db, ownerOverride, {
+          action: 'drawer_kick',
+          actorUserId,
+          clientIp,
+          blockedBy: 'open_cash_shift_required',
+        });
+      };
       const printer = getDefaultPrinter(db);
 
       const drawerPulseBytes = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa]);
@@ -684,6 +715,7 @@ router.post(
           );
           break;
         case 'webusb':
+          recordOverride();
           return res.json({
             success: true,
             webusb: true,
@@ -695,6 +727,7 @@ router.post(
       }
 
       if (result.ok) {
+        recordOverride();
         res.json({ success: true });
       } else {
         console.error(

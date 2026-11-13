@@ -82,6 +82,9 @@ const PAYMENT_DISPLAY_CODES = [
   'payment_input_invalid',
   'cash_session_required',
   'day_already_closed',
+  'owner_override_reason_required',
+  'owner_pin_invalid',
+  'pin_rate_limited',
 ] as const;
 const BILL_CHARGE_DISPLAY_CODES = [
   'charge_required',

@@ -150,6 +150,7 @@ async function main() {
   // manager PIN to finish one, and cannot cancel a pending item at all.
   const cashierAuth = seedUser(db, 'cashier-cancel', 'cashier', '9876');
   const waiterAuth = seedUser(db, 'waiter-cancel', 'server');
+  const chefAuth = seedUser(db, 'chef-cancel', 'chef');
 
   // createApp brings the shared test auth middleware; the order of the mounts
   // below is the part under test, so orderRoutes goes in first.
@@ -173,9 +174,105 @@ async function main() {
     (db.prepare('SELECT status FROM order_items WHERE id = ?').get(itemId) as any).status;
 
   try {
+    for (const [role, headers] of [
+      ['owner', ownerAuth],
+      ['manager', managerAuth],
+      ['cashier', cashierAuth],
+      ['server', waiterAuth],
+      ['chef', chefAuth],
+    ] as const) {
+      const order = seedOrderWithItem(db, `PREPARING-BLOCK-${role}`, 'prod-cancel', 'preparing', 1);
+      const stockBefore = stockOf(db, 'prod-cancel');
+      for (const body of [{}, { override_pin: '1234' }]) {
+        const response = await cancel(order.orderId, order.itemId, body, headers);
+        assertEqualOrThrow(
+          response.status,
+          409,
+          `${role} cannot cancel preparing items even with manager approval`,
+        );
+        assertEqualOrThrow(
+          response.data.code,
+          'ITEM_PREPARING',
+          'the preparing policy is explicit',
+        );
+      }
+      assertEqualOrThrow(
+        itemStatus(order.itemId),
+        'preparing',
+        'rejected cancellation preserves the item',
+      );
+      assertEqualOrThrow(
+        stockOf(db, 'prod-cancel'),
+        stockBefore,
+        'rejected cancellation preserves stock',
+      );
+      assertEqualOrThrow(
+        db.prepare('SELECT total FROM orders WHERE id = ?').get(order.orderId).total,
+        100,
+        'rejected cancellation preserves the total',
+      );
+      assertEqualOrThrow(
+        db
+          .prepare('SELECT COUNT(*) AS count FROM order_audit_log WHERE order_id = ?')
+          .get(String(order.orderId)).count,
+        0,
+        'rejected cancellation writes no mutation audit',
+      );
+      assertEqualOrThrow(
+        db
+          .prepare('SELECT COUNT(*) AS count FROM order_items WHERE order_id = ?')
+          .get(order.orderId).count,
+        1,
+        'no void adjustment was inserted',
+      );
+      if (role === 'manager' || role === 'owner') {
+        const response = await api(baseUrl, `/api/orders/${order.orderId}/status`, {
+          method: 'PATCH',
+          body: { status: 'cancelled', override_pin: '1234' },
+          headers,
+        });
+        assertEqualOrThrow(
+          response.status,
+          409,
+          'whole-order cancellation cannot bypass a preparing item',
+        );
+        assertEqualOrThrow(
+          response.data.code,
+          'ITEM_PREPARING',
+          'whole-order cancellation reports the preparing policy',
+        );
+        assertEqualOrThrow(
+          itemStatus(order.itemId),
+          'preparing',
+          'whole-order rejection preserves the item',
+        );
+      }
+    }
+    {
+      const order = seedOrderWithItem(db, 'PREPARING-DURING-PIN', 'prod-cancel', 'ready');
+      pinApprovalHook = () => {
+        db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(order.itemId);
+      };
+      const response = await cancel(
+        order.orderId,
+        order.itemId,
+        { override_pin: '1234' },
+        managerAuth,
+      );
+      assertEqualOrThrow(
+        response.status,
+        409,
+        'preparation is checked again after asynchronous PIN verification',
+      );
+      assertEqualOrThrow(
+        itemStatus(order.itemId),
+        'preparing',
+        'concurrent kitchen progress survives cancellation',
+      );
+    }
     console.log('\n─── Manager-PIN override on an in-progress item ───');
     {
-      const order = seedOrderWithItem(db, 'VOID-PREPARING', 'prod-cancel', 'preparing', 3);
+      const order = seedOrderWithItem(db, 'VOID-READY-STOCK', 'prod-cancel', 'ready', 3);
       const stockBefore = stockOf(db, 'prod-cancel');
       const response = await cancel(
         order.orderId,
@@ -186,7 +283,7 @@ async function main() {
       assertEqualOrThrow(
         response.status,
         200,
-        'cashier may void a preparing item with a valid manager PIN',
+        'cashier may void a ready item with a valid manager PIN',
       );
       assertEqualOrThrow(
         itemStatus(order.itemId),
@@ -239,7 +336,7 @@ async function main() {
       assertEqualOrThrow(itemStatus(order.itemId), 'voided', 'the ready item ends up voided');
     }
     {
-      const order = seedOrderWithItem(db, 'VOID-NO-PIN', 'prod-cancel', 'preparing');
+      const order = seedOrderWithItem(db, 'VOID-NO-PIN', 'prod-cancel', 'ready');
       const response = await cancel(order.orderId, order.itemId, {}, cashierAuth);
       assertEqualOrThrow(response.status, 400, 'a void without a manager PIN is refused');
       assertEqualOrThrow(
@@ -249,12 +346,12 @@ async function main() {
       );
       assertEqualOrThrow(
         itemStatus(order.itemId),
-        'preparing',
+        'ready',
         'a refused void leaves the item untouched',
       );
     }
     {
-      const order = seedOrderWithItem(db, 'VOID-CASHIER-PIN', 'prod-cancel', 'preparing');
+      const order = seedOrderWithItem(db, 'VOID-CASHIER-PIN', 'prod-cancel', 'ready');
       const response = await cancel(
         order.orderId,
         order.itemId,
@@ -269,7 +366,7 @@ async function main() {
       );
       assertEqualOrThrow(
         itemStatus(order.itemId),
-        'preparing',
+        'ready',
         'a rejected PIN leaves the item untouched',
       );
     }
@@ -360,8 +457,8 @@ async function main() {
       const started = seedOrderWithItem(db, 'CANCEL-WAITER-STARTED', 'prod-cancel', 'preparing');
       const startedByServer = await cancel(started.orderId, started.itemId, {}, waiterAuth);
       assertOrThrow(
-        startedByServer.status === 400 || startedByServer.status === 403,
-        `a server cannot void an item the kitchen started without a manager PIN (got ${startedByServer.status})`,
+        startedByServer.status === 409,
+        `a server cannot void an item the kitchen started while it is preparing (got ${startedByServer.status})`,
       );
     }
     {
@@ -755,8 +852,8 @@ async function main() {
         const orderId = orderRes.data.order.id;
         const voidItemId = orderRes.data.order.items[0].id;
 
-        // Mark the first item as preparing so voiding it requires manager PIN
-        db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(voidItemId);
+        // Mark the first item ready so voiding it requires manager PIN
+        db.prepare("UPDATE order_items SET status = 'ready' WHERE id = ?").run(voidItemId);
 
         const billRes = await api(baseUrl, '/api/bills/generate', {
           method: 'POST',
@@ -839,7 +936,7 @@ async function main() {
         const orderId = orderRes.data.order.id;
         const voidItemId = orderRes.data.order.items[0].id;
 
-        db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(voidItemId);
+        db.prepare("UPDATE order_items SET status = 'ready' WHERE id = ?").run(voidItemId);
 
         const billRes = await api(baseUrl, '/api/bills/generate', {
           method: 'POST',
@@ -923,7 +1020,7 @@ async function main() {
         const orderId = orderRes.data.order.id;
         const voidItemId = orderRes.data.order.items[0].id;
 
-        db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(voidItemId);
+        db.prepare("UPDATE order_items SET status = 'ready' WHERE id = ?").run(voidItemId);
 
         const billRes = await api(baseUrl, '/api/bills/generate', {
           method: 'POST',

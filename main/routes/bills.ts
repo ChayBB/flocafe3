@@ -49,6 +49,14 @@ import {
   requireOpenSessionForCashTender,
 } from '../services/shift-session-gate';
 import { closedDayExists, tenantTimezone } from '../services/cash-drawer-movements';
+import {
+  OWNER_OVERRIDE_FIELDS,
+  OVERRIDABLE_CASH_BLOCKS,
+  readOwnerCashOverride,
+  recordOwnerCashOverrideUse,
+  verifyOwnerCashOverride,
+  type VerifiedOwnerCashOverride,
+} from '../services/owner-cash-override';
 import { RegionalNotConfiguredError } from '../countries';
 import {
   checkPinRateLimit,
@@ -3880,6 +3888,7 @@ function applyPaymentBatch(
   clientIp = 'unknown',
   preVerifiedKitchenManager?: { id: string; verifiedPinHash: string } | null,
   approverId?: unknown,
+  ownerCashOverride: VerifiedOwnerCashOverride | null = null,
 ): {
   bill: any;
   walletDebited: boolean;
@@ -4078,11 +4087,17 @@ function applyPaymentBatch(
   }
   // Shift enforcement (#279) runs after replay detection: retrying an already
   // recorded payment must succeed even if its shift has since closed.
-  requireOpenSessionForCashTender(
-    db,
-    prepared.map((line) => line.payment),
-    idempotencyUserId,
-  );
+  let ownerOverrideBlock: string | null = null;
+  try {
+    requireOpenSessionForCashTender(
+      db,
+      prepared.map((line) => line.payment),
+      idempotencyUserId,
+    );
+  } catch (error: any) {
+    if (!ownerCashOverride || !OVERRIDABLE_CASH_BLOCKS.has(error?.diagnosticCode)) throw error;
+    ownerOverrideBlock = error.diagnosticCode;
+  }
   const activeSessionId = getOpenSession(db, idempotencyUserId)?.id ?? NO_CASH_SESSION_ID;
   const currency = getTenantCurrency();
   const minorFactor = getCurrencyMinorUnitFactor(currency);
@@ -4160,6 +4175,18 @@ function applyPaymentBatch(
     changedAt,
     billId,
   );
+  if (ownerOverrideBlock && ownerCashOverride) {
+    recordOwnerCashOverrideUse(db, ownerCashOverride, {
+      action: 'payment',
+      actorUserId: String(idempotencyUserId),
+      clientIp,
+      blockedBy: ownerOverrideBlock,
+      cashCents: prepared
+        .filter((line) => isCashTender(db, line.payment))
+        .reduce((sum, line) => sum + line.amountCents, 0),
+      bill: { id: bill.id, orderId: bill.order_id, billNumber: bill.bill_number },
+    });
+  }
   let loyaltyPointsEarned = 0;
   let pointsEarned = 0;
   let orderFullyPaid = false;
@@ -4261,6 +4288,7 @@ router.post(
       }
       const db = getDatabase();
       const { override_pin, ...paymentLine } = payment;
+      for (const field of OWNER_OVERRIDE_FIELDS) delete paymentLine[field];
       const explicitApproverId =
         (payment as any).approver_id ||
         (payment as any).manager_id ||
@@ -4418,6 +4446,14 @@ router.post(
           throw pinErr;
         }
       }
+      const ownerOverrideRequest = readOwnerCashOverride(req.body);
+      const ownerCashOverride = ownerOverrideRequest
+        ? await verifyOwnerCashOverride(db, ownerOverrideRequest, {
+            clientIp,
+            actorUserId: idempotencyUserId,
+            action: 'payment',
+          })
+        : null;
       const result = withTxn(() =>
         applyPaymentBatch(
           db,
@@ -4432,6 +4468,7 @@ router.post(
           clientIp,
           preVerifiedKitchenManager,
           explicitApproverId,
+          ownerCashOverride,
         ),
       );
       operationCommitted = true;
@@ -4685,6 +4722,14 @@ router.post(
           throw pinErr;
         }
       }
+      const ownerOverrideRequest = readOwnerCashOverride(req.body);
+      const ownerCashOverride = ownerOverrideRequest
+        ? await verifyOwnerCashOverride(db, ownerOverrideRequest, {
+            clientIp,
+            actorUserId: idempotencyUserId,
+            action: 'payment',
+          })
+        : null;
       const result = withTxn(() =>
         applyPaymentBatch(
           db,
@@ -4699,6 +4744,7 @@ router.post(
           clientIp,
           preVerifiedKitchenManager,
           explicitApproverId,
+          ownerCashOverride,
         ),
       );
       operationCommitted = true;

@@ -1,7 +1,7 @@
 /**
  * Cancel Override Logic Tests
  *
- * Verifies that cancelling an order in preparing/ready/served status
+ * Verifies that cancelling an order in ready/served status
  * requires a manager PIN, while cancelling a pending order does not.
  *
  * Uses Electron runtime (via run-electron-node-test.cjs) because
@@ -164,14 +164,14 @@ function seedTestData() {
   ).run(pendingId, 'prod-test', 'Test Item', 100, 1, 100, 0, 100, 'pending', now(), now());
 
   // Preparing order (override required)
-  insertOrder.run('ORD-TEST-002', null, 'takeaway', 'preparing', 100, 100, now(), now());
-  const preparingId = (
+  insertOrder.run('ORD-TEST-002', null, 'takeaway', 'ready', 100, 100, now(), now());
+  const secondReadyId = (
     db.prepare('SELECT id FROM orders WHERE order_number = ?').get('ORD-TEST-002') as any
   ).id;
   db.prepare(
     `INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, tax_amount, total, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(preparingId, 'prod-test', 'Test Item', 100, 1, 100, 0, 100, 'preparing', now(), now());
+  ).run(secondReadyId, 'prod-test', 'Test Item', 100, 1, 100, 0, 100, 'ready', now(), now());
 
   // Ready order (override required)
   insertOrder.run('ORD-TEST-003', null, 'takeaway', 'ready', 100, 100, now(), now());
@@ -278,8 +278,8 @@ async function main() {
       assertEqual(res.data.order.status, 'cancelled', 'pending order status becomes cancelled');
     }
 
-    // ── Test 2: Cancel preparing order without PIN (should fail) ────────
-    console.log('\n2. Cancel preparing order without PIN (should fail)');
+    // ── Test 2: Cancel ready order without PIN (should fail) ────────
+    console.log('\n2. Cancel ready order without PIN (should fail)');
     {
       const db = getDatabase();
       const order = db
@@ -294,8 +294,8 @@ async function main() {
       assert(res.data.error.includes('Manager PIN'), 'error mentions Manager PIN');
     }
 
-    // ── Test 3: Cancel preparing order with wrong PIN (should fail) ─────
-    console.log('\n3. Cancel preparing order with wrong PIN (should fail)');
+    // ── Test 3: Cancel ready order with wrong PIN (should fail) ─────
+    console.log('\n3. Cancel ready order with wrong PIN (should fail)');
     {
       const db = getDatabase();
       const order = db
@@ -310,8 +310,8 @@ async function main() {
       assert(res.data.error.includes('Invalid manager PIN'), 'error mentions Invalid manager PIN');
     }
 
-    // ── Test 4: Cancel preparing order with valid PIN ───────────────────
-    console.log('\n4. Cancel preparing order with valid PIN');
+    // ── Test 4: Cancel ready order with valid PIN ───────────────────
+    console.log('\n4. Cancel ready order with valid PIN');
     {
       const db = getDatabase();
       const order = db
@@ -327,7 +327,7 @@ async function main() {
         }),
       });
       assertEqual(res.status, 200, 'returns 200 for cancelling with valid PIN');
-      assertEqual(res.data.order.status, 'cancelled', 'preparing order status becomes cancelled');
+      assertEqual(res.data.order.status, 'cancelled', 'ready order status becomes cancelled');
     }
 
     // ── Test 5: Cancel ready order with valid PIN ───────────────────────
@@ -525,19 +525,19 @@ async function main() {
       ).run();
       db.prepare(
         `INSERT INTO orders (order_number, table_id, type, status, subtotal, total, created_at, updated_at)
-         VALUES ('ORD-TEST-MIXED-STOCK', null, 'takeaway', 'preparing', 200, 200, ?, ?)`,
+         VALUES ('ORD-TEST-MIXED-STOCK', null, 'takeaway', 'ready', 200, 200, ?, ?)`,
       ).run(now(), now());
       const mixedOrderId = (
         db.prepare("SELECT id FROM orders WHERE order_number = 'ORD-TEST-MIXED-STOCK'").get() as any
       ).id;
-      // 1 pending item (qty 2, deducted 2) + 1 preparing item (qty 2, deducted 2) -> current stock 6 means initial was 10
+      // 1 pending item (qty 2, deducted 2) + 1 ready item (qty 2, deducted 2) -> current stock 6 means initial was 10
       db.prepare(
         `INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, inventory_deducted_quantity, subtotal, tax_amount, total, status, created_at, updated_at)
          VALUES (?, 'prod-inv-cancel', 'Tracked Cancel Item', 50, 2, 2, 100, 0, 100, 'pending', ?, ?)`,
       ).run(mixedOrderId, now(), now());
       db.prepare(
         `INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, inventory_deducted_quantity, subtotal, tax_amount, total, status, created_at, updated_at)
-         VALUES (?, 'prod-inv-cancel', 'Tracked Cancel Item', 50, 2, 2, 100, 0, 100, 'preparing', ?, ?)`,
+         VALUES (?, 'prod-inv-cancel', 'Tracked Cancel Item', 50, 2, 2, 100, 0, 100, 'ready', ?, ?)`,
       ).run(mixedOrderId, now(), now());
 
       const cancelMixedRes = await request(baseUrl, `/api/orders/${mixedOrderId}/status`, {
@@ -556,7 +556,7 @@ async function main() {
       assertEqual(
         stockAfter,
         8,
-        'only the pending item (qty 2) is restored to stock; preparing item (qty 2) is not restored',
+        'only the pending item (qty 2) is restored to stock; ready item (qty 2) is not restored',
       );
     }
   } finally {
