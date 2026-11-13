@@ -39,7 +39,7 @@ for (const screenSize of SCREENS) {
 
     // Food goes into the ticket before any table is chosen.
     const grid = page.getByTestId('pos-product-grid');
-    await grid.getByTestId('pos-product-card').first().click();
+    await grid.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).click();
     // Staff usually scroll down the menu before opening the ticket.
     await page.mouse.wheel(0, 1500);
     if (screenSize.phone) {

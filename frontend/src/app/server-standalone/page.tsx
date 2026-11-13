@@ -34,8 +34,7 @@ import {
 import { useSyncServerLanguage, writeLanguageOverride } from '@/lib/i18n';
 import type { Language } from '@/lib/i18n/languages';
 import { usePosSettingsStore } from '@/store/pos-settings';
-import { ServerAppHeader } from '@/components/server-app/ServerAppHeader';
-import { StaffSignIn } from '@/components/server-app/StaffSignIn';
+import { HEADER_PILL_FILLED, ServerAppHeader } from '@/components/server-app/ServerAppHeader';
 import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/GuestOrderHistory';
 import { useReloadOnNewBuild } from '@/hooks/useReloadOnNewBuild';
 import { holdDarkClass } from '@/lib/kds-screen-mode';
@@ -173,6 +172,25 @@ const guestJoinBody = (
   sticker: sticker ?? undefined,
   unlock_key: unlockKey ?? undefined,
 });
+
+const STAFF_DARK_KEY = 'flocafe:server-app-dark';
+
+/** This device's chosen theme for staff; null follows the app's theme. */
+function readStaffDark(): boolean | null {
+  try {
+    const stored =
+      typeof window === 'undefined' ? null : window.localStorage.getItem(STAFF_DARK_KEY);
+    return stored === '1' ? true : stored === '0' ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStaffDark(dark: boolean) {
+  try {
+    window.localStorage.setItem(STAFF_DARK_KEY, dark ? '1' : '0');
+  } catch {}
+}
 
 const subscribeToNothing = () => () => {};
 
@@ -2002,9 +2020,20 @@ export default function ServerStandalonePage() {
   useReloadOnNewBuild('/api/server-app/info', draft.length === 0 && !sending);
 
   const guestMode = !user && !!guestTable && !showLogin;
-  // Customers ordering from a table QR always see the day theme; staff keep the app's theme.
+  // Customers ordering from a table QR always see the day theme; staff pick theirs on this device.
   const customerFacing = !user;
-  useEffect(() => (customerFacing ? holdDarkClass(false) : undefined), [customerFacing]);
+  const [staffDark, setStaffDark] = useState(() => readStaffDark());
+  const staffSeesDark =
+    staffDark ??
+    (typeof document !== 'undefined' && document.documentElement.classList.contains('dark'));
+  const toggleStaffDark = () => {
+    writeStaffDark(!staffSeesDark);
+    setStaffDark(!staffSeesDark);
+  };
+  useEffect(() => {
+    if (customerFacing) return holdDarkClass(false);
+    return staffDark === null ? undefined : holdDarkClass(staffDark);
+  }, [customerFacing, staffDark]);
   const waitingForGuest =
     !user && (guestTableId === undefined || (!!guestTableId && !guestChecked));
 
@@ -2382,7 +2411,6 @@ export default function ServerStandalonePage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <ServerAppHeader
-        businessName={regional?.business_name ?? ''}
         logoUrl={
           regional?.store_logo_version
             ? `/api/server-app/branding/logo?v=${regional.store_logo_version}`
@@ -2394,73 +2422,50 @@ export default function ServerStandalonePage() {
             : null
         }
         tableText={headerTableText}
-        customerName={
-          (user
+        customerName={(() => {
+          const name = user
             ? (currentOrder?.customer?.name ?? customerName.trim())
-            : guestOrder?.customer_name) || null
-        }
+            : guestOrder?.customer_name;
+          if (name) return t('customerHonorific', { name });
+          return user ? null : <span data-testid="server-app-guest-name">{t('guestLabel')}</span>;
+        })()}
         language={language}
         onLanguage={chooseLanguage}
+        onTables={
+          user && !isWide && !sending ? () => setTablePickerOpen((open) => !open) : undefined
+        }
+        tablesExpanded={showTablePicker}
+        dark={staffSeesDark}
+        onDark={user ? toggleStaffDark : undefined}
         onHistory={() => (user ? setOrderedItemsOpen(true) : setGuestHistoryOpen(true))}
         historyDisabled={user ? !activeTable : !guestTable}
-        actions={
-          <>
-            {user ? (
-              <>
-                <span
-                  data-testid="server-app-staff-name"
-                  className="hidden max-w-[96px] truncate text-sm font-medium text-white drop-shadow min-[400px]:block"
-                >
-                  {user.name}
-                </span>
-                {!isWide && (
-                  <button
-                    type="button"
-                    disabled={sending}
-                    onClick={() => setTablePickerOpen((open) => !open)}
-                    aria-expanded={showTablePicker}
-                    data-testid="server-app-table-button"
-                    className="flex h-12 items-center gap-1.5 whitespace-nowrap rounded-full border border-amber-400 bg-amber-50 px-4 text-sm font-medium text-amber-700 shadow-md transition-colors hover:bg-amber-100 disabled:opacity-50"
-                  >
-                    <UtensilsCrossed size={14} />
-                    {t('selectTable')}
-                  </button>
-                )}
-                {selectedTableId && (
-                  <button
-                    type="button"
-                    onClick={() => setTableQrOpen(true)}
-                    aria-label={tTables('guestQrButton')}
-                    title={tTables('guestQrButton')}
-                    data-testid="server-app-table-qr-button"
-                    className="flex size-12 items-center justify-center rounded-full bg-white text-neutral-800 shadow-md"
-                  >
-                    <QrCode size={17} />
-                  </button>
-                )}
-              </>
-            ) : (
-              <span
-                data-testid="server-app-guest-name"
-                className="text-sm font-medium text-white drop-shadow"
-              >
-                {t('guestLabel')}
+        onShowQr={user && selectedTableId ? () => setTableQrOpen(true) : undefined}
+        staffButton={
+          user ? (
+            <button
+              type="button"
+              onClick={logout}
+              aria-label={tNav('logout')}
+              title={tNav('logout')}
+              data-testid="server-app-session-button"
+              className={`${HEADER_PILL_FILLED} max-w-[8rem] sm:max-w-[11rem]`}
+            >
+              <UserRound size={17} aria-hidden="true" className="shrink-0" />
+              <span data-testid="server-app-staff-name" className="truncate">
+                {user.name}
               </span>
-            )}
-            {user ? (
-              <button
-                onClick={logout}
-                aria-label={tNav('logout')}
-                title={tNav('logout')}
-                data-testid="server-app-session-button"
-                className="flex size-12 items-center justify-center rounded-full border border-green-600 bg-white text-green-600 shadow-md"
-              >
-                <UserRound size={17} />
-              </button>
-            ) : (
-              <StaffSignIn onClick={() => setShowLogin(true)} />
-            )}
-          </>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowLogin(true)}
+              title={tAuth('signIn')}
+              data-testid="server-app-login-button"
+              className={HEADER_PILL_FILLED}
+            >
+              {t('staffButton')}
+            </button>
+          )
         }
       />
       {!user && (

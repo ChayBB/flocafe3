@@ -4,7 +4,9 @@ import { getE2eToken } from './helpers/test-auth';
 
 const TOKEN_KEY = 'flocafe:server-app-token';
 
-test('the Server App picks the store language up again when the page comes back into view', async ({ page }) => {
+test('the Server App picks the store language up again when the page comes back into view', async ({
+  page,
+}) => {
   // The page first sees English (as from a stand-in server), then the store's Thai.
   let language = 'en';
   await page.route('**/api/server-app/info', async (route) => {
@@ -21,10 +23,10 @@ test('the Server App picks the store language up again when the page comes back 
   );
   await page.reload();
   const tableButton = page.getByTestId('server-app-table-button');
-  await expect(tableButton).toContainText('Select a table');
+  await expect(tableButton).toHaveAttribute('aria-label', 'Select a table');
 
   // Without a reload: returning to the page re-reads the store language.
   language = 'th';
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(tableButton).toContainText('เลือกโต๊ะ');
+  await expect(tableButton).toHaveAttribute('aria-label', 'เลือกโต๊ะ');
 });

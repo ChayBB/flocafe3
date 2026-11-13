@@ -15,6 +15,8 @@ const samples = [];
 let requests = [];
 let scenario = 'ok';
 let presentationReads = 0;
+let awaitingPayment = false;
+let orderWrites = 0;
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/')) {
@@ -25,6 +27,20 @@ const server = http.createServer(async (req, res) => {
     });
     await new Promise((resolve) => setTimeout(resolve, delay));
     res.setHeader('Content-Type', 'application/json');
+    if (url.pathname === '/api/v1/orders' && req.method === 'POST') {
+      orderWrites++;
+      if (scenario === 'uncertain') {
+        awaitingPayment = true;
+        if (orderWrites === 1) res.writeHead(503).end('{}');
+        else
+          res.end(
+            JSON.stringify({ order_id: '33333333-3333-4333-8333-333333333333', replayed: true }),
+          );
+        return;
+      }
+      res.writeHead(409).end(JSON.stringify({ code: 'bill_awaiting_payment' }));
+      return;
+    }
     if (url.pathname.endsWith('/session') && scenario === 'closed') {
       res.writeHead(409).end('{}');
       return;
@@ -51,7 +67,7 @@ const server = http.createServer(async (req, res) => {
         ? {
             items: [{ id: item, name: 'Benchmark Coffee', price_satang: 5000, category: 'Drinks' }],
           }
-        : { orders: [] };
+        : { orders: [], bill_awaiting_payment: awaitingPayment };
     res.end(JSON.stringify(data));
     return;
   }
@@ -191,6 +207,89 @@ async function main() {
         checks.push(current);
         await context.close();
       }
+    }
+    if (process.argv.includes('--verify')) {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const page = await context.newPage();
+      page.setDefaultTimeout(10000);
+      scenario = 'ok';
+      awaitingPayment = true;
+      await page.goto(`http://127.0.0.1:${server.address().port}/#table=${table}`);
+      await page
+        .getByRole('alert')
+        .filter({ hasText: labels.tableAwaitingPaymentLocked })
+        .waitFor();
+      const product = page
+        .getByTestId('pos-product-grid')
+        .getByText('Benchmark Coffee', { exact: true })
+        .first();
+      await product.waitFor();
+      await page.getByRole('button', { name: labels.currentTicket, exact: true }).click();
+      await page.getByRole('button', { name: labels.sendToKitchen, exact: true }).waitFor();
+      assert(
+        await page.getByRole('button', { name: labels.sendToKitchen, exact: true }).isDisabled(),
+      );
+      assert.equal(orderWrites, 0, 'an already locked table submits nothing');
+      awaitingPayment = false;
+      await page.reload();
+      await product.waitFor();
+      await product.click();
+      await page.getByRole('button', { name: labels.currentTicket, exact: true }).click();
+      const submit = page.getByRole('button', { name: labels.sendToKitchen, exact: true });
+      await submit.waitFor();
+      page.once('dialog', (dialog) => dialog.accept());
+      await submit.click();
+      await page
+        .getByRole('alert')
+        .filter({ hasText: labels.tableAwaitingPaymentLocked })
+        .waitFor();
+      assert(await submit.isDisabled());
+      assert.equal(orderWrites, 1, 'a raced payment lock sends exactly one rejected attempt');
+      assert.equal(
+        await page.getByRole('dialog').getByText('Benchmark Coffee', { exact: true }).count(),
+        1,
+        'a payment hold preserves the draft',
+      );
+      const storedAttempts = await page.evaluate(() =>
+        Object.keys(sessionStorage).filter((key) => key.startsWith('flocafe-order:')),
+      );
+      assert.deepEqual(storedAttempts, [], 'a known rejected attempt is cleared');
+      await context.close();
+      checks.push('payment hold blocks sending and preserves rejected drafts');
+      const retryContext = await browser.newContext();
+      const retryPage = await retryContext.newPage();
+      retryPage.setDefaultTimeout(10000);
+      scenario = 'uncertain';
+      awaitingPayment = false;
+      orderWrites = 0;
+      await retryPage.goto(`http://127.0.0.1:${server.address().port}/#table=${table}`);
+      await retryPage
+        .getByTestId('pos-product-grid')
+        .getByText('Benchmark Coffee', { exact: true })
+        .first()
+        .click();
+      await retryPage.getByRole('button', { name: labels.currentTicket, exact: true }).click();
+      retryPage.once('dialog', (dialog) => dialog.accept());
+      await retryPage.getByRole('button', { name: labels.sendToKitchen, exact: true }).click();
+      await retryPage.getByRole('status').filter({ hasText: 'ยังไม่ทราบผลการส่ง' }).waitFor();
+      await retryPage.reload();
+      await retryPage
+        .getByRole('alert')
+        .filter({ hasText: labels.tableAwaitingPaymentLocked })
+        .waitFor();
+      const retryButton = retryPage.getByRole('button', {
+        name: 'ตรวจผลโดยส่งรายการเดิมอีกครั้ง',
+        exact: true,
+      });
+      assert(
+        await retryButton.isEnabled(),
+        'a payment hold still permits checking an uncertain previous attempt',
+      );
+      await retryButton.click();
+      await retryPage.getByRole('status').filter({ hasText: 'ระบบได้รับออเดอร์แล้ว' }).waitFor();
+      assert.equal(orderWrites, 2);
+      await retryContext.close();
+      checks.push('payment hold permits an uncertain accepted-order replay');
     }
     const result = {
       kind: 'controlled browser fixture; not production latency',

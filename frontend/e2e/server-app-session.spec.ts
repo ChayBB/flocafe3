@@ -48,7 +48,7 @@ test.describe('Server App session', () => {
     await expect(page.getByTestId('server-app-session-button')).toHaveCount(0);
 
     await signIn(page);
-    await expect(page.getByTestId('server-app-session-button')).toHaveClass(/text-green-600/);
+    await expect(page.getByTestId('server-app-session-button')).toHaveClass(/bg-brand/);
   });
 
   test('the session token ends at a 06:00 boundary within the next 24 hours', async ({ page }) => {

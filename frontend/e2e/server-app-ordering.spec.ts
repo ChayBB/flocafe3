@@ -185,7 +185,7 @@ test.describe('Server App tableside ordering', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openServerApp(page, serverToken);
     const picker = page.getByTestId('server-app-table-button');
-    await expect(picker).toContainText('Select a table');
+    await expect(picker).toHaveAttribute('aria-label', 'Select a table');
     await expect(picker).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
     await page.getByRole('button', { name: new RegExp(tableName) }).click();
@@ -227,7 +227,7 @@ test.describe('Server App tableside ordering', () => {
       await page.setViewportSize({ width, height: 800 });
       await expect(page.getByTestId('pos-product-grid')).toBeVisible();
 
-      // Select Table opens the tables; beside it sit language, order history and the session button.
+      // Select Table opens the tables; beside it sit language, theme, order history and the session button.
       const header = page.locator('header');
       const tableButton = header.getByTestId('server-app-table-button');
       const logoutButton = header.getByRole('button', { name: 'Logout' });
@@ -235,7 +235,7 @@ test.describe('Server App tableside ordering', () => {
       const historyButton = header.getByTestId('server-app-history-button');
       await expect(tableButton).toBeVisible();
       await expect(logoutButton).toBeVisible();
-      await expect(header.getByRole('button')).toHaveCount(4);
+      await expect(header.getByRole('button')).toHaveCount(5);
       await expect(header.getByRole('img', { name: 'Flo' })).toHaveCount(0);
 
       for (const button of [tableButton, logoutButton, languageButton, historyButton]) {
@@ -251,9 +251,9 @@ test.describe('Server App tableside ordering', () => {
       expect(hasOverflow).toBeFalsy();
     }
 
-    // A tablet drops Select Table from the header, keeping language, history and session, and still fits.
+    // A tablet drops Select Table from the header, keeping language, theme, history and session, and still fits.
     await page.setViewportSize({ width: 768, height: 1024 });
-    await expect(page.locator('header').getByRole('button')).toHaveCount(3);
+    await expect(page.locator('header').getByRole('button')).toHaveCount(4);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth),
     ).toBeFalsy();
@@ -817,7 +817,7 @@ test.describe('Server App tableside ordering', () => {
         res.url().includes('served') &&
         res.ok(),
     );
-    await page.locator('header').getByRole('button', { name: 'Refresh' }).click();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await Promise.all([authMeRefresh, servedOrderRefresh]);
 
     // Add a second item whose append commits on the backend while its HTTP reply is lost (500).
@@ -907,7 +907,7 @@ test.describe('Server App tableside ordering', () => {
     await page.keyboard.press('Escape');
     delayNextAuthMe = true;
     const delayedAuthMeResponse = page.waitForResponse((res) => res.url().includes('/api/auth/me'));
-    await page.locator('header').getByRole('button', { name: 'Refresh' }).click();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await authMeIntercepted;
     await page.locator('header').getByRole('button', { name: 'Logout' }).click();
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();

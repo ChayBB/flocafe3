@@ -526,7 +526,7 @@ router.post(
         table: { id: table.id, name: table.number },
         session: { created_at: session.created_at, expires_at: session.expires_at },
         url,
-        data_url: await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 1, width: 320 }),
+        data_url: await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 0, width: 320 }),
         store_timezone: storeTimezone(getDatabase()),
         public: base.public,
         server_app_enabled: isServerAppEnabled(),

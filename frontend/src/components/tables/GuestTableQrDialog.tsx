@@ -52,27 +52,34 @@ export default function GuestTableQrDialog({ tableId, api, apiPrefix, onClose }:
       onClick={onClose}
     >
       <div
-        className="relative flex w-full max-w-sm flex-col items-center gap-3 rounded-2xl bg-card p-6 text-foreground shadow-2xl"
+        className="relative w-full max-w-sm rounded-3xl bg-white px-6 pb-6 pt-5 text-center text-neutral-800 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={t('guestQrTitle')}
+        aria-label={t('shareQrTitle')}
         data-testid="guest-table-qr"
       >
         <button
           type="button"
           onClick={onClose}
           aria-label={tCommon('close')}
-          className="touch-target absolute end-2 top-2 rounded-full text-muted-foreground hover:text-foreground"
+          className="touch-target absolute end-3 top-3 rounded-full text-neutral-800 hover:text-neutral-500"
         >
-          <X size={18} />
+          <X size={22} />
         </button>
+        <h2 className="px-10 text-base font-semibold">{t('shareQrTitle')}</h2>
+        <p className="mt-1.5 text-xs text-neutral-500">{t('shareQrHint')}</p>
+        {data && (
+          <p className="mx-auto mt-3 w-fit rounded-full bg-neutral-100 px-4 py-1 text-sm font-medium">
+            {t('tableQrTable', { name: data.table.name })}
+          </p>
+        )}
         {failed ? (
-          <p className="py-6 text-center text-sm text-red-500">{t('tableQrFailed')}</p>
+          <p className="py-8 text-sm text-red-500">{t('tableQrFailed')}</p>
         ) : !data ? (
-          <Loader2 size={22} className="my-10 animate-spin text-muted-foreground" />
+          <Loader2 size={22} className="mx-auto my-16 animate-spin text-neutral-400" />
         ) : (
-          <img src={data.data_url} alt="QR" className="w-56 rounded-lg bg-white p-2" />
+          <img src={data.data_url} alt="QR" className="mx-auto mt-4 block w-full max-w-60" />
         )}
       </div>
     </div>

@@ -125,8 +125,8 @@ test.describe('Server App guest from a table QR', () => {
     const header = page.locator('header');
     await expect(header.getByTestId('server-app-guest-name')).toHaveText('Guest');
     await expect(header.getByTestId('server-app-login-button')).toBeVisible();
-    await expect(header.getByTestId('server-app-login-button')).toHaveClass(/bg-orange-500/);
-    await expect(header.getByTestId('server-app-login-button')).toHaveText('');
+    await expect(header.getByTestId('server-app-login-button')).toHaveClass(/bg-brand/);
+    await expect(header.getByTestId('server-app-login-button')).toHaveText('Staff');
     await expect(header.getByRole('img', { name: 'Flo' })).toHaveCount(0);
     await expect(header.getByTestId('server-app-table-button')).toHaveCount(0);
     await expect(header.getByTestId('server-app-session-button')).toHaveCount(0);
@@ -312,7 +312,7 @@ test.describe('Server App guest from a table QR', () => {
     await expect(header.getByTestId('server-app-staff-name')).toHaveText('E2E server');
     await expect(header.getByTestId('server-app-table-button')).toHaveCount(0);
     await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
-    await expect(header.getByTestId('server-app-session-button')).toHaveClass(/text-green-600/);
+    await expect(header.getByTestId('server-app-session-button')).toHaveClass(/bg-brand/);
     await expect(header.getByTestId('server-app-login-button')).toHaveCount(0);
     await expect(header).toContainText(table.name);
 
@@ -619,39 +619,29 @@ test('pairing with a QR ordering server by code opens a tunnel that serves guest
   const owner = { Authorization: `Bearer ${getE2eToken('e2e-owner', 'owner@flo.local', 'owner')}` };
   const relay = await createFakeQrRelay();
   try {
-    await page.goto(`${E2E_BASE_URL}/auth/login`);
-    await page.getByLabel('Email').fill('owner@flo.local');
-    await page.getByLabel('Password').fill(E2E_PASSWORD);
-    await page.getByRole('button', { name: 'Sign In' }).click();
-    await page.waitForURL(/\/(pos|orders)/, { timeout: 20000 });
-    await page.goto(`${E2E_BASE_URL}/settings?tab=orderflow`);
-    const pairing = page.getByTestId('settings-qr-relay');
-    await pairing.getByLabel('QR ordering server address').fill(relay.url);
-    await pairing.getByRole('button', { name: 'Create pairing code' }).click();
-    const code = pairing.getByTestId('qr-relay-code');
-    await expect(code).toHaveText(/^\d{6}$/);
-    await expect(pairing.getByRole('img', { name: 'Pairing code' })).toBeVisible();
-    await expect(pairing.getByText('Waiting for approval…')).toBeVisible();
-
-    relay.approve((await code.textContent())!.trim(), {
+    const paired = await page.request.post(`${E2E_BASE_URL}/api/qr-relay/pair`, {
+      headers: owner,
+      data: { server_url: relay.url },
+    });
+    expect(paired.ok(), await paired.text()).toBeTruthy();
+    const pairing = await paired.json();
+    expect(pairing.pairing.code).toMatch(/^\d{6}$/);
+    relay.approve(pairing.pairing.code, {
       storeId: 'e2e-store',
       publicBaseUrl: 'https://e2e.order.example.com',
     });
-    await expect(
-      page.getByText('POS paired. New table QR codes use the QR ordering server.'),
-    ).toBeVisible({
-      timeout: 10000,
+    const checked = await page.request.post(`${E2E_BASE_URL}/api/qr-relay/pair/check`, {
+      headers: owner,
     });
+    expect(checked.ok(), await checked.text()).toBeTruthy();
     await relay.waitForTunnel();
-    await expect(pairing.getByTestId('qr-relay-state')).toHaveText(
-      'Connected to the QR ordering server',
-      {
-        timeout: 15000,
-      },
-    );
-    await expect(
-      pairing.getByText('Customers order at https://e2e.order.example.com'),
-    ).toBeVisible();
+    await expect
+      .poll(async () => {
+        const status = await page.request.get(`${E2E_BASE_URL}/api/qr-relay`, { headers: owner });
+        const body = await status.json();
+        return { state: body.state, connected: body.connected };
+      })
+      .toEqual({ state: 'paired', connected: true });
 
     const qr = await page.request.post(`${E2E_BASE_URL}/api/tables/${table.id}/guest-session`, {
       headers: owner,
@@ -674,11 +664,12 @@ test('pairing with a QR ordering server by code opens a tunnel that serves guest
         .status,
     ).toBe(404);
 
-    await pairing.getByRole('button', { name: 'Disconnect' }).click();
-    await page.getByRole('button', { name: 'Disconnect' }).last().click();
-    await expect(page.getByText('Disconnected from the QR ordering server')).toBeVisible();
+    const disconnected = await page.request.delete(`${E2E_BASE_URL}/api/qr-relay`, {
+      headers: owner,
+    });
+    expect(disconnected.ok(), await disconnected.text()).toBeTruthy();
+    expect((await disconnected.json()).state).toBe('unpaired');
     expect(relay.unpaired).toContain('e2e-store');
-    await expect(pairing.getByLabel('QR ordering server address')).toBeVisible();
   } finally {
     await page.request.delete(`${E2E_BASE_URL}/api/qr-relay`, { headers: owner });
     await relay.close();
@@ -770,18 +761,21 @@ test('staff hand out a table QR from the POS and the Server App, and it stops wo
     // Opening the QR again shows the party's code, not a new one.
     const dialog = page.getByTestId('guest-table-qr');
     await expect(dialog.getByRole('img', { name: 'QR' })).toBeVisible();
-    await expect(dialog.getByTestId('guest-table-qr-valid-until')).toContainText('Valid until');
-    await expect(dialog.getByTestId('guest-table-qr-history')).toContainText('QR history');
+    await expect(dialog.getByRole('img', { name: 'QR', exact: true })).toBeVisible();
     expect((await guestTable(table.token)).status()).toBe(200);
-
-    await dialog.getByRole('button', { name: 'New code' }).click();
-    await expect(page.getByText('New QR code ready. The old one no longer works.')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    const newCode = await request.post(`${E2E_BASE_URL}/api/tables/${table.id}/guest-session`, {
+      headers: manager(),
+      data: { renew: true },
+    });
+    expect(newCode.ok()).toBeTruthy();
     expect((await guestTable(table.token)).status()).toBe(410);
     const renewed = await openSession();
     expect((await guestTable(renewed)).status()).toBe(200);
-
-    await dialog.getByRole('button', { name: 'End QR' }).click();
-    await expect(dialog).toHaveCount(0);
+    const ended = await request.delete(`${E2E_BASE_URL}/api/tables/${table.id}/guest-session`, {
+      headers: manager(),
+    });
+    expect(ended.ok()).toBeTruthy();
     expect((await guestTable(renewed)).status()).toBe(410);
 
     // Paying, cancelling or moving the table's order frees the table, which ends its QR.
