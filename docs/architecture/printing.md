@@ -196,6 +196,13 @@ renderer.
 
 The business settings `receipt_logo` and `receipt_logo_raster` carry the browser image and the
 precomputed thermal data; `bill_show_logo` controls whether a bill renderer includes the logo.
+The store settings image card manages the logo for receipts, the Server App, and the table-QR menu.
+Uploading a logo saves `store_logo`, `receipt_logo`, and `receipt_logo_raster` together through
+`PUT /api/settings/branding`; removing it clears all three together. The card also shows the thermal
+preview. Existing receipt images remain available until replaced or removed. The POS top bar and
+Server App ordering header display the same store logo and cover. Both refresh branding when the
+window regains focus or becomes visible. The POS also reacts to local branding-save events;
+image loading failures leave order entry usable.
 `processReceiptLogoFile()` uses a browser canvas to composite transparency on white, trim
 surrounding transparent or white margins with a 4 px pad (`findLogoContentBounds()`), scale the
 cropped content to at most 576x240 dots (384x240 for 58 mm), normalize grayscale contrast

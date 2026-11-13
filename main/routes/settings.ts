@@ -802,16 +802,22 @@ router.put('/kds', requirePermission('settings.manage'), (req: Request, res: Res
 const brandingBody = (s: Record<string, string>) => ({
   store_logo: s[STORE_IMAGE_KEYS.logo] || '',
   store_cover: s[STORE_IMAGE_KEYS.cover] || '',
+  receipt_logo: s.receipt_logo || '',
+  receipt_logo_raster: s.receipt_logo_raster || '',
 });
 
-router.get('/branding', requirePermission('settings.view'), (_req: Request, res: Response) => {
-  try {
-    res.json(brandingBody(getAllSettings(getDatabase())));
-  } catch (error: any) {
-    console.error('[API] Internal error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+router.get(
+  '/branding',
+  requireAnyPermission('settings.view', 'orders.read', 'orders.create'),
+  (_req: Request, res: Response) => {
+    try {
+      res.json(brandingBody(getAllSettings(getDatabase())));
+    } catch (error: any) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 router.put('/branding', requirePermission('settings.manage'), (req: Request, res: Response) => {
   try {
@@ -822,6 +828,21 @@ router.put('/branding', requirePermission('settings.manage'), (req: Request, res
       const error = storeImageError(kind, value);
       if (error) return res.status(400).json({ error });
       updates[STORE_IMAGE_KEYS[kind]] = value;
+    }
+    for (const key of ['receipt_logo', 'receipt_logo_raster'] as const) {
+      const value = req.body?.[key];
+      if (value === undefined) continue;
+      if (
+        typeof value !== 'string' ||
+        value.length > 250_000 ||
+        (value &&
+          (key === 'receipt_logo_raster'
+            ? !parseReceiptLogoData(value)
+            : !value.startsWith('data:image/')))
+      ) {
+        return res.status(400).json({ error: `Invalid ${key}` });
+      }
+      updates[key] = value;
     }
     if (Object.keys(updates).length > 0) upsertSettings(getDatabase(), updates);
     res.json(brandingBody(getAllSettings(getDatabase())));

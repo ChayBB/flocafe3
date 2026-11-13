@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, Hash, CreditCard, Lock, Upload, Trash2 } from 'lucide-react';
+import { Building2, Hash, CreditCard, Lock } from 'lucide-react';
 import { useTranslations, useLocale } from 'use-intl';
-import { getThermalPreviewDataUrl, processReceiptLogoFile } from '@/lib/printer/logo-processor';
 import { Ltr } from '@/components/layout/Ltr';
 import { Toggle } from '@/components/settings/Toggle';
 import { SettingsTabShell } from '@/components/settings/SettingsTabShell';
 import { LocalePreferencesPanel } from '@/components/settings/LocalePreferencesPanel';
+import { StoreBrandingCard } from '@/components/settings/StoreBrandingCard';
 import { TimeZoneSelect } from '@/components/TimeZoneSelect';
 import { CurrencySelect } from '@/components/CurrencySelect';
 import {
@@ -158,10 +158,6 @@ export function GeneralSettingsTab({
   );
 
   const sortedCountries = useMemo(() => sortCountriesByLocalizedName(COUNTRIES, locale), [locale]);
-  const thermalLogoPreview = useMemo(
-    () => getThermalPreviewDataUrl(form.receiptLogoRaster),
-    [form.receiptLogoRaster],
-  );
   const [sampleOrderDate] = useState(() => new Date().toISOString().slice(0, 10).replace(/-/g, ''));
 
   const TAX_ID_WARNING_MAX_LENGTH = 24;
@@ -515,96 +511,16 @@ export function GeneralSettingsTab({
             <p className="text-xs text-muted-foreground mt-1">{t('instagramHint')}</p>
           </div>
 
-          {/* Receipt Store Logo */}
-          <div className="md:col-span-2 pt-4 border-t border-border">
-            <label className="block text-sm font-medium text-foreground mb-1">
-              {t('storeLogo')}
-            </label>
-            <p className="text-xs text-muted-foreground mb-3">{t('storeLogoHint')}</p>
-            {isAdmin ? (
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                {form.receiptLogo ? (
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div className="p-2 border border-border rounded-lg bg-white dark:bg-zinc-900 shadow-sm">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={form.receiptLogo}
-                        alt={t('storeLogo')}
-                        className="max-h-16 max-w-[200px] object-contain"
-                      />
-                    </div>
-                    {thermalLogoPreview ? (
-                      <div className="p-2 border border-dashed border-border rounded-lg bg-white shadow-sm">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={thermalLogoPreview}
-                          alt={`${t('storeLogo')} (1-bit)`}
-                          className="max-h-16 max-w-[200px] object-contain"
-                        />
-                      </div>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        markHydrationTouched('receiptLogo');
-                        markHydrationTouched('receiptLogoRaster');
-                        setForm((p) => ({ ...p, receiptLogo: '', receiptLogoRaster: '' }));
-                      }}
-                      className="px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-lg transition-colors flex items-center gap-1.5"
-                    >
-                      <Trash2 size={13} />
-                      {t('removeLogo')}
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 text-sm border border-dashed border-border hover:border-brand rounded-lg bg-muted/40 hover:bg-muted/70 text-foreground transition-colors">
-                      <Upload size={16} />
-                      <span>{t('uploadLogo')}</span>
-                      <input
-                        type="file"
-                        accept="image/*,.bmp,.svg,.webp,.png,.jpg,.jpeg,.gif,.avif"
-                        className="hidden"
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          try {
-                            const { originalDataUrl, rasterJson } =
-                              await processReceiptLogoFile(file);
-                            markHydrationTouched('receiptLogo');
-                            markHydrationTouched('receiptLogoRaster');
-                            setForm((p) => ({
-                              ...p,
-                              receiptLogo: originalDataUrl,
-                              receiptLogoRaster: rasterJson,
-                            }));
-                            onLogoUploaded?.();
-                            toast.success(t('logoUploaded'));
-                          } catch (err) {
-                            const msg =
-                              err instanceof Error ? err.message : 'Failed to process logo';
-                            toast.error(msg);
-                          } finally {
-                            e.target.value = '';
-                          }
-                        }}
-                      />
-                    </label>
-                  </div>
-                )}
-              </div>
-            ) : form.receiptLogo ? (
-              <div className="p-2 border border-border rounded-lg bg-white dark:bg-zinc-900 max-w-[200px]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={form.receiptLogo}
-                  alt={t('storeLogo')}
-                  className="max-h-16 object-contain"
-                />
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">-</p>
-            )}
+          <div className="md:col-span-2">
+            <StoreBrandingCard
+              readOnly={!isAdmin}
+              onReceiptLogoChange={(logo, raster) => {
+                markHydrationTouched('receiptLogo');
+                markHydrationTouched('receiptLogoRaster');
+                setForm((prev) => ({ ...prev, receiptLogo: logo, receiptLogoRaster: raster }));
+                if (logo) onLogoUploaded?.();
+              }}
+            />
           </div>
         </div>
       </div>

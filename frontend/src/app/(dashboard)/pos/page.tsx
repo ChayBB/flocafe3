@@ -91,6 +91,12 @@ import {
   type AppendAttemptStorage,
 } from '@/lib/append-attempt';
 import {
+  OWNER_OVERRIDE_REFUSAL_CODES,
+  OwnerOverrideDialog,
+  ownerOverrideRefusalMessage,
+  type OwnerOverrideInput,
+} from '@/components/pos/OwnerOverrideDialog';
+import {
   PREPAID_ATTEMPT_STORAGE_KEY,
   OrderAttemptStorageError,
   classifyOrderRequestFailure,
@@ -299,6 +305,14 @@ export default function POSPage() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [ownerOverrideOffer, setOwnerOverrideOffer] = useState<{ dayClosed: boolean } | null>(null);
+  const [ownerOverrideOpen, setOwnerOverrideOpen] = useState(false);
+  const [ownerOverrideError, setOwnerOverrideError] = useState<string | null>(null);
+  const lastPrepaidCheckoutRef = useRef<{
+    payments: PrepaidPayment[];
+    walletAmount: number;
+    discount: PrepaidDiscount | null;
+  } | null>(null);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [showPrintMenuModal, setShowPrintMenuModal] = useState(false);
@@ -897,9 +911,28 @@ export default function POSPage() {
       payment_input_invalid: t('paymentInputInvalid'),
       cash_session_required: tExpenses('cashSessionClosed'),
       day_already_closed: tExpenses('cashDayClosed'),
+      owner_pin_invalid: t('ownerOverridePinInvalid'),
+      owner_override_reason_required: t('ownerOverrideReasonRequired'),
+      pin_rate_limited: t('ownerOverrideRateLimited'),
       card_transaction_id_required: t('cardTransactionIdMissing'),
     };
     const confirmedNotApplied = failure.trusted && failure.outcome === 'not_applied';
+    const ownerOverrideRefused = Boolean(
+      failure.displayCode && OWNER_OVERRIDE_REFUSAL_CODES.has(failure.displayCode),
+    );
+    if (ownerOverrideRefused && failure.displayCode) {
+      setOwnerOverrideError(ownerOverrideRefusalMessage(failure.displayCode, t));
+    } else {
+      setOwnerOverrideOpen(false);
+    }
+    if (
+      operation === 'payment.create' &&
+      confirmedNotApplied &&
+      (failure.displayCode === 'cash_session_required' ||
+        failure.displayCode === 'day_already_closed')
+    ) {
+      setOwnerOverrideOffer({ dayClosed: failure.displayCode === 'day_already_closed' });
+    }
     if (confirmedNotApplied && failure.displayCode === 'card_transaction_id_required') {
       setCardTransactionIdRequired(true);
     }
@@ -2523,8 +2556,11 @@ export default function POSPage() {
     payments: PrepaidPayment[],
     walletAmount: number,
     discount: PrepaidDiscount | null,
+    ownerOverride?: OwnerOverrideInput,
   ) => {
     const isPrepaidCheckout = shouldTakePaymentNow;
+    lastPrepaidCheckoutRef.current = { payments, walletAmount, discount };
+    if (!ownerOverride) setOwnerOverrideOffer(null);
     setShowPrepaidCheckout(false);
     setSubmitting(true);
     const originEpoch = sessionEpochRef.current;
@@ -2880,7 +2916,14 @@ export default function POSPage() {
       // makes a lost response safe to retry without creating a second order.
       failureOperation = 'payment.create';
       failureStage = 'payment_submission';
-      const paymentResponse = await api.post(`/bills/${bill.id}/payments`, paymentRequest, {
+      const paymentBody = ownerOverride
+        ? {
+            ...paymentRequest,
+            owner_override_pin: ownerOverride.pin,
+            owner_override_reason: ownerOverride.reason,
+          }
+        : paymentRequest;
+      const paymentResponse = await api.post(`/bills/${bill.id}/payments`, paymentBody, {
         headers: {
           ...pinnedAuthHeaders(originToken),
           'Idempotency-Key': attempt.paymentIdempotencyKey,
@@ -2888,6 +2931,11 @@ export default function POSPage() {
         },
       });
       const paidBill: Bill = paymentResponse.data?.bill || bill;
+      if (ownerOverride) {
+        setOwnerOverrideOpen(false);
+        setOwnerOverrideOffer(null);
+        setOwnerOverrideError(null);
+      }
       const pointsEarned =
         paymentResponse.data?.loyaltyPointsEarned > 0
           ? paymentResponse.data.loyaltyPointsEarned
@@ -3744,6 +3792,19 @@ export default function POSPage() {
 
   return (
     <>
+      <OwnerOverrideDialog
+        open={ownerOverrideOpen}
+        note={ownerOverrideOffer?.dayClosed ? t('ownerOverrideDayClosedNote') : undefined}
+        error={ownerOverrideError}
+        submitting={submitting}
+        onCancel={() => setOwnerOverrideOpen(false)}
+        onConfirm={(input) => {
+          const last = lastPrepaidCheckoutRef.current;
+          if (!last) return;
+          setSupportError(null);
+          void handlePrepaidCheckout(last.payments, last.walletAmount, last.discount, input);
+        }}
+      />
       {supportError && (
         <div className="fixed bottom-4 start-4 z-50 w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-red-200 bg-card p-4 shadow-xl">
           {sentTicketId ? (
@@ -3785,6 +3846,18 @@ export default function POSPage() {
               <p className="font-semibold text-red-800">{supportError.title}</p>
               <p className="mt-1 text-sm text-muted-foreground">{supportError.message}</p>
               <p className="mt-1 text-sm text-muted-foreground">{supportError.nextStep}</p>
+              {ownerOverrideOffer && (
+                <button
+                  type="button"
+                  className="mt-2 rounded border border-amber-400 px-3 py-2 text-sm font-medium"
+                  onClick={() => {
+                    setOwnerOverrideError(null);
+                    setOwnerOverrideOpen(true);
+                  }}
+                >
+                  {t('ownerOverrideButton')}
+                </button>
+              )}
               <details className="mt-2 text-xs text-muted-foreground">
                 <summary className="cursor-pointer">{tSupport('showPayload')}</summary>
                 <Ltr as="pre" className="mt-2 max-h-32 overflow-auto rounded bg-muted p-2">

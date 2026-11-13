@@ -26,6 +26,12 @@ import { printerService } from '@/lib/printer/PrinterService';
 import api from '@/lib/api';
 import UpdateBadge from './UpdateBadge';
 import { Ltr } from './Ltr';
+import {
+  OWNER_OVERRIDE_REFUSAL_CODES,
+  OwnerOverrideDialog,
+  ownerOverrideRefusalMessage,
+  type OwnerOverrideInput,
+} from '@/components/pos/OwnerOverrideDialog';
 
 interface StatusInfo {
   server: string;
@@ -68,6 +74,8 @@ export default function StatusBar({ showUpdateBadge = true }: { showUpdateBadge?
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTestingPrint, setIsTestingPrint] = useState(false);
   const [isKickingDrawer, setIsKickingDrawer] = useState(false);
+  const [drawerOverrideOpen, setDrawerOverrideOpen] = useState(false);
+  const [drawerOverrideError, setDrawerOverrideError] = useState<string | null>(null);
   const [isConfiguredWebUsbReady, setIsConfiguredWebUsbReady] = useState(false);
 
   const inFlightRef = useRef(false);
@@ -265,17 +273,34 @@ export default function StatusBar({ showUpdateBadge = true }: { showUpdateBadge?
     }
   };
 
-  const handleKickDrawer = async () => {
+  const handleKickDrawer = async (ownerOverride?: OwnerOverrideInput) => {
     setIsKickingDrawer(true);
     try {
-      const res = await api.post<PrinterActionResponse>('/printers/kick-drawer');
+      const res = await api.post<PrinterActionResponse>(
+        '/printers/kick-drawer',
+        ownerOverride
+          ? { owner_override_pin: ownerOverride.pin, owner_override_reason: ownerOverride.reason }
+          : undefined,
+      );
       await printWebUsbAction(res.data);
-      toast.success(tSettings('cashDrawerPulseSent'));
+      if (ownerOverride) {
+        setDrawerOverrideOpen(false);
+        toast.success(tPos('ownerOverrideDrawerOpened'));
+      } else {
+        toast.success(tSettings('cashDrawerPulseSent'));
+      }
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
-        tSettings('cashDrawerPulseFailed');
-      toast.error(msg);
+      const code = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      if (code === 'open_cash_shift_required') {
+        setDrawerOverrideError(null);
+        setDrawerOverrideOpen(true);
+        toast.error(tPos('ownerOverrideNoShift'));
+      } else if (ownerOverride && code && OWNER_OVERRIDE_REFUSAL_CODES.has(code)) {
+        setDrawerOverrideError(ownerOverrideRefusalMessage(code, tPos));
+      } else {
+        if (ownerOverride) setDrawerOverrideOpen(false);
+        toast.error(code || tSettings('cashDrawerPulseFailed'));
+      }
     } finally {
       setIsKickingDrawer(false);
     }
@@ -283,6 +308,13 @@ export default function StatusBar({ showUpdateBadge = true }: { showUpdateBadge?
 
   return (
     <>
+      <OwnerOverrideDialog
+        open={drawerOverrideOpen}
+        error={drawerOverrideError}
+        submitting={isKickingDrawer}
+        onCancel={() => setDrawerOverrideOpen(false)}
+        onConfirm={(input) => void handleKickDrawer(input)}
+      />
       {/* Slide-Up Telemetry & Hardware Drawer Backdrop */}
       {isDrawerOpen && (
         <div
@@ -375,7 +407,7 @@ export default function StatusBar({ showUpdateBadge = true }: { showUpdateBadge?
                   <button
                     type="button"
                     data-testid="btn-kick-cash-drawer"
-                    onClick={handleKickDrawer}
+                    onClick={() => void handleKickDrawer()}
                     disabled={isKickingDrawer}
                     className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border bg-card px-4 text-xs font-medium text-foreground shadow-xs hover:bg-accent hover:text-accent-foreground disabled:opacity-50 transition-colors"
                   >
