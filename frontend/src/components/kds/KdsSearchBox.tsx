@@ -24,7 +24,15 @@ export function KdsSearchBox({
         data-testid="kds-search-input"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => event.key === 'Escape' && onChange('')}
+        enterKeyHint="search"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onChange('');
+          // On a tablet, the keyboard's search key closes the keyboard so the results show at once.
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
         placeholder={t('searchPlaceholder')}
         aria-label={t('searchPlaceholder')}
         autoComplete="off"
