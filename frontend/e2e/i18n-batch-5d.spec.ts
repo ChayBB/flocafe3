@@ -96,8 +96,8 @@ test('Batch 5D: KDS and Server App render and function correctly in English and 
 
     // 1b. Standalone KDS Tabs View (EN)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Kitchen Display');
-    await expect(page.getByRole('button', { name: 'Tabs' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Kanban' })).toBeVisible();
+    await expect(page.getByTestId('kds-column-pending')).toBeVisible();
+    await expect(page.getByTestId('kds-settings-button')).toBeEnabled();
     await expect(page.getByText('Dine In').first()).toBeVisible();
     await captureScreenshot(page, 'kds-tabs-en.png');
 
@@ -139,7 +139,8 @@ test('Batch 5D: KDS and Server App render and function correctly in English and 
     await page.reload();
 
     // 1f. Server App Main UI (EN)
-    await expect(page.getByRole('heading', { name: 'Server App' })).toBeVisible();
+    await expect(page.getByTestId('server-app-header')).toBeVisible();
+    await expect(page.getByTestId('server-app-header-name')).toHaveCount(0);
     await openServerAppTables(page);
     await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Current ticket' })).toBeVisible();

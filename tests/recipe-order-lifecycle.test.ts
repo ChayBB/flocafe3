@@ -268,7 +268,7 @@ async function main() {
     await api(baseUrl, `/api/order-items/${item3Id}/status`, {
       method: 'PATCH',
       headers: authHeader,
-      body: { status: 'preparing' },
+      body: { status: 'ready' },
     });
     const voidRes = await api(
       baseUrl,
@@ -279,7 +279,7 @@ async function main() {
         body: { override_pin: '1234' },
       },
     );
-    assertEqual(voidRes.status, 200, 'void of in-prep item succeeds');
+    assertEqual(voidRes.status, 200, 'void of ready item succeeds');
     assertEqual(stockOf(db, beans.id), beansBeforeVoid, 'void does NOT restore bean stock');
 
     const beansBeforeOrder3Cancel = stockOf(db, beans.id);
@@ -311,7 +311,12 @@ async function main() {
     await api(baseUrl, `/api/order-items/${mixedRecipeOrder.data.order.items[0].id}/status`, {
       method: 'PATCH',
       headers: authHeader,
-      body: { status: 'preparing' },
+      body: { status: 'ready' },
+    });
+    await api(baseUrl, `/api/orders/${mixedRecipeOrder.data.order.id}/status`, {
+      method: 'PATCH',
+      headers: authHeader,
+      body: { status: 'ready' },
     });
     const cancelMixedRecipe = await api(
       baseUrl,
@@ -326,7 +331,7 @@ async function main() {
     assertEqual(
       stockOf(db, beans.id),
       beansAfterMixedCreate + 36,
-      'whole-order cancel restores recipe stock only for the pending item (2 x 18 g) and skips the preparing item (1 x 18 g)',
+      'whole-order cancel restores recipe stock only for the pending item (2 x 18 g) and skips the ready item (1 x 18 g)',
     );
 
     console.log('\n--- 7. Inactive recipe skips depletion ---');

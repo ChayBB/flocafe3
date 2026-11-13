@@ -7,6 +7,7 @@ async function startMockedSettingsSession(
   page: Page,
   cloudRegistered = false,
   cloudStatus: Record<string, unknown> = {},
+  requestLimit = MOCK_API_RATE_LIMIT,
 ): Promise<void> {
   let apiRequestCount = 0;
   await page.addInitScript(() => {
@@ -14,7 +15,7 @@ async function startMockedSettingsSession(
   });
   await page.route('**/api/**', async (route) => {
     apiRequestCount += 1;
-    if (apiRequestCount > MOCK_API_RATE_LIMIT) {
+    if (apiRequestCount > requestLimit) {
       await route.fulfill({
         status: 429,
         contentType: 'application/json',
@@ -723,6 +724,7 @@ test('Save All does not cache partial Mobile Access hydration', async ({ page })
   await page.locator('input[type="text"]').first().fill('Changed Store');
   await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
   await expect.poll(() => apiPaths.includes('/api/settings/printing')).toBeTruthy();
+  await expect(page.getByText('Settings saved', { exact: true })).toBeVisible();
 
   expect(apiPaths).not.toContain('/api/mobile/pairing-code');
   expect(apiPaths).not.toContain('/api/mobile/devices');
@@ -2756,7 +2758,7 @@ test('Direct Printers tab load hides double-off warning when KDS is enabled and 
 test('Switching from KDS to Printers while KDS save is pending preserves successful saves in both directions and reconciles failed save', async ({
   page,
 }) => {
-  await startMockedSettingsSession(page);
+  await startMockedSettingsSession(page, false, {}, 200);
   let persistedKds = 'false';
   let releasePendingPut!: () => void;
   let signalPutStarted!: () => void;

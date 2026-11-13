@@ -1,6 +1,23 @@
-import { expect, APIRequestContext } from '@playwright/test';
-import { E2E_BASE_URL } from './urls';
+import { expect, APIRequestContext, type Page } from '@playwright/test';
+import { E2E_BASE_URL, E2E_KDS_BASE_URL } from './urls';
 import { getE2eToken, E2E_OPERATIONAL_PASSWORD, E2E_PASSWORD } from './test-auth';
+
+/** Keeps alerts from earlier specs out of a new display's sound measurements. */
+export async function acknowledgeExistingKdsAlerts(page: Page): Promise<void> {
+  const response = await page.request.get(`${E2E_KDS_BASE_URL}/api/kds/orders`, {
+    headers: {
+      Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+    },
+  });
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const { alerts = [] } = await response.json();
+  await page.addInitScript(
+    (ids: string[]) => {
+      localStorage.setItem('flocafe:kds-seen-alerts', JSON.stringify(ids));
+    },
+    alerts.map((alert: { id: string }) => alert.id),
+  );
+}
 
 /** Creates and reuses the variant and add-on catalog needed by kitchen UAT specs. */
 
@@ -22,11 +39,27 @@ export interface UatAddon {
   price: number;
 }
 
-interface CategoryRow { id: string; name: string }
-interface AddonGroupRow { id: string; name: string; addons?: UatAddon[] }
-interface ProductRow { id: string; name: string; variants?: UatVariant[] }
-interface TableRow { id: string; number?: string }
-interface StaffRow { email: string }
+interface CategoryRow {
+  id: string;
+  name: string;
+}
+interface AddonGroupRow {
+  id: string;
+  name: string;
+  addons?: UatAddon[];
+}
+interface ProductRow {
+  id: string;
+  name: string;
+  variants?: UatVariant[];
+}
+interface TableRow {
+  id: string;
+  number?: string;
+}
+interface StaffRow {
+  email: string;
+}
 
 export interface UatFixture {
   categoryId: string;
@@ -56,7 +89,11 @@ export async function loginToken(
 }
 
 /** Reads a settings value as the owner. Returns undefined when never set. */
-export async function readSetting(request: APIRequestContext, key: string, base = E2E_BASE_URL): Promise<string | undefined> {
+export async function readSetting(
+  request: APIRequestContext,
+  key: string,
+  base = E2E_BASE_URL,
+): Promise<string | undefined> {
   const token = getE2eToken();
   const response = await request.get(`${base}/api/settings/${key}`, {
     headers: authHeaders(token),
@@ -66,13 +103,21 @@ export async function readSetting(request: APIRequestContext, key: string, base 
   return setting?.value as string | undefined;
 }
 
-export async function writeSetting(request: APIRequestContext, key: string, value: string, base = E2E_BASE_URL): Promise<void> {
+export async function writeSetting(
+  request: APIRequestContext,
+  key: string,
+  value: string,
+  base = E2E_BASE_URL,
+): Promise<void> {
   const token = getE2eToken();
   const response = await request.put(`${base}/api/settings/${key}`, {
     headers: authHeaders(token),
     data: { value },
   });
-  expect(response.ok(), `setting ${key}=${value} must save (got ${response.status()})`).toBeTruthy();
+  expect(
+    response.ok(),
+    `setting ${key}=${value} must save (got ${response.status()})`,
+  ).toBeTruthy();
 }
 
 /** Restores a settings snapshot captured by {@link captureSettings}. */
@@ -96,11 +141,18 @@ export async function restoreSettings(
       headers: authHeaders(token),
       data: { value: restoredValue },
     });
-    expect(response.ok(), `restoring setting ${key} must succeed (got ${response.status()})`).toBeTruthy();
+    expect(
+      response.ok(),
+      `restoring setting ${key} must succeed (got ${response.status()})`,
+    ).toBeTruthy();
   }
 }
 
-export async function captureSettings(request: APIRequestContext, keys: string[], base = E2E_BASE_URL): Promise<Map<string, string | undefined>> {
+export async function captureSettings(
+  request: APIRequestContext,
+  keys: string[],
+  base = E2E_BASE_URL,
+): Promise<Map<string, string | undefined>> {
   const snapshot = new Map<string, string | undefined>();
   for (const key of keys) snapshot.set(key, await readSetting(request, key, base));
   return snapshot;
@@ -113,7 +165,10 @@ export async function captureSettings(request: APIRequestContext, keys: string[]
  * Takes an APIRequestContext rather than a Page so it can run in `beforeAll`,
  * where no browser page exists yet.
  */
-export async function ensureUatFixture(request: APIRequestContext, base = E2E_BASE_URL): Promise<UatFixture> {
+export async function ensureUatFixture(
+  request: APIRequestContext,
+  base = E2E_BASE_URL,
+): Promise<UatFixture> {
   const token = getE2eToken();
   const headers = authHeaders(token);
 
@@ -127,39 +182,61 @@ export async function ensureUatFixture(request: APIRequestContext, base = E2E_BA
       headers,
       data: { name: FIXTURE_CATEGORY_NAME, sort_order: 900, is_active: true },
     });
-    expect(created.ok(), `creating the UAT category must succeed (got ${created.status()})`).toBeTruthy();
+    expect(
+      created.ok(),
+      `creating the UAT category must succeed (got ${created.status()})`,
+    ).toBeTruthy();
     category = ((await created.json()) as { category: CategoryRow }).category;
   }
 
   // Add-on group (the add-ons hang off the group, not off a standalone route)
   const groupsResponse = await request.get(`${base}/api/addon-groups`, { headers });
   expect(groupsResponse.ok()).toBeTruthy();
-  const groupsBody = (await groupsResponse.json()) as { addon_groups?: AddonGroupRow[]; groups?: AddonGroupRow[] };
+  const groupsBody = (await groupsResponse.json()) as {
+    addon_groups?: AddonGroupRow[];
+    groups?: AddonGroupRow[];
+  };
   const groupList: AddonGroupRow[] = groupsBody.addon_groups || groupsBody.groups || [];
   let group = groupList.find((g: AddonGroupRow) => g.name === FIXTURE_ADDON_GROUP_NAME);
   if (!group) {
     const created = await request.post(`${base}/api/addon-groups`, {
       headers,
-      data: { name: FIXTURE_ADDON_GROUP_NAME, is_active: true, min_selections: 0, max_selections: 3 },
+      data: {
+        name: FIXTURE_ADDON_GROUP_NAME,
+        is_active: true,
+        min_selections: 0,
+        max_selections: 3,
+      },
     });
-    expect(created.ok(), `creating the UAT add-on group must succeed (got ${created.status()})`).toBeTruthy();
+    expect(
+      created.ok(),
+      `creating the UAT add-on group must succeed (got ${created.status()})`,
+    ).toBeTruthy();
     group = ((await created.json()) as { addon_group: AddonGroupRow }).addon_group;
   }
 
   const addonsByName: Record<string, UatAddon> = {};
-  for (const [name, price] of [['Oat Milk', 15], ['Extra Shot', 10]] as const) {
+  for (const [name, price] of [
+    ['Oat Milk', 15],
+    ['Extra Shot', 10],
+  ] as const) {
     let addon = (group.addons || []).find((a: UatAddon) => a.name === name);
     if (!addon) {
       const detail = await request.get(`${base}/api/addon-groups/${group.id}`, { headers });
       const detailBody = await detail.json();
-      addon = ((detailBody.addon_group || detailBody.group || {}).addons || []).find((a: UatAddon) => a.name === name);
+      addon = ((detailBody.addon_group || detailBody.group || {}).addons || []).find(
+        (a: UatAddon) => a.name === name,
+      );
     }
     if (!addon) {
       const created = await request.post(`${base}/api/addon-groups/${group.id}/addons`, {
         headers,
         data: { name, price, is_active: true },
       });
-      expect(created.ok(), `creating add-on ${name} must succeed (got ${created.status()})`).toBeTruthy();
+      expect(
+        created.ok(),
+        `creating add-on ${name} must succeed (got ${created.status()})`,
+      ).toBeTruthy();
       addon = ((await created.json()) as { addon: UatAddon }).addon;
     }
     addonsByName[name] = { id: addon.id, name: addon.name, price };
@@ -169,7 +246,9 @@ export async function ensureUatFixture(request: APIRequestContext, base = E2E_BA
   const productsResponse = await request.get(`${base}/api/products`, { headers });
   expect(productsResponse.ok()).toBeTruthy();
   const productsBody = (await productsResponse.json()) as { products?: ProductRow[] };
-  let product = (productsBody.products || []).find((p: ProductRow) => p.name === FIXTURE_PRODUCT_NAME);
+  let product = (productsBody.products || []).find(
+    (p: ProductRow) => p.name === FIXTURE_PRODUCT_NAME,
+  );
   if (!product) {
     const created = await request.post(`${base}/api/products`, {
       headers,
@@ -187,7 +266,10 @@ export async function ensureUatFixture(request: APIRequestContext, base = E2E_BA
         ],
       },
     });
-    expect(created.ok(), `creating the UAT product must succeed (got ${created.status()})`).toBeTruthy();
+    expect(
+      created.ok(),
+      `creating the UAT product must succeed (got ${created.status()})`,
+    ).toBeTruthy();
     product = ((await created.json()) as { product: ProductRow }).product;
   }
 
@@ -195,7 +277,10 @@ export async function ensureUatFixture(request: APIRequestContext, base = E2E_BA
     headers,
     data: { addon_group_ids: [group.id] },
   });
-  expect(linkResponse.ok(), `linking the add-on group must succeed (got ${linkResponse.status()})`).toBeTruthy();
+  expect(
+    linkResponse.ok(),
+    `linking the add-on group must succeed (got ${linkResponse.status()})`,
+  ).toBeTruthy();
 
   const detailResponse = await request.get(`${base}/api/products/${product.id}`, { headers });
   expect(detailResponse.ok()).toBeTruthy();
@@ -217,7 +302,10 @@ export async function ensureUatFixture(request: APIRequestContext, base = E2E_BA
       headers,
       data: { number: FIXTURE_TABLE_NAME, name: FIXTURE_TABLE_NAME, capacity: 4, is_active: true },
     });
-    expect(created.ok(), `creating the UAT table must succeed (got ${created.status()})`).toBeTruthy();
+    expect(
+      created.ok(),
+      `creating the UAT table must succeed (got ${created.status()})`,
+    ).toBeTruthy();
     table = ((await created.json()) as { table: TableRow }).table;
   }
 
@@ -238,7 +326,10 @@ export async function ensureUatFixture(request: APIRequestContext, base = E2E_BA
           is_active: true,
         },
       });
-      expect(created.ok(), `creating the UAT chef must succeed (got ${created.status()})`).toBeTruthy();
+      expect(
+        created.ok(),
+        `creating the UAT chef must succeed (got ${created.status()})`,
+      ).toBeTruthy();
     }
   }
 
@@ -258,7 +349,12 @@ export async function ensureUatFixture(request: APIRequestContext, base = E2E_BA
 /** An order item payload in exactly the shape the POS/server-app builders send. */
 export function orderItem(
   productId: string,
-  options: { quantity?: number; variantId?: string | null; addons?: UatAddon[]; instructions?: string } = {},
+  options: {
+    quantity?: number;
+    variantId?: string | null;
+    addons?: UatAddon[];
+    instructions?: string;
+  } = {},
 ) {
   return {
     product_id: productId,

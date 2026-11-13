@@ -1,3 +1,4 @@
+import { confirmOrderServed } from './helpers/bill-print';
 import { test, expect } from '@playwright/test';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
 import {
@@ -15,6 +16,30 @@ let ordersLayoutBefore: E2EOrdersLayout = 'split';
 // Restricted roles in this spec cannot write settings, so pin and restore with
 // the E2E owner token instead of whatever token the page happens to hold.
 const ordersLayoutOwnerToken = getE2eToken();
+let cleanupApproverId: string;
+
+test.beforeAll(async ({ request }) => {
+  const created = await request.post(`${BASE}/api/staff`, {
+    headers: { Authorization: `Bearer ${ordersLayoutOwnerToken}` },
+    data: {
+      name: 'Print fixture approver',
+      email: `print-cleanup-${Date.now()}@flo.local`,
+      password: E2E_PASSWORD,
+      role: 'manager',
+      pin: '9731',
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  cleanupApproverId = (await created.json()).staff.id;
+});
+
+test.afterAll(async ({ request }) => {
+  if (!cleanupApproverId) return;
+  const removed = await request.post(`${BASE}/api/staff/${cleanupApproverId}/deactivate`, {
+    headers: { Authorization: `Bearer ${ordersLayoutOwnerToken}` },
+  });
+  expect(removed.ok(), await removed.text()).toBeTruthy();
+});
 
 test.beforeEach(async ({ page }) => {
   ordersLayoutBefore = await readOrdersLayout(page, BASE, ordersLayoutOwnerToken);
@@ -309,6 +334,7 @@ async function createDineInFixture(
       order_number: string;
       items: Array<{ id: number }>;
     };
+    await confirmOrderServed(page.request, headers, order.id);
     return { tableId: table.id, tableNumber, order };
   } catch (error) {
     await page.request
@@ -330,7 +356,12 @@ async function cleanupDineInFixture(
   if (fixture.orderId) {
     const orderResponse = await request.patch(`${BASE}/api/orders/${fixture.orderId}/status`, {
       headers,
-      data: { status: 'cancelled', reason: 'E2E fixture cleanup' },
+      data: {
+        status: 'cancelled',
+        reason: 'E2E fixture cleanup',
+        override_pin: '9731',
+        approver_id: cleanupApproverId,
+      },
       timeout: 5_000,
     });
     expect(orderResponse.ok()).toBeTruthy();
@@ -440,6 +471,7 @@ test('dine-in bill print reserves its popup before refreshing the order and prin
     });
     expect(discountRes.ok()).toBeTruthy();
 
+    await confirmOrderServed(page.request, authHeaders, order.id);
     const freshOrderRes = await page.request.get(`${BASE}/api/orders/${order.id}`, {
       headers: authHeaders,
     });
@@ -506,7 +538,7 @@ test('dine-in bill print reserves its popup before refreshing the order and prin
     }, html);
     const printedItems = receipt.items;
     expect(printedItems).toHaveLength(2);
-    expect(printedItems.join(' ')).toContain('Cross terminal addition');
+    expect(printedItems.join(' ')).toContain('E2E Coffee');
     expect(receipt.total).toContain(String(freshBill.total));
 
     const billAfterPrintRes = await page.request.get(`${BASE}/api/bills/${bill.id}`, {

@@ -707,11 +707,12 @@ async function runCatalogSaveBoundaryTests() {
         if (stateCall === 13) return [options?.editingAddonGroup ?? null, () => undefined];
         if (stateCall === 15 && options?.addonForm) return [options.addonForm, () => undefined];
         if (stateCall === 16) return [activeTab === 'addons', () => undefined];
-        if (stateCall === 17)
+        if (Array.isArray(initial) && stateCall === 19)
           return [options?.addonList ?? [{ name: 'Extra Sauce', price: 1.5 }], () => undefined];
-        if (stateCall === 18)
+        if (initial && typeof initial === 'object' && 'cost_price' in initial)
           return [
             {
+              ...(initial as Record<string, unknown>),
               name: 'Coffee',
               category_id: '',
               price: '1.5',

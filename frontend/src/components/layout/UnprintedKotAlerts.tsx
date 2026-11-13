@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PrinterX } from 'lucide-react';
+import { ChevronDown, PrinterX } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
@@ -29,6 +29,7 @@ export default function UnprintedKotAlerts() {
   const canPrint = tenantCan(currentTenant, 'printing.execute');
   const [unprinted, setUnprinted] = useState<UnprintedKot[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const knownRef = useRef<Set<string> | null>(null);
 
   const load = useCallback(async () => {
@@ -89,46 +90,62 @@ export default function UnprintedKotAlerts() {
   return (
     <div
       data-testid="unprinted-kot-alerts"
-      className="fixed bottom-4 end-4 z-50 flex w-[22rem] max-w-[calc(100vw-2rem)] flex-col gap-2"
+      className="fixed bottom-4 end-4 z-40 flex max-h-[40dvh] w-[22rem] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto overscroll-contain"
     >
-      {unprinted.map((entry) => (
-        <div
-          key={entry.id}
-          data-testid="unprinted-kot"
-          className="flex items-start gap-3 rounded-lg border border-red-500 bg-red-600 p-3 text-white shadow-lg"
+      {unprinted.length > 1 && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="sticky top-0 flex shrink-0 items-center gap-2 rounded-lg border border-red-500 bg-red-600 p-3 text-start text-sm font-semibold text-white shadow-lg"
         >
-          <PrinterX size={20} className="mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">{t('unprintedKotTitle')}</p>
-            <p className="truncate text-sm text-white/90">
-              {t('unprintedKotPlace', {
-                place: entry.table
-                  ? tKds('tableLabel', { name: entry.table })
-                  : tKds('messageOrder', { number: entry.order_number }),
-                station: entry.station,
-              })}
-            </p>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                disabled={busyId === entry.id}
-                onClick={() => reprint(entry)}
-                className="rounded-md bg-white px-3 py-1 text-sm font-medium text-red-700 hover:bg-white/90 disabled:opacity-60"
-              >
-                {t('unprintedKotReprint')}
-              </button>
-              <button
-                type="button"
-                disabled={busyId === entry.id}
-                onClick={() => dismiss(entry)}
-                className="rounded-md border border-white/60 px-3 py-1 text-sm hover:bg-white/10 disabled:opacity-60"
-              >
-                {t('unprintedKotDismiss')}
-              </button>
+          <PrinterX size={20} />
+          <span className="flex-1">
+            {t('unprintedKotTitle')} ({unprinted.length})
+          </span>
+          <ChevronDown size={18} className={expanded ? 'rotate-180' : ''} />
+        </button>
+      )}
+      <div className={unprinted.length > 1 && !expanded ? 'hidden' : 'contents'}>
+        {unprinted.map((entry) => (
+          <div
+            key={entry.id}
+            data-testid="unprinted-kot"
+            className="flex items-start gap-3 rounded-lg border border-red-500 bg-red-600 p-3 text-white shadow-lg"
+          >
+            <PrinterX size={20} className="mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">{t('unprintedKotTitle')}</p>
+              <p className="truncate text-sm text-white/90">
+                {t('unprintedKotPlace', {
+                  place: entry.table
+                    ? tKds('tableLabel', { name: entry.table })
+                    : tKds('messageOrder', { number: entry.order_number }),
+                  station: entry.station,
+                })}
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  disabled={busyId === entry.id}
+                  onClick={() => reprint(entry)}
+                  className="rounded-md bg-white px-3 py-1 text-sm font-medium text-red-700 hover:bg-white/90 disabled:opacity-60"
+                >
+                  {t('unprintedKotReprint')}
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === entry.id}
+                  onClick={() => dismiss(entry)}
+                  className="rounded-md border border-white/60 px-3 py-1 text-sm hover:bg-white/10 disabled:opacity-60"
+                >
+                  {t('unprintedKotDismiss')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

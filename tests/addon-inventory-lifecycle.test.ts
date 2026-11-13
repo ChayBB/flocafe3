@@ -429,7 +429,7 @@ async function main() {
       const voidBefore = stockOf(db, OAT);
       const voided = (await createOrder([burgerWith(2, [{ id: OAT, quantity: 3 }])])).data.order;
       const voidedItem = voided.items[0].id;
-      db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(voidedItem);
+      db.prepare("UPDATE order_items SET status = 'ready' WHERE id = ?").run(voidedItem);
       const movementsBefore = movementsFor(db, OAT).length;
 
       const voidedResponse = await api(
@@ -441,7 +441,7 @@ async function main() {
           body: { override_pin: '1234' },
         },
       );
-      assertEqualOrThrow(voidedResponse.status, 200, 'the in-progress line voids');
+      assertEqualOrThrow(voidedResponse.status, 200, 'the ready line voids');
       assertEqualOrThrow(
         (db.prepare('SELECT status FROM order_items WHERE id = ?').get(voidedItem) as any).status,
         'voided',
@@ -472,7 +472,7 @@ async function main() {
         ])
       ).data.order;
       assertEqualOrThrow(stockOf(db, OAT), mixedBefore - 5, 'mixed order debits 2 and 3');
-      db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(
+      db.prepare("UPDATE order_items SET status = 'ready' WHERE id = ?").run(
         mixedOrder.items[0].id,
       );
       const mixedCancel = await api(baseUrl, `/api/orders/${mixedOrder.id}/status`, {
@@ -484,7 +484,7 @@ async function main() {
       assertEqualOrThrow(
         stockOf(db, OAT),
         mixedBefore - 2,
-        'only the pending line (3) restores add-on stock; the preparing line (2) stays consumed',
+        'only the pending line (3) restores add-on stock; the ready line (2) stays consumed',
       );
       assertEqualOrThrow(
         validateInventoryLedgerDatabase(db),

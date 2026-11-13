@@ -2,6 +2,41 @@ import { test, expect } from '@playwright/test';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
 import { E2E_PASSWORD, setLanguage } from './helpers/test-auth';
 
+test('a backlog of unprinted tickets leaves page actions and modal controls usable', async ({
+  page,
+}) => {
+  const unprinted = Array.from({ length: 12 }, (_, index) => ({
+    id: `${index}:Kitchen`,
+    order_id: index,
+    order_number: `ORD-${index}`,
+    table: String(index),
+    station: 'Kitchen',
+    created_at: new Date().toISOString(),
+  }));
+  await page.route('**/api/printers/unprinted-kots', (route) =>
+    route.fulfill({ json: { unprinted } }),
+  );
+  await page.goto(`${BASE}/auth/login`);
+  await page.getByLabel('Email').fill('owner@flo.local');
+  await page.getByLabel('Password').fill(E2E_PASSWORD);
+  await page.getByRole('button', { name: 'Sign In' }).click();
+  await page.waitForURL(/\/(pos|orders)/);
+  await page.goto(`${BASE}/products?tab=addons`);
+  await expect(page.getByTestId('unprinted-kot')).toHaveCount(12);
+  const toggle = page.getByTestId('unprinted-kot-alerts').getByRole('button', { expanded: false });
+  await toggle.click();
+  await expect(page.getByTestId('unprinted-kot').first()).toBeVisible();
+  await page.getByTestId('unprinted-kot-alerts').getByRole('button', { expanded: true }).click();
+  await page.getByRole('button', { name: 'Add Addon Group', exact: true }).click({ timeout: 5000 });
+  const editor = page.getByTestId('addon-group-editor');
+  await expect(editor).toBeVisible();
+  await editor.getByRole('button', { name: 'Close', exact: true }).click({ timeout: 5000 });
+  await expect(editor).toBeHidden();
+  const bounds = await page.getByTestId('unprinted-kot-alerts').boundingBox();
+  expect(bounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height * 0.4 + 1);
+  await expect(page.getByTestId('unprinted-kot')).toHaveCount(12);
+});
+
 test('a kitchen ticket that did not print waits on the POS until it is reprinted', async ({
   page,
 }) => {

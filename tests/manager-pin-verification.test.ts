@@ -210,7 +210,7 @@ async function run() {
   const itemRes1 = db
     .prepare(`
     INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, tax_amount, total, status, created_at, updated_at)
-    VALUES (?, 'prod-1', 'Burger', 100, 1, 100, 0, 100, 'preparing', ?, ?)
+    VALUES (?, 'prod-1', 'Burger', 100, 1, 100, 0, 100, 'ready', ?, ?)
   `)
     .run(voidOrderId1, now(), now());
   const itemId1 = itemRes1.lastInsertRowid;
@@ -226,11 +226,7 @@ async function run() {
   const itemAfter10a = db
     .prepare('SELECT status FROM order_items WHERE id = ?')
     .get(itemId1) as any;
-  assertEqual(
-    itemAfter10a.status,
-    'preparing',
-    'Item remains in preparing status after mismatched void',
-  );
+  assertEqual(itemAfter10a.status, 'ready', 'Item remains ready after mismatched void');
   const auditLogs10a = db
     .prepare('SELECT * FROM order_audit_log WHERE order_id = ?')
     .all(voidOrderId1) as any[];
@@ -288,7 +284,7 @@ async function run() {
   const itemRes2 = db
     .prepare(`
     INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, tax_amount, total, status, created_at, updated_at)
-    VALUES (?, 'prod-1', 'Burger', 100, 1, 100, 0, 100, 'preparing', ?, ?)
+    VALUES (?, 'prod-1', 'Burger', 100, 1, 100, 0, 100, 'ready', ?, ?)
   `)
     .run(voidOrderId2, now(), now());
   const itemId2 = itemRes2.lastInsertRowid;

@@ -73,11 +73,12 @@ test('KDS REST fallback refreshes the board after a status tap', async ({ page }
 
   // Once the card stops being busy, the row must already have left Waiting.
   await expect
-    .poll(async () => {
-      if ((await waitingCard.count()) === 0) return 'moved';
-      const cls = (await waitingCard.getAttribute('class')) ?? '';
-      return cls.includes('pointer-events-none') ? 'busy' : 'stale';
-    })
+    .poll(() =>
+      waitingCard.evaluateAll((cards) => {
+        if (cards.length === 0) return 'moved';
+        return cards[0].classList.contains('pointer-events-none') ? 'busy' : 'stale';
+      }),
+    )
     .not.toBe('busy');
   await expect(waitingCard).toHaveCount(0, { timeout: 100 });
   await expect(cardIn(preparingCol)).toBeVisible();

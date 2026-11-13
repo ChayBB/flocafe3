@@ -253,19 +253,19 @@ async function run() {
     assertGreaterThanOrThrow(ticksB2, 0, 'Event loop yielded during invalid item discount scan');
   }
 
-  // C. PATCH /api/orders/:orderId/items/:itemId/cancel (in-progress item void)
+  // C. PATCH /api/orders/:orderId/items/:itemId/cancel (ready item void)
   {
     const orderRes = db
       .prepare(`
       INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-      VALUES ('ORD-ASYNC-003', 'dine_in', 50, 5, 55, 'preparing', ?, ?)
+      VALUES ('ORD-ASYNC-003', 'dine_in', 50, 5, 55, 'ready', ?, ?)
     `)
       .run(now(), now());
     const orderId = orderRes.lastInsertRowid;
     const itemRes = db
       .prepare(`
       INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, total, status, created_at, updated_at)
-      VALUES (?, 'prod-async-1', 'Item In Prep', 50, 1, 50, 55, 'preparing', ?, ?)
+      VALUES (?, 'prod-async-1', 'Ready Item', 50, 1, 50, 55, 'ready', ?, ?)
     `)
       .run(orderId, now(), now());
     const itemId = itemRes.lastInsertRowid;
@@ -281,18 +281,18 @@ async function run() {
     assertEqualOrThrow(resC1.status, 200, 'Item void succeeds with candidate #5 PIN');
     assertGreaterThanOrThrow(ticksC1, 0, 'Event loop yielded during item void PIN scan');
 
-    // Seed fresh preparing order and item for invalid PIN test
+    // Seed fresh ready order and item for invalid PIN test
     const orderRes2 = db
       .prepare(`
       INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-      VALUES ('ORD-ASYNC-003B', 'dine_in', 50, 5, 55, 'preparing', ?, ?)
+      VALUES ('ORD-ASYNC-003B', 'dine_in', 50, 5, 55, 'ready', ?, ?)
     `)
       .run(now(), now());
     const orderId2 = orderRes2.lastInsertRowid;
     const itemRes2 = db
       .prepare(`
       INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, total, status, created_at, updated_at)
-      VALUES (?, 'prod-async-1', 'Item In Prep 2', 50, 1, 50, 55, 'preparing', ?, ?)
+      VALUES (?, 'prod-async-1', 'Ready Item 2', 50, 1, 50, 55, 'ready', ?, ?)
     `)
       .run(orderId2, now(), now());
     const itemId2 = itemRes2.lastInsertRowid;
@@ -342,13 +342,13 @@ async function run() {
       const oRes = db
         .prepare(`
         INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-        VALUES (?, 'dine_in', 50, 5, 55, 'preparing', ?, ?)
+        VALUES (?, 'dine_in', 50, 5, 55, 'ready', ?, ?)
       `)
         .run(`ORD-RL-${i}`, now(), now());
       const itRes = db
         .prepare(`
         INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, total, status, created_at, updated_at)
-        VALUES (?, 'prod-async-1', 'Item', 50, 1, 50, 55, 'preparing', ?, ?)
+        VALUES (?, 'prod-async-1', 'Item', 50, 1, 50, 55, 'ready', ?, ?)
       `)
         .run(oRes.lastInsertRowid, now(), now());
       await request(app)
@@ -359,13 +359,13 @@ async function run() {
     const oResLockout = db
       .prepare(`
       INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-      VALUES ('ORD-RL-LOCKOUT', 'dine_in', 50, 5, 55, 'preparing', ?, ?)
+      VALUES ('ORD-RL-LOCKOUT', 'dine_in', 50, 5, 55, 'ready', ?, ?)
     `)
       .run(now(), now());
     const itResLockout = db
       .prepare(`
       INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, total, status, created_at, updated_at)
-      VALUES (?, 'prod-async-1', 'Item', 50, 1, 50, 55, 'preparing', ?, ?)
+      VALUES (?, 'prod-async-1', 'Item', 50, 1, 50, 55, 'ready', ?, ?)
     `)
       .run(oResLockout.lastInsertRowid, now(), now());
     const pinCallsBeforeRateLimit = bcryptCompareCalls;
@@ -388,7 +388,7 @@ async function run() {
     const orderRes = db
       .prepare(`
       INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-      VALUES ('ORD-ASYNC-004', 'dine_in', 80, 8, 88, 'preparing', ?, ?)
+      VALUES ('ORD-ASYNC-004', 'dine_in', 80, 8, 88, 'ready', ?, ?)
     `)
       .run(now(), now());
     const orderId = orderRes.lastInsertRowid;
@@ -404,11 +404,11 @@ async function run() {
     assertEqualOrThrow(resD1.status, 200, 'Order cancel succeeds with candidate #5 PIN');
     assertGreaterThanOrThrow(ticksD1, 0, 'Event loop yielded during order cancel PIN scan');
 
-    // Re-seed preparing order for invalid PIN test
+    // Re-seed ready order for invalid PIN test
     const orderRes2 = db
       .prepare(`
       INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-      VALUES ('ORD-ASYNC-005', 'dine_in', 80, 8, 88, 'preparing', ?, ?)
+      VALUES ('ORD-ASYNC-005', 'dine_in', 80, 8, 88, 'ready', ?, ?)
     `)
       .run(now(), now());
     const orderId2 = orderRes2.lastInsertRowid;
@@ -437,7 +437,7 @@ async function run() {
     const resD3 = await request(app)
       .patch(`/api/orders/${orderId3}/status`)
       .set(cashierAuth)
-      .send({ status: 'preparing', override_pin: '9999' });
+      .send({ status: 'ready', override_pin: '9999' });
     assertEqualOrThrow(
       resD3.status,
       200,
@@ -455,7 +455,7 @@ async function run() {
       const oRes = db
         .prepare(`
         INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-        VALUES (?, 'dine_in', 80, 8, 88, 'preparing', ?, ?)
+        VALUES (?, 'dine_in', 80, 8, 88, 'ready', ?, ?)
       `)
         .run(`ORD-RL-STATUS-${i}`, now(), now());
       await request(app)
@@ -466,7 +466,7 @@ async function run() {
     const oResLockout = db
       .prepare(`
       INSERT INTO orders (order_number, type, subtotal, tax_amount, total, status, created_at, updated_at)
-      VALUES ('ORD-RL-STATUS-LOCKOUT', 'dine_in', 80, 8, 88, 'preparing', ?, ?)
+      VALUES ('ORD-RL-STATUS-LOCKOUT', 'dine_in', 80, 8, 88, 'ready', ?, ?)
     `)
       .run(now(), now());
     const pinCallsBeforeDRateLimit = bcryptCompareCalls;

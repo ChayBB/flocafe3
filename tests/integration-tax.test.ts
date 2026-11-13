@@ -335,10 +335,10 @@ async function main() {
 
     const prepareVoidItemRes = await api(baseUrl, `/api/order-items/${voidedItem.id}/status`, {
       method: 'PATCH',
-      body: { status: 'preparing' },
+      body: { status: 'ready' },
       headers: authHeader,
     });
-    assertEqual(prepareVoidItemRes.status, 200, 'taxable item moved to preparing before void');
+    assertEqual(prepareVoidItemRes.status, 200, 'taxable item moved to ready before void');
 
     const voidItemRes = await api(
       baseUrl,
@@ -1436,10 +1436,10 @@ async function main() {
     // d. Void item
     const prepRes = await api(baseUrl, `/api/order-items/${item2.id}/status`, {
       method: 'PATCH',
-      body: { status: 'preparing' },
+      body: { status: 'ready' },
       headers: authHeader,
     });
-    assertEqual(prepRes.status, 200, 'item 2 moved to preparing');
+    assertEqual(prepRes.status, 200, 'item 2 moved to ready');
     const voidRes = await api(baseUrl, `/api/orders/${mutOrderId}/items/${item2.id}/cancel`, {
       method: 'PATCH',
       body: { override_pin: '1234' },

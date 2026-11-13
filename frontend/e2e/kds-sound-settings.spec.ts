@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { E2E_BASE_URL, E2E_KDS_BASE_URL, E2E_SERVER_APP_BASE_URL } from './helpers/urls';
 import { getE2eToken } from './helpers/test-auth';
+import { acknowledgeExistingKdsAlerts } from './helpers/kitchen-fixture';
 
 type SoundLog = {
   __beeps: number;
@@ -13,6 +14,7 @@ type SoundLog = {
 };
 
 async function recordSounds(page: Page) {
+  await acknowledgeExistingKdsAlerts(page);
   await page.addInitScript(() => {
     const w = window as unknown as SoundLog & Record<string, unknown>;
     w.__beeps = 0;

@@ -38,11 +38,7 @@ test('KDS kanban requires confirmation when skipping preparation stages', async 
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible();
 
-  // 3. Switch to Kanban view
-  await expect(page.getByRole('button', { name: 'Kanban' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
+  await expect(page.getByTestId('kds-column-pending')).toBeVisible();
 
   // Column drop targets
   const getColumn = (name: string) =>

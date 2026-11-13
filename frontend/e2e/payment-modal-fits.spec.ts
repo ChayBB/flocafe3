@@ -1,3 +1,4 @@
+import { printBillFirst } from './helpers/bill-print';
 import { test, expect } from '@playwright/test';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
 import { E2E_PASSWORD, getE2eToken } from './helpers/test-auth';
@@ -39,16 +40,12 @@ for (const viewport of [
     });
     expect(order.status()).toBe(201);
     const created = (await order.json()).order;
-    for (const item of created.items as { id: number }[]) {
-      await page.request.patch(`${BASE}/api/order-items/${item.id}/status`, {
-        headers,
-        data: { status: 'served' },
-      });
-    }
+    await printBillFirst(page.request, headers, created.id);
 
     // The tallest case: a third payment method and split checks on (both restored afterwards).
-    const methods = (await (await page.request.get(`${BASE}/api/payment-methods`, { headers })).json())
-      .payment_methods as {
+    const methods = (
+      await (await page.request.get(`${BASE}/api/payment-methods`, { headers })).json()
+    ).payment_methods as {
       id: number;
       name: string;
       is_active: boolean | number;
@@ -86,7 +83,7 @@ for (const viewport of [
         .filter({ hasText: `#${created.order_number}` })
         .first()
         .click();
-      await page.getByRole('button', { name: /Checkout|Take Payment/ }).click();
+      await page.getByRole('button', { name: /Checkout|Take Payment|Confirm payment/ }).click();
 
       await page.getByRole('button', { name: 'Cash', exact: true }).click();
       const keypad = page.getByLabel('Numeric keypad');
@@ -103,7 +100,11 @@ for (const viewport of [
       }));
       expect(scrollHeight).toBeLessThanOrEqual(clientHeight + 1);
       const lastKey = (await keypad.getByRole('button', { name: '0', exact: true }).boundingBox())!;
-      const payButton = (await page.getByRole('button', { name: /^Pay / }).boundingBox())!;
+      const payButton = (await page
+        .locator('div.fixed')
+        .filter({ has: page.getByRole('heading', { name: 'Payment', exact: true }) })
+        .getByRole('button', { name: /^(?:Pay|Confirm payment) / })
+        .boundingBox())!;
       expect(lastKey.y + lastKey.height).toBeLessThan(payButton.y);
       await expect(keypad.getByRole('button', { name: 'Clear amount' })).toBeVisible();
       await expect(page.getByTestId('split-check-section')).toBeVisible();

@@ -80,18 +80,18 @@ function seedPendingOrderWithItem(db: any, suffix: string) {
   return { orderId, itemId };
 }
 
-function seedPreparingOrderWithItem(db: any, suffix: string) {
+function seedKitchenOrderWithItem(db: any, suffix: string, status = 'preparing') {
   db.prepare(
     `INSERT INTO orders (order_number, type, status, subtotal, tax_amount, total, created_at, updated_at)
-     VALUES (?, 'takeaway', 'preparing', 100, 0, 100, ?, ?)`,
-  ).run(`ORD-RL-PREP-${suffix}`, now(), now());
+     VALUES (?, 'takeaway', ?, 100, 0, 100, ?, ?)`,
+  ).run(`ORD-RL-PREP-${suffix}`, status, now(), now());
   const orderId = (
     db.prepare('SELECT id FROM orders WHERE order_number = ?').get(`ORD-RL-PREP-${suffix}`) as any
   ).id;
   db.prepare(
     `INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, tax_amount, total, status, created_at, updated_at)
-     VALUES (?, 'rl-product', 'RL item', 100, 1, 100, 0, 100, 'preparing', ?, ?)`,
-  ).run(orderId, now(), now());
+     VALUES (?, 'rl-product', 'RL item', 100, 1, 100, 0, 100, ?, ?, ?)`,
+  ).run(orderId, status, now(), now());
   const itemId = (db.prepare('SELECT id FROM order_items WHERE order_id = ?').get(orderId) as any)
     .id;
   return { orderId, itemId };
@@ -481,7 +481,7 @@ async function main() {
     console.log('\n6. PIN guessing remains rate-limited on authenticated local traffic');
     delete process.env.FLO_ORDER_WRITE_RATE_LIMIT_MAX;
     resetPinRateLimitForTests();
-    const prep = seedPreparingOrderWithItem(db, 'PIN-LOCAL');
+    const prep = seedKitchenOrderWithItem(db, 'PIN-LOCAL');
     for (let i = 0; i < 5; i++) {
       const res = await api(baseUrl, `/api/orders/${prep.orderId}/status`, {
         method: 'PATCH',
@@ -627,7 +627,7 @@ async function main() {
     // ── 7c. Item void: failure-only rate limiting ───────────────────────────
     resetPinRateLimitForTests();
     for (let i = 0; i < 6; i++) {
-      const voidOrder = seedPreparingOrderWithItem(db, `VOID-SUCC-${i}`);
+      const voidOrder = seedKitchenOrderWithItem(db, `VOID-SUCC-${i}`, 'ready');
       const res = await api(
         baseUrl,
         `/api/orders/${voidOrder.orderId}/items/${voidOrder.itemId}/cancel`,
@@ -639,7 +639,7 @@ async function main() {
       );
       assertEqualOrThrow(res.status, 200, `valid item void #${i + 1} succeeds (200)`);
     }
-    const voidFailOrder = seedPreparingOrderWithItem(db, 'VOID-FAIL');
+    const voidFailOrder = seedKitchenOrderWithItem(db, 'VOID-FAIL', 'ready');
     for (let i = 0; i < 5; i++) {
       const res = await api(
         baseUrl,

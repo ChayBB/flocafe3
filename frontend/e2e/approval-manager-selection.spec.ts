@@ -339,7 +339,7 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
       });
     }
 
-    // 2. Create a takeaway order with item in preparing status
+    // 2. Create a takeaway order with an item ready to serve
     const orderRes = await page.request.post(`${BASE}/api/orders`, {
       headers,
       data: {
@@ -351,13 +351,13 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
     const { order } = await orderRes.json();
     createdOrderIds.push(order.id);
 
-    // Mark item as preparing so Void Item button is displayed
+    // Mark the item ready so Void Item is available
     const detailRes = await page.request.get(`${BASE}/api/orders/${order.id}`, { headers });
     const detail = await detailRes.json();
     const itemId = detail.order.items[0].id;
     const patchRes = await page.request.patch(`${BASE}/api/order-items/${itemId}/status`, {
       headers,
-      data: { status: 'preparing' },
+      data: { status: 'ready' },
     });
     expect(patchRes.ok()).toBeTruthy();
 
@@ -398,7 +398,7 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
     await expect(cancelMenuItem).toBeVisible();
     await cancelMenuItem.click();
 
-    // Cancel modal for orders with in-progress items requires PIN override
+    // Cancel modal for orders with ready items requires PIN override
     const cancelApprover = page.locator('#cancelApproverSelect');
     await expect(cancelApprover).toBeVisible();
     const confirmCancelBtn = page.getByRole('button', { name: 'Confirm Cancel', exact: true });
@@ -422,7 +422,7 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
       });
     });
 
-    // Create an order and mark item as preparing
+    // Create an order and mark the item ready
     const orderRes = await page.request.post(`${BASE}/api/orders`, {
       headers,
       data: {
@@ -438,7 +438,7 @@ test.describe('Explicit Manager Selection for Approvals and Kitchen Override', (
     const itemId = detail.order.items[0].id;
     await page.request.patch(`${BASE}/api/order-items/${itemId}/status`, {
       headers,
-      data: { status: 'preparing' },
+      data: { status: 'ready' },
     });
 
     await page.goto(`${BASE}/orders`);

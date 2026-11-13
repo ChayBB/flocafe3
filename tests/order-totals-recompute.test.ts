@@ -389,7 +389,7 @@ async function main() {
         'pre-cancel: 300 / 13.5 / 30 / 333.5',
       );
 
-      db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(itemId);
+      db.prepare("UPDATE order_items SET status = 'ready' WHERE id = ?").run(itemId);
       const voided = await api(baseUrl, `/api/orders/${orderId}/items/${itemId}/cancel`, {
         method: 'PATCH',
         body: { override_pin: '1234' },

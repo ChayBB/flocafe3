@@ -346,6 +346,15 @@ async function run() {
       if (request === '@/components/settings/PermissionMatrix') {
         return { PermissionMatrix: () => null };
       }
+      if (request === '@/components/staff/AttendancePanel') {
+        return { AttendancePanel: () => null };
+      }
+      if (request === '@/components/staff/ZoneResponsibilityPanel') {
+        return { ZoneResponsibilityPanel: () => null };
+      }
+      if (request === '@/components/staff/StaffProfileDialog') {
+        return { StaffProfileDialog: () => null };
+      }
       if (request === '@/components/settings/PermissionAuditLog') {
         return { PermissionAuditLog: () => null };
       }

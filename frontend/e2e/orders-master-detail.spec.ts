@@ -316,6 +316,12 @@ test.describe('orders master/detail is the default layout', () => {
   }) => {
     const order = await createTakeaway(page, 'Live completed selection check');
     await login(page);
+    await page.evaluate(() => {
+      localStorage.setItem(
+        'flo-printer-settings',
+        JSON.stringify({ state: { printMethod: 'browser' }, version: 0 }),
+      );
+    });
     await page.goto(`${BASE}/orders`);
     await page.getByRole('button', { name: 'Unpaid' }).click();
     const masterRow = page.getByRole('button').filter({ hasText: `#${order.order_number}` });
@@ -345,12 +351,12 @@ test.describe('orders master/detail is the default layout', () => {
     await expect(page.getByText('This order is no longer in the current list.')).toHaveCount(0);
     await expect(masterRow).toHaveCount(0);
     await page.evaluate(() => {
-      const printDocument = document.implementation.createHTMLDocument('Bill');
-      window.open = (() => ({
-        document: printDocument,
-        print() {},
-        close() {},
-      })) as unknown as typeof window.open;
+      const open = window.open.bind(window);
+      window.open = ((...args: Parameters<typeof window.open>) => {
+        const popup = open(...args);
+        if (popup) popup.print = () => {};
+        return popup;
+      }) as typeof window.open;
     });
     await page
       .getByTestId('orders-detail-panel')
@@ -1492,7 +1498,7 @@ test.describe('owner live order item edit and superseded cancellation handling',
     });
   }
 
-  for (const status of ['pending', 'preparing'] as const) {
+  for (const status of ['pending', 'ready'] as const) {
     test(`card layout blocks ${status} item mutations until its saved edit is resolved`, async ({
       page,
     }) => {
@@ -1501,7 +1507,7 @@ test.describe('owner live order item edit and superseded cancellation handling',
       const originalLayout = await readOrdersLayout(page);
       try {
         await setOrdersLayout(page, 'cards');
-        if (status === 'preparing') {
+        if (status === 'ready') {
           const started = await page.request.patch(
             `${BASE}/api/kds/items/${order.items[0].id}/status`,
             {

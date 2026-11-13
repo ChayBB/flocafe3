@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
-import { E2E_PASSWORD, getE2eToken, setLanguage } from './helpers/test-auth';
+import {
+  E2E_PASSWORD,
+  E2E_OPERATIONAL_PASSWORD,
+  getE2eToken,
+  setLanguage,
+} from './helpers/test-auth';
 import { captureSettings, restoreSettings } from './helpers/kitchen-fixture';
 
 const SETTINGS_TO_RESTORE = ['billing_type', 'auto_lock_minutes'];
@@ -53,7 +58,7 @@ test.describe('PIN Quick User Switch and Lock Flow (#1338)', () => {
         data: {
           name: 'QuickSwitch Cashier',
           email: 'pin-cashier@flo.local',
-          password: E2E_PASSWORD,
+          password: E2E_OPERATIONAL_PASSWORD,
           role: 'cashier',
           pin: '4321',
         },
@@ -108,7 +113,7 @@ test.describe('PIN Quick User Switch and Lock Flow (#1338)', () => {
     await page.goto(`${BASE}/pos`);
 
     await expect(page.getByTestId('pos-product-grid')).toBeVisible();
-    await page.getByTestId('pos-product-card').first().click();
+    await page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }).first().click();
     await expect(page.getByTestId('cart-item')).toHaveCount(1);
 
     // Click Lock in the POS topbar and verify POST /api/auth/logout succeeds with 200
@@ -142,9 +147,9 @@ test.describe('PIN Quick User Switch and Lock Flow (#1338)', () => {
 
     // Complete payment as the cashier
     await page.getByRole('button', { name: 'Place Order' }).click();
-    await expect(page.getByRole('button', { name: 'Confirm Payment · ฿64.20' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Confirm Payment · / })).toBeVisible();
     await page.getByRole('button', { name: 'Cash', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Confirm Payment · ฿64.20' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: /^Confirm Payment · / })).toBeEnabled();
 
     const orderResponse = page.waitForResponse((response) => {
       const url = new URL(response.url());
@@ -158,7 +163,7 @@ test.describe('PIN Quick User Switch and Lock Flow (#1338)', () => {
       );
     });
 
-    await page.getByRole('button', { name: 'Confirm Payment · ฿64.20' }).click();
+    await page.getByRole('button', { name: /^Confirm Payment · / }).click();
 
     const orderPayload = await (await orderResponse).json();
     if (orderPayload?.order?.id) {

@@ -65,7 +65,7 @@ test('KDS settings switch columns off so the remaining ones sit together and ite
   const gear = page.getByTestId('kds-settings-button');
   const gearBox = (await gear.boundingBox())!;
   expect(gearBox.x).toBeGreaterThan(
-    (await page.getByRole('button', { name: 'Kanban' }).boundingBox())!.x,
+    (await page.getByTestId('kds-screen-mode-toggle').boundingBox())!.x,
   );
   expect(gearBox.x).toBeLessThan(
     (await page.getByTitle('Logout', { exact: true }).boundingBox())!.x,

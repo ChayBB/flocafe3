@@ -370,7 +370,7 @@ async function main() {
       ).data.order;
       const itemId = order.items[0].id;
       assertEqualOrThrow(stockOf(db, OAT), before - 6, 'the line debited 6');
-      db.prepare("UPDATE order_items SET status = 'preparing' WHERE id = ?").run(itemId);
+      db.prepare("UPDATE order_items SET status = 'ready' WHERE id = ?").run(itemId);
       const movementsBefore = movementsFor(db, OAT).length;
 
       const res = await api(baseUrl, `/api/orders/${order.id}/items/${itemId}/cancel`, {
@@ -378,7 +378,7 @@ async function main() {
         headers: owner.authHeader,
         body: { override_pin: '1234' }, // seedManagerUser's manager PIN
       });
-      assertEqualOrThrow(res.status, 200, 'the in-progress line voids');
+      assertEqualOrThrow(res.status, 200, 'the ready line voids');
       assertEqualOrThrow(
         (db.prepare('SELECT status FROM order_items WHERE id = ?').get(itemId) as any).status,
         'voided',

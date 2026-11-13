@@ -98,6 +98,7 @@ async function run(): Promise<void> {
       order_number: 'ORD-KOT-COLD-001',
       type: 'dine_in',
       status: 'pending',
+      table: { name: '27' },
       created_at: '2026-08-22T18:42:00Z',
       items: [
         {
@@ -114,15 +115,13 @@ async function run(): Promise<void> {
 
     check('KOT browser print produced HTML', captured.length === 1);
     const html = captured[0] ?? '';
-    // The fixed th policy's banner label — proof the th bundle was loaded
-    // before generation instead of falling back to English.
     check(
       'KOT labels render in the fixed th language on cold start',
-      html.includes('ใบสั่งอาหาร'),
+      html.includes('โต๊ะ'),
       html.slice(0, 200),
     );
-    check('KOT labels do NOT fall back to English', !html.includes('KITCHEN ORDER TICKET'));
-    check('order number still rendered', html.includes('ORD-KOT-COLD-001'));
+    check('KOT labels do NOT fall back to English', !html.includes('Table'));
+    check('table number still rendered', html.includes('27'));
   } finally {
     (printerService as any).printViaBrowser = originalPrintViaBrowser;
     // Restore store defaults so later suites in the same process are unaffected.

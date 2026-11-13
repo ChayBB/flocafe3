@@ -781,8 +781,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
         .locator('div.min-h-14')
         .filter({ hasText: 'Hazelnut Syrup' })
         .first();
-      const hazelnutPlus = hazelnutRow.locator('button').last();
-      await expect(hazelnutPlus).toBeDisabled();
+      await expect(hazelnutRow).toHaveCount(0);
 
       await page.screenshot({
         path: path.join(SCREENSHOTS_DIR, 'addon-modal-max-selection-plus-disabled.png'),

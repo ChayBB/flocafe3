@@ -736,7 +736,7 @@ async function run(): Promise<void> {
         headers: ownerAuth,
       });
       const orderId = createOrder.data?.order?.id;
-      db.prepare("UPDATE order_items SET status = 'preparing' WHERE order_id = ?").run(orderId);
+      db.prepare("UPDATE order_items SET status = 'ready' WHERE order_id = ?").run(orderId);
 
       const genBill = await api(baseUrl, '/api/bills/generate', {
         method: 'POST',

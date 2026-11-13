@@ -104,7 +104,7 @@ function installConcurrentOrderBoundaryMutation(
           const state = new Int32Array(workerData.signal);
           try {
             const db = new Database(workerData.dbPath);
-            db.prepare("UPDATE orders SET status = 'preparing', updated_at = ? WHERE id = ?")
+            db.prepare("UPDATE orders SET status = 'ready', updated_at = ? WHERE id = ?")
               .run(new Date().toISOString().replace('T', ' ').slice(0, 19), workerData.orderId);
             db.close();
             Atomics.store(state, 0, 1);
@@ -364,7 +364,7 @@ async function main() {
       'terminal transitions leave completed state intact',
     );
 
-    // Cancellation supported from every active state (pending, preparing, ready, served)
+    // Preparing orders stay protected; the other active states can be cancelled with approval.
     for (const activeState of ['pending', 'preparing', 'ready', 'served']) {
       const activeOrder = await api(baseUrl, '/api/orders', {
         method: 'POST',
@@ -384,7 +384,11 @@ async function main() {
         headers: authHeader,
         body: { status: 'cancelled', override_pin: '1234' },
       });
-      assertEqual(canRes.status, 200, `cancellation from ${activeState} is supported`);
+      assertEqual(
+        canRes.status,
+        activeState === 'preparing' ? 409 : 200,
+        `cancellation policy from ${activeState}`,
+      );
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -468,8 +472,8 @@ async function main() {
     }
     assertEqual(
       pinRaceCancel.status,
-      400,
-      'transaction-local status requires the current cancellation PIN policy',
+      409,
+      'transaction-local preparing status blocks cancellation',
     );
     assertEqual(
       db.prepare('SELECT status FROM orders WHERE id = ?').get(pinRaceOrderId).status,
@@ -634,15 +638,15 @@ async function main() {
     const itemA = order3.data.order.items.find((i: any) => i.product_id === 'prod-track-1');
     const itemB = order3.data.order.items.find((i: any) => i.product_id === 'prod-track-2');
 
-    // Establish that Item A itself is in preparing status using order-items API
+    // A ready item is voided as waste rather than returned to stock.
     const itemAStatusRes = await api(baseUrl, `/api/order-items/${itemA.id}/status`, {
       method: 'PATCH',
       headers: authHeader,
-      body: { status: 'preparing' },
+      body: { status: 'ready' },
     });
-    assertEqual(itemAStatusRes.status, 200, 'Item A moved to preparing via order-items API');
+    assertEqual(itemAStatusRes.status, 200, 'Item A moved to ready via order-items API');
 
-    // Void Item A (in progress void requires PIN)
+    // Voiding Item A requires a PIN.
     db.prepare(
       "UPDATE settings SET value = '1', updated_at = ? WHERE key = 'cloud_orders_enabled'",
     ).run(new Date().toISOString());
@@ -727,6 +731,16 @@ async function main() {
       .get('prod-track-2').stock_quantity;
 
     // Cancel whole order 3
+    const readyToCancel = await api(baseUrl, `/api/orders/${order3Id}/status`, {
+      method: 'PATCH',
+      headers: authHeader,
+      body: { status: 'ready' },
+    });
+    assertEqual(
+      readyToCancel.status,
+      200,
+      'the remaining order leaves preparing before cancellation',
+    );
     const cancelOrder3Res = await api(baseUrl, `/api/orders/${order3Id}/status`, {
       method: 'PATCH',
       headers: authHeader,

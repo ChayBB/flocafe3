@@ -763,7 +763,7 @@ async function run() {
 
   db.prepare(`
     INSERT INTO orders (order_number, type, table_id, subtotal, tax_amount, service_charge, charges_breakdown, total, status, user_id, created_at, updated_at)
-    VALUES ('ORD-PIN-001', 'dine_in', ?, 100, 0, 10, ?, 110, 'preparing', ?, ?, ?)
+    VALUES ('ORD-PIN-001', 'dine_in', ?, 100, 0, 10, ?, 110, 'ready', ?, ?, ?)
   `).run(tableId, initialChargesBreakdown, cashierId, ts, ts);
   const orderId = (
     db.prepare("SELECT id FROM orders WHERE order_number = 'ORD-PIN-001'").get() as any
@@ -771,7 +771,7 @@ async function run() {
 
   db.prepare(`
     INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, subtotal, tax_amount, total, status, created_at, updated_at)
-    VALUES (?, ?, 'Espresso', 1, 100, 100, 0, 100, 'preparing', ?, ?)
+    VALUES (?, ?, 'Espresso', 1, 100, 100, 0, 100, 'ready', ?, ?)
   `).run(orderId, prodId, ts, ts);
   const orderItemId = (
     db.prepare('SELECT id FROM order_items WHERE order_id = ?').get(orderId) as any
@@ -825,7 +825,7 @@ async function run() {
     'Order item discount rejects cashier PIN with 403',
   );
 
-  // (d) Item void (cancel in-progress preparing item) with cashier PIN -> 403
+  // (d) Item void (cancel ready item) with cashier PIN -> 403
   resetOrderPinRateLimit();
   const itemVoidCashierScan = await request(app)
     .patch(`/api/orders/${orderId}/items/${orderItemId}/cancel`)
@@ -834,7 +834,7 @@ async function run() {
   assertEqualOrThrow(
     itemVoidCashierScan.status,
     403,
-    'In-progress item void rejects cashier PIN (scan path) with 403',
+    'Ready item void rejects cashier PIN (scan path) with 403',
   );
 
   const itemVoidCashierTargeted = await request(app)
@@ -844,19 +844,19 @@ async function run() {
   assertEqualOrThrow(
     itemVoidCashierTargeted.status,
     403,
-    'In-progress item void rejects cashier PIN (targeted approver_id) with 403',
+    'Ready item void rejects cashier PIN (targeted approver_id) with 403',
   );
 
   db.prepare(`
     INSERT INTO orders (order_number, type, status, subtotal, tax_amount, total, created_at, updated_at)
-    VALUES ('ORD-PIN-VOID-002', 'dine_in', 'preparing', 100, 0, 100, ?, ?)
+    VALUES ('ORD-PIN-VOID-002', 'dine_in', 'ready', 100, 0, 100, ?, ?)
   `).run(ts, ts);
   const voidOrder2Id = (
     db.prepare("SELECT id FROM orders WHERE order_number = 'ORD-PIN-VOID-002'").get() as any
   ).id;
   db.prepare(`
     INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, subtotal, tax_amount, total, status, created_at, updated_at)
-    VALUES (?, ?, 'Espresso', 1, 100, 100, 0, 100, 'preparing', ?, ?)
+    VALUES (?, ?, 'Espresso', 1, 100, 100, 0, 100, 'ready', ?, ?)
   `).run(voidOrder2Id, prodId, ts, ts);
   const voidOrder2ItemId = (
     db.prepare('SELECT id FROM order_items WHERE order_id = ?').get(voidOrder2Id) as any
@@ -874,10 +874,10 @@ async function run() {
   assertEqualOrThrow(
     itemVoidTrimmedManager.status,
     200,
-    'In-progress item void succeeds with whitespace-trimmed manager approver_id and empty alias',
+    'Ready item void succeeds with whitespace-trimmed manager approver_id and empty alias',
   );
 
-  // (e) Order-status override (cancel preparing order, complete unpaid order) with cashier PIN -> 403
+  // (e) Order-status override (cancel ready order, complete unpaid order) with cashier PIN -> 403
   resetOrderPinRateLimit();
   const orderCancelCashier = await request(app)
     .patch(`/api/orders/${orderId}/status`)

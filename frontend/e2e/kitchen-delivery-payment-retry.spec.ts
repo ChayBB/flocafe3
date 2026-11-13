@@ -1,3 +1,4 @@
+import { printBillFirst } from './helpers/bill-print';
 import { test, expect } from '@playwright/test';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
 import {
@@ -21,7 +22,9 @@ test.afterEach(async ({ page }) => {
   await setOrdersLayout(page, ordersLayoutBefore);
 });
 
-test('payment can retry without a manager PIN after kitchen delivery completes', async ({ page }) => {
+test('payment can retry without a manager PIN after kitchen delivery completes', async ({
+  page,
+}) => {
   await page.goto(`${BASE}/auth/login`);
   await page.locator('#email').fill('manager@flo.local');
   await page.locator('#password').fill('E2ePass123!');
@@ -31,7 +34,11 @@ test('payment can retry without a manager PIN after kitchen delivery completes',
   const token = await page.evaluate(() => localStorage.getItem('token'));
   expect(token).toBeTruthy();
   const headers = { Authorization: `Bearer ${token}` };
-  const settingKeys = ['billing_type', 'kds_enabled', 'require_kitchen_delivered_before_settlement'];
+  const settingKeys = [
+    'billing_type',
+    'kds_enabled',
+    'require_kitchen_delivered_before_settlement',
+  ];
   const originalSettings = new Map<string, string>();
   for (const key of settingKeys) {
     const response = await page.request.get(`${BASE}/api/settings/${key}`, { headers });
@@ -41,7 +48,10 @@ test('payment can retry without a manager PIN after kitchen delivery completes',
   }
 
   const setSetting = async (key: string, value: string) => {
-    const response = await page.request.put(`${BASE}/api/settings/${key}`, { headers, data: { value } });
+    const response = await page.request.put(`${BASE}/api/settings/${key}`, {
+      headers,
+      data: { value },
+    });
     expect(response.ok(), `setting ${key}=${value} must save`).toBeTruthy();
   };
 
@@ -61,18 +71,37 @@ test('payment can retry without a manager PIN after kitchen delivery completes',
     const detail = await detailResponse.json();
     const itemId = detail.order.items[0].id;
 
+    await printBillFirst(page.request, headers, order.id);
+    expect(
+      (
+        await page.request.patch(`${BASE}/api/order-items/${itemId}/status`, {
+          headers,
+          data: { status: 'pending' },
+        })
+      ).ok(),
+    ).toBeTruthy();
+
     await page.goto(`${BASE}/orders`);
-    await page.getByPlaceholder(/search/i).first().fill(order.order_number);
+    await page
+      .getByPlaceholder(/search/i)
+      .first()
+      .fill(order.order_number);
     await expect(page.getByText(`#${order.order_number}`)).toBeVisible();
-    await page.getByRole('button', { name: 'Checkout', exact: true }).click();
+    await page.getByRole('button', { name: /Checkout|Confirm payment/ }).click();
     await expect(page.getByRole('heading', { name: 'Payment' })).toBeVisible();
     await page.getByRole('button', { name: 'Cash', exact: true }).click();
 
-    const payButton = page.getByRole('button', { name: /^Pay / });
+    const payButton = page
+      .locator('div.fixed')
+      .filter({ has: page.getByRole('heading', { name: 'Payment', exact: true }) })
+      .getByRole('button', { name: /^(?:Pay|Confirm payment) / });
     await expect(payButton).toBeEnabled();
     const isPaymentRequest = (response: { url(): string; request(): { method(): string } }) => {
       const url = new URL(response.url());
-      return response.request().method() === 'POST' && /^\/api\/bills\/[^/]+\/payments$/.test(url.pathname);
+      return (
+        response.request().method() === 'POST' &&
+        /^\/api\/bills\/[^/]+\/payments$/.test(url.pathname)
+      );
     };
     const blockedPaymentPromise = page.waitForResponse(isPaymentRequest);
     await payButton.click();
@@ -98,7 +127,7 @@ test('payment can retry without a manager PIN after kitchen delivery completes',
     const paymentRequest = settledPayment.request().postDataJSON();
     expect(paymentRequest.override_pin).toBeUndefined();
     expect((await settledPayment.json()).bill.payment_status).toBe('paid');
-    await expect(page.getByRole('button', { name: 'Done' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Payment', exact: true })).toBeHidden();
     await expect(managerPin).toHaveCount(0);
   } finally {
     for (const [key, value] of originalSettings) {
@@ -107,7 +136,9 @@ test('payment can retry without a manager PIN after kitchen delivery completes',
   }
 });
 
-test('zero-balance dine-in checkout can settle from the payment modal after kitchen delivery', async ({ page }) => {
+test('zero-balance dine-in checkout can settle from the payment modal after kitchen delivery', async ({
+  page,
+}) => {
   await page.goto(`${BASE}/auth/login`);
   await page.locator('#email').fill('manager@flo.local');
   await page.locator('#password').fill('E2ePass123!');
@@ -129,18 +160,26 @@ test('zero-balance dine-in checkout can settle from the payment modal after kitc
     const payload = await response.json();
     originalSettings.set(key, payload.setting.value);
   }
-  const discountSettingsResponse = await page.request.get(`${BASE}/api/settings/discount`, { headers });
+  const discountSettingsResponse = await page.request.get(`${BASE}/api/settings/discount`, {
+    headers,
+  });
   expect(discountSettingsResponse.ok()).toBeTruthy();
   const originalDiscountSettings = await discountSettingsResponse.json();
 
   let tableId: string | undefined;
   const tableNumber = `Kitchen zero ${Date.now()}`;
   const setSetting = async (key: string, value: string) => {
-    const response = await page.request.put(`${BASE}/api/settings/${key}`, { headers, data: { value } });
+    const response = await page.request.put(`${BASE}/api/settings/${key}`, {
+      headers,
+      data: { value },
+    });
     expect(response.ok(), `setting ${key}=${value} must save`).toBeTruthy();
   };
   const setDiscountSettings = async (settings: Record<string, unknown>) => {
-    const response = await page.request.put(`${BASE}/api/settings/discount`, { headers, data: settings });
+    const response = await page.request.put(`${BASE}/api/settings/discount`, {
+      headers,
+      data: settings,
+    });
     expect(response.ok(), 'discount settings must save').toBeTruthy();
   };
 
@@ -148,7 +187,11 @@ test('zero-balance dine-in checkout can settle from the payment modal after kitc
     await setSetting('billing_type', 'postpaid');
     await setSetting('kds_enabled', 'true');
     await setSetting('require_kitchen_delivered_before_settlement', 'true');
-    await setDiscountSettings({ ...originalDiscountSettings, discount_mode: 'both', discount_max_amount: 0 });
+    await setDiscountSettings({
+      ...originalDiscountSettings,
+      discount_mode: 'both',
+      discount_max_amount: 0,
+    });
 
     const tableResponse = await page.request.post(`${BASE}/api/tables`, {
       headers,
@@ -184,23 +227,47 @@ test('zero-balance dine-in checkout can settle from the payment modal after kitc
       data: { discount_type: 'amount', discount_value: Number(detail.order.subtotal) },
     });
     expect(discountResponse.ok()).toBeTruthy();
-    const currentBillResponse = await page.request.get(`${BASE}/api/bills/order/${order.id}`, { headers });
+    const currentBillResponse = await page.request.get(`${BASE}/api/bills/order/${order.id}`, {
+      headers,
+    });
     expect(currentBillResponse.ok()).toBeTruthy();
     const { bill } = await currentBillResponse.json();
     expect(Number(bill.total)).toBe(0);
     expect(bill.payment_status).toBe('unpaid');
 
+    await printBillFirst(page.request, headers, order.id);
+    expect(
+      (
+        await page.request.patch(`${BASE}/api/order-items/${itemId}/status`, {
+          headers,
+          data: { status: 'pending' },
+        })
+      ).ok(),
+    ).toBeTruthy();
+
     await page.goto(`${BASE}/orders`);
-    await page.getByPlaceholder(/search/i).first().fill(order.order_number);
+    await page
+      .getByPlaceholder(/search/i)
+      .first()
+      .fill(order.order_number);
     await expect(page.getByText(`#${order.order_number}`)).toBeVisible();
-    await page.getByRole('button', { name: 'Checkout', exact: true }).click();
+    await page.getByRole('button', { name: /Checkout|Confirm payment/ }).click();
     await expect(page.getByRole('heading', { name: 'Payment' })).toBeVisible();
 
-    const payButton = page.getByRole('button', { name: /^Pay / });
+    const payButton = page
+      .locator('div.fixed')
+      .filter({ has: page.getByRole('heading', { name: 'Payment', exact: true }) })
+      .getByRole('button', { name: /^(?:Pay|Confirm payment) / });
     await expect(payButton).toBeEnabled();
-    const isZeroBalancePaymentRequest = (response: { url(): string; request(): { method(): string } }) => {
+    const isZeroBalancePaymentRequest = (response: {
+      url(): string;
+      request(): { method(): string };
+    }) => {
       const url = new URL(response.url());
-      return response.request().method() === 'POST' && /^\/api\/bills\/[^/]+\/payments?$/.test(url.pathname);
+      return (
+        response.request().method() === 'POST' &&
+        /^\/api\/bills\/[^/]+\/payments?$/.test(url.pathname)
+      );
     };
     const blockedPaymentPromise = page.waitForResponse(isZeroBalancePaymentRequest);
     await payButton.click();
@@ -227,12 +294,14 @@ test('zero-balance dine-in checkout can settle from the payment modal after kitc
     expect(paymentRequest).toMatchObject({ method: 'cash', amount: null });
     expect(paymentRequest.override_pin).toBeUndefined();
     expect((await settledPayment.json()).bill.payment_status).toBe('paid');
-    await expect(page.getByRole('button', { name: 'Done' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Payment', exact: true })).toBeHidden();
 
     const tablesResponse = await page.request.get(`${BASE}/api/tables`, { headers });
     expect(tablesResponse.ok()).toBeTruthy();
     const { tables } = await tablesResponse.json();
-    expect(tables.find((candidate: { id: string }) => candidate.id === tableId)?.status).toBe('available');
+    expect(tables.find((candidate: { id: string }) => candidate.id === tableId)?.status).toBe(
+      'available',
+    );
   } finally {
     await setDiscountSettings(originalDiscountSettings);
     for (const [key, value] of originalSettings) {

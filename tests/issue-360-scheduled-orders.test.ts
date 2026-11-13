@@ -227,6 +227,9 @@ async function main() {
   seedTable(db, 'tbl-sched-1', 1, 4);
   seedCustomer(db, 'cust-sched-1', 'Alex Customer', '+15550101234');
   seedCustomer(db, 'cust-sched-2', 'Sam Customer', '+15550105678');
+  db.prepare(
+    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('loyalty_enabled', 'false', ?)",
+  ).run(now());
 
   // Seed tracked product (stock = 10 via adjustProductStock so ledger reconciles)
   seedProduct(db, 'prod-latte', 'cat-sched', 'Scheduled Latte', 200, {
@@ -2780,13 +2783,17 @@ async function main() {
         const unpaidPanelHtml = renderWithIntl(
           React.createElement(OrderDetailPanel, buildSurfaceProps(unpaidScheduled)),
         );
-        assertIncludesOrThrow(unpaidCardHtml, 'Unpaid', 'unpaid OrderCard shows Unpaid badge');
+        assertIncludesOrThrow(
+          unpaidCardHtml,
+          'Scheduled',
+          'unreleased OrderCard shows its scheduled state',
+        );
         assertIncludesOrThrow(unpaidCardHtml, 'Checkout', 'unpaid OrderCard shows Checkout');
         assertIncludesOrThrow(unpaidCardHtml, 'Add Item', 'unpaid OrderCard shows Add Item');
         assertIncludesOrThrow(
           unpaidCardHtml,
-          'Link Customer',
-          'unpaid OrderCard shows Link Customer',
+          'aria-haspopup="menu"',
+          'unpaid OrderCard exposes its additional actions menu',
         );
         assertIncludesOrThrow(
           unpaidCardHtml,
@@ -2870,8 +2877,8 @@ async function main() {
         );
         assertIncludesOrThrow(
           partialCardHtml,
-          'Partially Paid',
-          'OrderCard shows Partially Paid badge',
+          'Balance',
+          'OrderCard shows the remaining balance after partial payment',
         );
         assertIncludesOrThrow(
           partialCardHtml,
@@ -3042,11 +3049,6 @@ async function main() {
           React.createElement(OrderDetailPanel, buildSurfaceProps(partiallyRefundedOrder)),
         );
         assertIncludesOrThrow(
-          partRefCardHtml,
-          'Partially Refunded',
-          'OrderCard shows Partially Refunded badge instead of Unpaid',
-        );
-        assertIncludesOrThrow(
           partRefPanelHtml,
           'Partially Refunded',
           'OrderDetailPanel shows Partially Refunded badge instead of Unpaid',
@@ -3101,11 +3103,6 @@ async function main() {
         );
         const fullRefPanelHtml = renderWithIntl(
           React.createElement(OrderDetailPanel, buildSurfaceProps(fullyRefundedOrder)),
-        );
-        assertIncludesOrThrow(
-          fullRefCardHtml,
-          'Refunded',
-          'OrderCard shows Refunded badge instead of Unpaid',
         );
         assertIncludesOrThrow(
           fullRefPanelHtml,

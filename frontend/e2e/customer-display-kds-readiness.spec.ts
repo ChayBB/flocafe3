@@ -118,9 +118,7 @@ async function openKdsInTabsView(page: Page): Promise<void> {
     await page.getByTestId('kds-login-submit').click();
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible({ timeout: 30_000 });
-  const tabsButton = page.getByRole('button', { name: 'Tabs', exact: true });
-  await tabsButton.click();
-  await expect(tabsButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('kds-column-pending')).toBeVisible();
 }
 
 async function advanceKdsItemOnce(
@@ -129,11 +127,9 @@ async function advanceKdsItemOnce(
   orderNumber: string,
   productName: string,
 ): Promise<void> {
-  await kdsPage
-    .getByRole('button', { name: new RegExp(`^${fromTabLabel}\\b`) })
-    .first()
-    .click();
+  const status = { Waiting: 'pending', Preparing: 'preparing', Ready: 'ready' }[fromTabLabel];
   const orderCard = kdsPage
+    .getByTestId(`kds-column-${status}`)
     .locator('div.bg-card')
     .filter({ hasText: `#${orderNumber}` })
     .first();

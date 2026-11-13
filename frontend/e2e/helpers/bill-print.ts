@@ -3,11 +3,8 @@ import { E2E_BASE_URL as BASE } from './urls';
 
 const TERMINAL = ['cancelled', 'voided', 'void_adjustment', 'refunded', 'completed'];
 
-/**
- * Orders asks the cashier to print an unpaid bill before taking payment. This serves and
- * confirms every live item, then records the cashier's print, so the order offers Confirm payment.
- */
-export async function printBillFirst(
+/** Confirms the order's live items reached the table before testing bill printing. */
+export async function confirmOrderServed(
   request: APIRequestContext,
   headers: Record<string, string>,
   orderId: number,
@@ -32,6 +29,15 @@ export async function printBillFirst(
     });
     expect(confirmed.ok(), await confirmed.text()).toBeTruthy();
   }
+}
+
+/** Records the cashier's bill request so Orders offers Confirm payment. */
+export async function printBillFirst(
+  request: APIRequestContext,
+  headers: Record<string, string>,
+  orderId: number,
+): Promise<void> {
+  await confirmOrderServed(request, headers, orderId);
   const printed = await request.post(`${BASE}/api/orders/${orderId}/bill-request`, {
     headers,
     data: { cashier: true },

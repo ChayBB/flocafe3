@@ -46,10 +46,14 @@ if (typeof testScript !== 'string' || testScript.length === 0) {
   process.exit(2);
 }
 
-const suitePattern = /(?:node\s+scripts\/run-test\.cjs\s+)?npm\s+run\s+(test:[\w-]+)/g;
+const expandedTestScript = testScript.replace(/npm\s+run\s+(test:standard:\d+)\b/g, (_, name) => {
+  if (typeof pkg.scripts[name] !== 'string') throw new Error(`Missing test batch: ${name}`);
+  return pkg.scripts[name];
+});
+const suitePattern = /(?:node\s+scripts\/run-test\.cjs\s+)?npm\s+run\s+(test:[\w:-]+)/g;
 const suites = [];
 let match;
-while ((match = suitePattern.exec(testScript)) !== null) {
+while ((match = suitePattern.exec(expandedTestScript)) !== null) {
   if (!suites.includes(match[1])) suites.push(match[1]);
 }
 

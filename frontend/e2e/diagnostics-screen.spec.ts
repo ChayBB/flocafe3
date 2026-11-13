@@ -73,9 +73,10 @@ test('operator sees a captured failure and the copy-for-support action', async (
 
   await copyButton.click();
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
-  expect(clipboard, 'the clipboard holds exactly the text shown on screen').toBe(
-    await preview.innerText(),
-  );
+  expect(
+    clipboard.replace(/\r\n/g, '\n'),
+    'the clipboard holds exactly the text shown on screen',
+  ).toBe(await preview.innerText());
 
   const logTailToggle = page.getByRole('switch', { name: 'Also include the log file' });
   await expect(logTailToggle, 'the log tail is a separate control').toBeVisible();

@@ -109,6 +109,10 @@ test('floorplan editor: drag table onto map, save, persist after reload', async 
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
   await page.getByRole('button', { name: 'Floor plan' }).click();
+  await page
+    .getByTestId('floorplan-floor-tabs')
+    .getByRole('button', { name: /^Ground(?:\s|$)/ })
+    .click();
   await page.getByRole('button', { name: 'Edit layout' }).click();
   await expect(canvas).toBeVisible();
   const chipT1 = page.getByTestId('floorplan-chip-T1');
@@ -185,6 +189,10 @@ test('floorplan editor: drag table back to tray unplaces it', async ({ page, req
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
   await page.getByRole('button', { name: 'Floor plan' }).click();
+  await page
+    .getByTestId('floorplan-floor-tabs')
+    .getByRole('button', { name: /^Ground(?:\s|$)/ })
+    .click();
   await page.getByRole('button', { name: 'Edit layout' }).click();
   await expect(page.getByTestId('floorplan-tray-T1')).toBeVisible();
   await expect(page.getByTestId('floorplan-chip-T1')).toBeHidden();

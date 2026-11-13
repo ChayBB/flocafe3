@@ -53,7 +53,7 @@ function seedUser(db: any, id: string, role: string, pin?: string) {
   };
 }
 
-function seedOrderWithItem(db: any, suffix: string, ownerId?: string) {
+function seedOrderWithItem(db: any, suffix: string, ownerId?: string, itemStatus = 'ready') {
   db.prepare(`INSERT INTO orders (order_number, type, status, subtotal, total, user_id, created_at, updated_at)
     VALUES (?, 'takeaway', 'pending', 100, 100, ?, ?, ?)`).run(
     `ORD-AUTHZ-${suffix}`,
@@ -65,8 +65,9 @@ function seedOrderWithItem(db: any, suffix: string, ownerId?: string) {
     db.prepare('SELECT id FROM orders WHERE order_number = ?').get(`ORD-AUTHZ-${suffix}`) as any
   ).id;
   db.prepare(`INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, tax_amount, total, status, created_at, updated_at)
-    VALUES (?, 'authz-product', 'Authz item', 100, 1, 100, 0, 100, 'preparing', ?, ?)`).run(
+    VALUES (?, 'authz-product', 'Authz item', 100, 1, 100, 0, 100, ?, ?, ?)`).run(
     orderId,
+    itemStatus,
     now(),
     now(),
   );
@@ -110,7 +111,7 @@ async function main() {
   const { baseUrl, server } = await startServer(app);
 
   try {
-    const statusOrder = seedOrderWithItem(db, 'STATUS', 'cashier-authz');
+    const statusOrder = seedOrderWithItem(db, 'STATUS', 'cashier-authz', 'pending');
     const cashierStatus = await api(baseUrl, `/api/orders/${statusOrder.orderId}/status`, {
       method: 'PATCH',
       body: { status: 'preparing' },
@@ -129,11 +130,7 @@ async function main() {
           headers: cashierAuth,
         },
       );
-      assertEqual(
-        response.status,
-        200,
-        'cashier can void an in-progress item with a valid manager PIN',
-      );
+      assertEqual(response.status, 200, 'cashier can void a ready item with a valid manager PIN');
       assertEqual(
         (db.prepare('SELECT status FROM order_items WHERE id = ?').get(order.itemId) as any).status,
         'voided',
@@ -151,7 +148,7 @@ async function main() {
         headers: ownerAuth,
       },
     );
-    assertEqual(ownerVoid.status, 200, 'owner PIN can authorize an in-progress item void');
+    assertEqual(ownerVoid.status, 200, 'owner PIN can authorize a ready item void');
 
     const cashierPinOrder = seedOrderWithItem(db, 'CASHIER-PIN', 'cashier-authz');
     const cashierPin = await api(
@@ -163,10 +160,10 @@ async function main() {
         headers: cashierAuth,
       },
     );
-    assertEqual(cashierPin.status, 403, 'cashier PIN cannot authorize an in-progress item void');
+    assertEqual(cashierPin.status, 403, 'cashier PIN cannot authorize a ready item void');
 
     // Orders are never ownership-gated (docs/reference/product-invariants.md).
-    const waiterOwnOrder = seedOrderWithItem(db, 'WAITER-OWN', 'server-authz');
+    const waiterOwnOrder = seedOrderWithItem(db, 'WAITER-OWN', 'server-authz', 'pending');
     const waiterCanAdvance = await api(baseUrl, `/api/orders/${waiterOwnOrder.orderId}/status`, {
       method: 'PATCH',
       body: { status: 'preparing' },

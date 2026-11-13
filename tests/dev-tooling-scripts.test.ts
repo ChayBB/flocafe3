@@ -408,7 +408,11 @@ process.exit(suite === 'test:failing-suite' ? 1 : 0);
         'test:suite-4': 'node -e ""',
         'test:suite-5': 'node -e ""',
         'test:failing-suite': 'node -e ""',
-        test: 'node scripts/run-test.cjs npm run test:suite-1 && node scripts/run-test.cjs npm run test:suite-2 && node scripts/run-test.cjs npm run test:suite-3 && node scripts/run-test.cjs npm run test:suite-4 && node scripts/run-test.cjs npm run test:suite-5',
+        test: 'npm run test:standard:1 && npm run test:standard:2',
+        'test:standard:1':
+          'node scripts/run-test.cjs npm run test:suite-1 && node scripts/run-test.cjs npm run test:suite-2',
+        'test:standard:2':
+          'node scripts/run-test.cjs npm run test:suite-3 && node scripts/run-test.cjs npm run test:suite-4 && node scripts/run-test.cjs npm run test:suite-5',
         'test-with-fail':
           'node scripts/run-test.cjs npm run test:suite-1 && node scripts/run-test.cjs npm run test:failing-suite && node scripts/run-test.cjs npm run test:suite-3',
       },
@@ -492,10 +496,14 @@ process.exit(suite === 'test:failing-suite' ? 1 : 0);
     );
   }
 
-  const suitePattern = /(?:bash\s+tests\/run-test\.sh\s+)?npm\s+run\s+(test:[\w-]+)/g;
+  const expandedTestScript = testScript.replace(
+    /npm\s+run\s+(test:standard:\d+)\b/g,
+    (_: string, name: string) => realPkg.scripts[name],
+  );
+  const suitePattern = /(?:node\s+scripts\/run-test\.cjs\s+)?npm\s+run\s+(test:[\w:-]+)/g;
   const allSuites: string[] = [];
   let match: RegExpExecArray | null;
-  while ((match = suitePattern.exec(testScript)) !== null) {
+  while ((match = suitePattern.exec(expandedTestScript)) !== null) {
     if (!allSuites.includes(match[1])) allSuites.push(match[1]);
   }
 

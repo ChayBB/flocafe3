@@ -27,25 +27,6 @@ function findStep(job: any, name: string): any {
   return step;
 }
 
-function readReleaseNotes(): string {
-  const candidates = [
-    '/tmp/release-notes.md',
-    path.join(process.env.LOCALAPPDATA || '', 'Temp/release-notes.md'),
-    path.join(process.env.TEMP || '', 'release-notes.md'),
-    path.join(process.env.TMP || '', 'release-notes.md'),
-    path.join(os.tmpdir(), 'release-notes.md'),
-    'C:/Program Files/Git/tmp/release-notes.md',
-    'C:/tmp/release-notes.md',
-    'D:/tmp/release-notes.md',
-  ];
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, 'utf8');
-    }
-  }
-  return '';
-}
-
 function assertShellStep(job: any, name: string): void {
   const step = findStep(job, name);
   assert.equal(typeof step.run, 'string', `workflow step "${name}" must execute a shell script`);
@@ -73,11 +54,13 @@ function executeWorkflowStep(
   stderr: string;
   outputs: Record<string, string>;
   log: string;
+  notes: string;
 } {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flocafe-release-config-'));
   const binDir = path.join(tempDir, 'bin');
   const outputPath = path.join(tempDir, 'github-output');
   const logPath = path.join(tempDir, 'commands.log');
+  const notesPath = path.join(tempDir, 'release-notes.md');
   fs.mkdirSync(binDir);
   try {
     if (options.fakeNodeVersion !== undefined) {
@@ -110,7 +93,13 @@ function executeWorkflowStep(
         '-o',
         'pipefail',
         '-c',
-        renderWorkflowScript(step.run as string, options.expressions || {}),
+        (process.platform === 'win32'
+          ? 'export PATH="$(cygpath -u "$WORKFLOW_TEST_BIN"):$PATH"\n'
+          : '') +
+          renderWorkflowScript(step.run as string, options.expressions || {}).replaceAll(
+            '/tmp/release-notes.md',
+            notesPath.replaceAll('\\', '/'),
+          ),
       ],
       {
         cwd: path.join(__dirname, '..'),
@@ -120,6 +109,7 @@ function executeWorkflowStep(
           GITHUB_OUTPUT: outputPath,
           RELEASE_TEST_LOG: logPath,
           RUNNER_TEMP: tempDir,
+          WORKFLOW_TEST_BIN: binDir,
           PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
         },
         encoding: 'utf8',
@@ -140,6 +130,7 @@ function executeWorkflowStep(
       stderr: result.stderr || String(result.error || ''),
       outputs,
       log: fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '',
+      notes: fs.existsSync(notesPath) ? fs.readFileSync(notesPath, 'utf8') : '',
     };
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -978,7 +969,7 @@ esac
     'release title must not carry a "(channel)" suffix — GitHub already badges pre-releases',
   );
   assert.ok(
-    readReleaseNotes().includes('compare/3.2.3...3.3.0'),
+    draftStable.notes.includes('compare/3.2.3...3.3.0'),
     'draft release notes must contain comparison link to predecessor tag',
   );
 
@@ -1020,7 +1011,7 @@ exit 1
     'a rerun against an existing draft must re-normalize its title, in case it predates a title-format change',
   );
   assert.ok(
-    readReleaseNotes().includes('Existing draft release notes for 3.3.0'),
+    draftExisting.notes.includes('Existing draft release notes for 3.3.0'),
     'existing draft rerun must extract existing release notes directly from GitHub release body',
   );
 

@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { E2E_KDS_BASE_URL } from './helpers/urls';
+import { acknowledgeExistingKdsAlerts } from './helpers/kitchen-fixture';
 
 test('a kitchen ticket that did not print shows silently as a pale chip that prints it again or drops it', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  await acknowledgeExistingKdsAlerts(page);
   const run = Math.random().toString(36).slice(2, 7);
   await page.addInitScript(() => {
     const w = window as unknown as { __spoken: string[]; __tones: number } & Record<

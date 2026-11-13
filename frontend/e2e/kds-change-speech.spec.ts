@@ -87,7 +87,7 @@ test('the KDS reads out the table and dish of an item changed to take-away or ca
     await page.getByTestId('kds-login-password').fill('E2ePass123!');
     await page.getByTestId('kds-login-submit').click();
   }
-  const row = (n: number) => page.getByTestId('kds-item-row').filter({ hasText: `${run}-${n}"` });
+  const row = (n: number) => page.getByTestId('kds-item-row').filter({ hasText: `${run}-${n}` });
   await expect(row(1)).toBeVisible({ timeout: 20000 });
   await expect(row(2)).toBeVisible();
   await page.clock.install();
@@ -104,10 +104,10 @@ test('the KDS reads out the table and dish of an item changed to take-away or ca
   expect(cancel.status()).toBe(200);
   const preparing = page.getByTestId('kds-column-preparing');
   const served = page.getByTestId('kds-column-served');
-  await expect(
-    preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-2"` }),
-  ).toContainText('Cancelled');
-  await expect(served.getByTestId('kds-item-row').filter({ hasText: `${run}-2"` })).toHaveCount(0);
+  await expect(preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-2` })).toContainText(
+    'Cancelled',
+  );
+  await expect(served.getByTestId('kds-item-row').filter({ hasText: `${run}-2` })).toHaveCount(0);
 
   const spoken = () =>
     page.evaluate(() => (window as unknown as { __spoken: string[] }).__spoken.join(' | '));
@@ -123,21 +123,18 @@ test('the KDS reads out the table and dish of an item changed to take-away or ca
     { headers: asServer, data: {} },
   );
   expect(lastCancel.status()).toBe(200);
-  await expect(
-    preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-1"` }),
-  ).toContainText('Cancelled');
-  await page.clock.fastForward(20_000);
-  await expect(
-    preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-2"` }),
-  ).toContainText('Cancelled');
-  await page.clock.fastForward(11_000);
-  await expect(preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-2"` })).toHaveCount(
-    0,
-  );
-  await expect(served.getByTestId('kds-item-row').filter({ hasText: `${run}-2"` })).toContainText(
+  await expect(preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-1` })).toContainText(
     'Cancelled',
   );
-  await page.getByRole('button', { name: 'Tabs', exact: true }).click();
-  await page.getByRole('button', { name: /^Delivered/ }).click();
-  await expect(row(2)).toContainText('Cancelled');
+  await page.clock.fastForward(20_000);
+  await expect(preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-2` })).toContainText(
+    'Cancelled',
+  );
+  await page.clock.fastForward(11_000);
+  await expect(preparing.getByTestId('kds-item-row').filter({ hasText: `${run}-2` })).toHaveCount(
+    0,
+  );
+  await expect(served.getByTestId('kds-item-row').filter({ hasText: `${run}-2` })).toContainText(
+    'Cancelled',
+  );
 });

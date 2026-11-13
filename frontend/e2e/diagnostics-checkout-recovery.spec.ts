@@ -1,3 +1,4 @@
+import { printBillFirst } from './helpers/bill-print';
 import { test, expect, type Page } from '@playwright/test';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
 import {
@@ -441,6 +442,7 @@ test('an unrelated payment does not resolve another cashier’s pending payment 
   });
   expect(billResponse.status()).toBe(201);
   const { bill } = await billResponse.json();
+  await printBillFirst(request, { Authorization: `Bearer ${MANAGER_TOKEN}` }, order.id);
   expect(Number(bill.balance)).toBeGreaterThan(2);
 
   const paymentRequests: Array<{
@@ -481,7 +483,7 @@ test('an unrelated payment does not resolve another cashier’s pending payment 
   const orderRow = page.getByRole('button').filter({ hasText: `#${order.order_number}` });
   await expect(orderRow).toBeVisible();
   await orderRow.click();
-  await page.getByRole('button', { name: /Checkout|Take Payment/ }).click();
+  await page.getByRole('button', { name: /Checkout|Take Payment|Confirm payment/ }).click();
   await expect(page.getByRole('heading', { name: 'Payment' })).toBeVisible();
   await page.getByTitle('Cash', { exact: true }).click();
   const cashierCashAmount = page
@@ -490,7 +492,11 @@ test('an unrelated payment does not resolve another cashier’s pending payment 
     .locator('..')
     .getByRole('spinbutton');
   await cashierCashAmount.fill('1');
-  await page.getByRole('button', { name: /^Pay / }).click();
+  await page
+    .locator('div.fixed')
+    .filter({ has: page.getByRole('heading', { name: 'Payment', exact: true }) })
+    .getByRole('button', { name: /^(?:Pay|Confirm payment) / })
+    .click();
   await page
     .getByRole('dialog', { name: 'Confirm' })
     .getByRole('button', { name: 'Pay', exact: true })

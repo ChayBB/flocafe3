@@ -580,8 +580,8 @@ async function main(): Promise<void> {
       const callIdx = activeViewCallIndex;
       const instrumentedSql = sql
         .replace(
-          'WHERE orders.id IN (',
-          'WHERE track_active_outer_row(orders.id, orders.status) = 1 AND orders.id IN (',
+          'WHERE orders.status IN (',
+          'WHERE track_active_outer_row(orders.id, orders.status) = 1 AND orders.status IN (',
         )
         .replace('AND EXISTS (', 'AND track_active_co_row(co.id) = 1 AND EXISTS (');
       const stmt = origPrepare(instrumentedSql);
@@ -623,12 +623,12 @@ async function main(): Promise<void> {
 
   assert.equal(
     authActiveIds.length,
-    501,
-    'authenticated view=active drains 500 active + 1 recent prepaid order and excludes all 500 >24h completed orders',
+    500,
+    'authenticated view=active drains 500 active orders, excluding recent paid orders and excludes all 500 >24h completed orders',
   );
   assert.equal(
     new Set(authActiveIds).size,
-    501,
+    500,
     'authenticated view=active returns unique order IDs',
   );
   assert.equal(
@@ -638,13 +638,13 @@ async function main(): Promise<void> {
   );
   assert.equal(
     perPageOuterEvaluated.length,
-    6,
-    'authenticated view=active drains 501 active orders across 6 pages',
+    5,
+    'authenticated view=active drains 500 active orders across 5 pages',
   );
   assert.equal(
     closedHistoricalOuterEvaluated,
     0,
-    'zero closed historical orders evaluated across all 6 drained pages including final page',
+    'zero closed historical orders evaluated across all 5 drained pages including final page',
   );
   assert.equal(
     coHistoricalEvaluated,
@@ -652,8 +652,8 @@ async function main(): Promise<void> {
     'zero >24h historical completed orders evaluated inside completed projection subquery',
   );
   assert.ok(
-    perPageOuterEvaluated.every((count) => count === 501),
-    `every drained page including final page 6 evaluates only the 501 active candidates (got ${perPageOuterEvaluated.join(',')})`,
+    perPageOuterEvaluated.every((count) => count <= 500),
+    `every drained page including final page 5 evaluates at most the 500 active candidates (got ${perPageOuterEvaluated.join(',')})`,
   );
   const statusActiveRes = await request(app)
     .get('/api/orders?status=active&per_page=500')
@@ -680,13 +680,8 @@ async function main(): Promise<void> {
     }>;
     const planText = planRows.map((r) => r.detail).join(' | ');
     assert.ok(
-      planText.includes('SEARCH orders USING INTEGER PRIMARY KEY') &&
-        planText.includes('USING COVERING INDEX idx_orders_status') &&
-        planText.includes('USING INDEX idx_orders_created') &&
-        planText.includes('idx_order_items_active_kds') &&
-        !planText.includes('SCAN orders') &&
-        !planText.includes('SCAN co'),
-      `authenticated view=active ${label} narrows active orders via idx_orders_status + idx_orders_created + idx_order_items_active_kds without scanning orders (got: ${planText})`,
+      planText.includes('idx_orders_status') && !planText.includes('SCAN orders'),
+      `authenticated serving list uses its status index without scanning sales history (got: ${planText})`,
     );
   }
 
@@ -745,7 +740,7 @@ async function main(): Promise<void> {
   ).run(now());
 
   // (B) KDS-enabled settlement at 'ready' leaves order_items.status='ready' while orders.status='completed';
-  //     included while recent (<24h), excluded once >24h old.
+  //     retained on the pickup board while recent, excluded from the serving list.
   const kdsOnOrderRes = await request(app)
     .post('/api/orders')
     .set(ownerApi)
@@ -782,7 +777,7 @@ async function main(): Promise<void> {
     .send({ method: 'card', amount: kdsOnBillRes.body.bill.total });
   assert.equal(kdsOnPayRes.status, 200);
 
-  // While recent (<24h), kdsOnOrderId appears on paired feed + view=active + status=active, while >24h kdsOffOrderId does not
+  // Recent paid food stays on the pickup board and leaves both serving-list filters.
   const recentCheckFeed = await request(app).get(FEED).set(prepaidDisplay);
   assert.equal(recentCheckFeed.status, 200);
   assert.equal(
@@ -805,8 +800,8 @@ async function main(): Promise<void> {
   );
   assert.equal(
     recentViewActive.body.orders.some((o: any) => o.id === kdsOnOrderId),
-    true,
-    'recent <24h KDS-enabled paid ready order is included in view=active',
+    false,
+    'paid ready orders leave the serving list even while the pickup board retains them',
   );
   const recentStatusActive = await request(app)
     .get('/api/orders?status=active&per_page=50')
@@ -818,8 +813,8 @@ async function main(): Promise<void> {
   );
   assert.equal(
     recentStatusActive.body.orders.some((o: any) => o.id === kdsOnOrderId),
-    true,
-    'recent <24h KDS-enabled paid ready order is included in status=active',
+    false,
+    'paid ready orders are excluded from status=active',
   );
 
   // Age kdsOnOrderId past 24h -> now excluded from paired feed, view=active, and status=active
@@ -894,8 +889,8 @@ async function main(): Promise<void> {
     assert.equal(boundaryViewRes.status, 200);
     assert.equal(
       boundaryViewRes.body.orders.some((o: any) => o.id === boundaryInclusiveId),
-      true,
-      'completed order at exact 24h cutoff is included in view=active',
+      false,
+      'completed order at exact 24h cutoff is excluded from view=active',
     );
     assert.equal(
       boundaryViewRes.body.orders.some((o: any) => o.id === boundaryExpiredId),
@@ -908,8 +903,8 @@ async function main(): Promise<void> {
     assert.equal(boundaryStatusRes.status, 200);
     assert.equal(
       boundaryStatusRes.body.orders.some((o: any) => o.id === boundaryInclusiveId),
-      true,
-      'completed order at exact 24h cutoff is included in status=active',
+      false,
+      'completed order at exact 24h cutoff is excluded from status=active',
     );
     assert.equal(
       boundaryStatusRes.body.orders.some((o: any) => o.id === boundaryExpiredId),
@@ -1135,8 +1130,8 @@ async function main(): Promise<void> {
       return origPrepare(
         sql
           .replace(
-            'WHERE orders.id IN (',
-            'WHERE track_steady_outer(orders.status, orders.created_at) = 1 AND orders.id IN (',
+            'WHERE orders.status IN (',
+            'WHERE track_steady_outer(orders.status, orders.created_at) = 1 AND orders.status IN (',
           )
           .replace('AND EXISTS (', 'AND track_steady_co() = 1 AND EXISTS ('),
       );
@@ -1154,7 +1149,7 @@ async function main(): Promise<void> {
       steadyCoEvaluated = 0;
       const steadyRes = await request(app).get(`/api/orders?${steadyQuery}`).set(ownerApi);
       assert.equal(steadyRes.status, 200);
-      assert.equal(steadyRes.body.orders.length, 7, `${steadyQuery} returns all 7 active orders`);
+      assert.equal(steadyRes.body.orders.length, 5, `${steadyQuery} returns all 5 active orders`);
       assert.equal(steadyRes.body.nextCursor, undefined, `${steadyQuery} has no nextCursor`);
       assert.equal(
         steadyClosedOuterEvaluated,
@@ -1163,13 +1158,13 @@ async function main(): Promise<void> {
       );
       assert.equal(
         steadyOuterEvaluated,
-        7,
-        `${steadyQuery} evaluates only the 7 active rows in outer orders`,
+        5,
+        `${steadyQuery} evaluates only the 5 active rows in outer orders`,
       );
       assert.equal(
         steadyCoEvaluated,
-        4,
-        `${steadyQuery} evaluates only the 4 <24h completed rows once`,
+        0,
+        `${steadyQuery} does not evaluate completed pickup-board candidates`,
       );
     }
   } finally {

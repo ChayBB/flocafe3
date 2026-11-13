@@ -18,7 +18,9 @@ test('POS product grid has no horizontal clipping and touchable product cards', 
 
   const productGrid = page.getByTestId('pos-product-grid');
   await expect(productGrid).toBeVisible();
-  await expect(page.getByTestId('pos-product-card')).toHaveCount(1);
+  await expect(
+    page.getByTestId('pos-product-card').filter({ hasText: 'E2E Coffee' }),
+  ).toBeVisible();
 
   const grid = await productGrid.evaluate((element) => ({
     clientWidth: element.clientWidth,
@@ -28,7 +30,10 @@ test('POS product grid has no horizontal clipping and touchable product cards', 
     grid.clientWidth,
   );
 
-  const card = await page.getByTestId('pos-product-card').boundingBox();
+  const card = await page
+    .getByTestId('pos-product-card')
+    .filter({ hasText: 'E2E Coffee' })
+    .boundingBox();
   expect(card, 'product card has bounds').not.toBeNull();
   expect(card!.width, 'product card width').toBeGreaterThanOrEqual(44);
   expect(card!.height, 'product card height').toBeGreaterThanOrEqual(44);
