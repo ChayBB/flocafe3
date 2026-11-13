@@ -287,6 +287,9 @@ export default function AddonModal({
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {variants.length > 0 && (
             <div role="radiogroup" aria-label={product.name}>
+              {product.variant_group_name && (
+                <p className="mb-2 text-sm font-semibold">{product.variant_group_name}</p>
+              )}
               <div className="flex flex-wrap gap-2">
                 {variants.map((variant) => {
                   const soldOut = isVariantSoldOut(variant);

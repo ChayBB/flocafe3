@@ -192,6 +192,8 @@ export default function ProductsPage() {
     max_selection: 10,
   });
   const [showAddonModal, setShowAddonModal] = useState(false);
+  const [attachAddonToProduct, setAttachAddonToProduct] = useState(false);
+  const [optionGroupHeading, setOptionGroupHeading] = useState('');
 
   const [addonList, setAddonList] = useState<AddonEditorRow[]>([]);
   const [form, setForm] = useState({
@@ -218,6 +220,7 @@ export default function ProductsPage() {
     customTag: '',
     has_variants: false,
     variants: [] as ProductVariantRow[],
+    variant_group_name: '',
     addon_group_ids: [] as string[],
     image_url: null as string | null,
   });
@@ -445,12 +448,14 @@ export default function ProductsPage() {
       customTag: '',
       has_variants: false,
       variants: [],
+      variant_group_name: '',
       addon_group_ids: [],
       image_url: null,
     });
     setImageTouched(false);
     setEditingProduct(null);
     setShowForm(false);
+    setOptionGroupHeading('');
   };
 
   const openCreate = () => {
@@ -481,6 +486,7 @@ export default function ProductsPage() {
     const variantRows = toVariantRows(product.variants);
     setProductInactiveAddonGroups(inactiveGroups);
     setEditingProduct(product);
+    setOptionGroupHeading('');
     setForm({
       name: product.name,
       category_id: product.category_id != null ? String(product.category_id) : '',
@@ -508,6 +514,7 @@ export default function ProductsPage() {
       customTag: '',
       has_variants: variantRows.length > 0,
       variants: variantRows,
+      variant_group_name: product.variant_group_name || '',
       addon_group_ids: addonGroupIds,
       image_url: product.has_image ? 'EXISTING' : null,
     });
@@ -630,6 +637,7 @@ export default function ProductsPage() {
           unitAdapter.maxDecimals,
         ),
         addon_group_ids: form.addon_group_ids,
+        variant_group_name: form.variant_group_name.trim() || null,
       };
 
       // Only include image_url when the user actually touched the image field
@@ -821,6 +829,7 @@ export default function ProductsPage() {
     });
     setEditingAddonGroup(null);
     setShowAddonModal(false);
+    setAttachAddonToProduct(false);
     setAddonList([]);
   };
 
@@ -893,7 +902,14 @@ export default function ProductsPage() {
         await api.put(`/addon-groups/${editingAddonGroup.id}`, payload);
         toast.success(t('addonGroupUpdated'));
       } else {
-        await api.post('/addon-groups', payload);
+        const response = await api.post('/addon-groups', payload);
+        if (attachAddonToProduct) {
+          const group = response.data.addon_group as AddonGroup;
+          setForm((prev) => ({
+            ...prev,
+            addon_group_ids: [...new Set([...prev.addon_group_ids, group.id])],
+          }));
+        }
         toast.success(t('addonGroupCreated'));
       }
       resetAddonForm();
@@ -1759,7 +1775,16 @@ export default function ProductsPage() {
                       <div className="space-y-3 rounded-xl border border-border bg-muted/40 p-4 lg:col-span-2">
                         <div className="flex items-center justify-between gap-3">
                           <span className="text-sm font-semibold text-foreground">
-                            {t('variantsSection')}
+                            <input
+                              aria-label={t('variantGroupName')}
+                              placeholder={t('variantsSection')}
+                              value={form.variant_group_name}
+                              maxLength={80}
+                              onChange={(e) =>
+                                setForm((prev) => ({ ...prev, variant_group_name: e.target.value }))
+                              }
+                              className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm font-semibold"
+                            />
                           </span>
                           <button
                             type="button"
@@ -1949,6 +1974,77 @@ export default function ProductsPage() {
                         <p className="text-xs text-muted-foreground">
                           {t('variantRecipeMultiplierHint')}
                         </p>
+                      </div>
+                    )}
+                    {isRestaurant && canManageAddons && (
+                      <div
+                        className="space-y-3 rounded-xl border border-border bg-muted/40 p-4 lg:col-span-2"
+                        data-testid="product-ingredient-options"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <input
+                            type="text"
+                            aria-label={t('ingredientOptions')}
+                            placeholder={t('optionGroupHeadingPlaceholder')}
+                            value={optionGroupHeading}
+                            onChange={(e) => setOptionGroupHeading(e.target.value)}
+                            className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold"
+                          />
+                          <button
+                            type="button"
+                            className="text-xs text-brand hover:underline"
+                            onClick={() => {
+                              resetAddonForm();
+                              setAddonForm({
+                                name: optionGroupHeading.trim(),
+                                description: '',
+                                is_required: true,
+                                price_pending: false,
+                                kitchen_price: false,
+                                allow_multiple_quantities: false,
+                                min_selection: 1,
+                                max_selection: 1,
+                              });
+                              setAttachAddonToProduct(true);
+                              setShowAddonModal(true);
+                            }}
+                          >
+                            {t('addButton')}
+                          </button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {t('ingredientOptionsHint')}
+                        </p>
+                        {productAddonGroupOptions
+                          .filter((group) => form.addon_group_ids.includes(group.id))
+                          .map((group) => (
+                            <div
+                              key={group.id}
+                              className="rounded-lg border border-border bg-background p-3"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-semibold">{group.name}</span>
+                                <button
+                                  type="button"
+                                  className="text-xs text-brand hover:underline"
+                                  onClick={() => openEditAddonGroup(group)}
+                                >
+                                  {tCommon('edit')}
+                                </button>
+                              </div>
+                              <div className="mt-2 divide-y divide-border">
+                                {(group.addons || []).map((addon) => (
+                                  <div
+                                    key={addon.id}
+                                    className="flex justify-between gap-3 py-2 text-sm"
+                                  >
+                                    <span>{addon.name}</span>
+                                    <span>+{fmt(addon.price)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
                       </div>
                     )}
                     {loyaltyEnabled && (
@@ -2597,245 +2693,243 @@ export default function ProductsPage() {
               </p>
             )}
           </div>
-
-          {showAddonModal && (
-            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-              <div className="bg-card rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
-                <div className="flex justify-between items-center p-6 border-b border-border shrink-0">
-                  <h2 className="text-lg font-bold">
-                    {editingAddonGroup ? t('editAddonGroupTitle') : t('addAddonGroupTitle')}
-                  </h2>
-                  <button
-                    onClick={resetAddonForm}
-                    aria-label={tCommon('close')}
-                    className="text-gray-400 hover:text-muted-foreground"
-                  >
-                    <X size={20} />
-                  </button>
-                </div>
-                <div className="p-6 overflow-y-auto flex-1">
-                  <form onSubmit={handleAddonGroupSubmit} className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-1">
-                        {t('fieldName')}
-                        <span className="text-red-500 ms-1">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={addonForm.name}
-                        onChange={(e) => setAddonForm({ ...addonForm, name: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-1">
-                        {t('categoryDescription')}
-                      </label>
-                      <input
-                        type="text"
-                        value={addonForm.description}
-                        onChange={(e) =>
-                          setAddonForm({ ...addonForm, description: e.target.value })
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-foreground mb-1">
-                          {t('addonMin')}
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={addonForm.min_selection}
-                          onChange={(e) =>
-                            setAddonForm({ ...addonForm, min_selection: Number(e.target.value) })
-                          }
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-foreground mb-1">
-                          {t('addonMax')}
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={addonForm.max_selection}
-                          onChange={(e) =>
-                            setAddonForm({ ...addonForm, max_selection: Number(e.target.value) })
-                          }
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                        />
-                      </div>
-                    </div>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={addonForm.is_required}
-                        onChange={(e) =>
-                          setAddonForm({ ...addonForm, is_required: e.target.checked })
-                        }
-                        className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
-                      />
-                      <span className="text-sm text-foreground">{t('addonRequired')}</span>
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={addonForm.price_pending}
-                        onChange={(e) =>
-                          setAddonForm({ ...addonForm, price_pending: e.target.checked })
-                        }
-                        data-testid="addon-group-price-pending"
-                        className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
-                      />
-                      <span className="text-sm text-foreground">{t('addonPricePending')}</span>
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={addonForm.kitchen_price}
-                        onChange={(e) =>
-                          setAddonForm({ ...addonForm, kitchen_price: e.target.checked })
-                        }
-                        data-testid="addon-group-kitchen-price"
-                        className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
-                      />
-                      <span className="text-sm text-foreground">{t('addonKitchenPrice')}</span>
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={addonForm.allow_multiple_quantities}
-                        onChange={(e) =>
-                          setAddonForm({
-                            ...addonForm,
-                            allow_multiple_quantities: e.target.checked,
-                          })
-                        }
-                        className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
-                      />
-                      <span className="text-sm text-foreground">
-                        {t('addonAllowMultipleQuantities')}
-                      </span>
-                    </label>
-                    <div>
-                      <div className="flex justify-between items-center mb-2">
-                        <label className="block text-sm font-medium text-foreground">
-                          {t('addonAddons')}
-                        </label>
-                        <button
-                          type="button"
-                          onClick={addAddonItem}
-                          className="text-xs text-brand hover:underline"
-                        >
-                          {t('addAddonInline')}
-                        </button>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="grid grid-cols-[minmax(0,1fr)_6rem_1.5rem] gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                          <span>{t('nameLabel')}</span>
-                          <span>{t('columnPrice')}</span>
-                          <span aria-hidden="true" />
-                        </div>
-                        {addonList.map((addon, idx) => (
-                          <div key={idx} className="flex flex-wrap items-center gap-2">
-                            <div className="grid grid-cols-[minmax(0,1fr)_6rem_1.5rem] gap-2 items-center grow">
-                              <input
-                                type="text"
-                                value={addon.name}
-                                onChange={(e) => updateAddonItem(idx, { name: e.target.value })}
-                                placeholder={tCommon('namePlaceholder')}
-                                className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                              />
-                              <CurrencyAmountInput
-                                value={addon.price}
-                                format={amountFormat}
-                                onValueChange={(v) =>
-                                  updateAddonItem(idx, { price: v === '' ? 0 : v })
-                                }
-                                placeholder={tCommon('pricePlaceholder')}
-                                aria-label={t('columnPrice')}
-                                className="w-24 px-3 py-2 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                              />
-                              <button
-                                type="button"
-                                aria-label={tCommon('remove')}
-                                onClick={() => removeAddonItem(idx)}
-                                className="text-gray-400 hover:text-red-500"
-                              >
-                                <X size={16} />
-                              </button>
-                            </div>
-                            <label className="flex items-center gap-1.5">
-                              <input
-                                type="checkbox"
-                                checked={addon.track_inventory}
-                                aria-label={t('fieldTrackInventory')}
-                                onChange={(e) =>
-                                  updateAddonItem(idx, { track_inventory: e.target.checked })
-                                }
-                                className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
-                              />
-                              <span className="text-xs text-muted-foreground">
-                                {t('fieldTrackInventory')}
-                              </span>
-                            </label>
-                            {addon.track_inventory && (
-                              <>
-                                <label className="flex items-center gap-1.5">
-                                  <span className="text-xs text-muted-foreground">
-                                    {t('fieldStock')}
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="any"
-                                    value={addon.stock_quantity}
-                                    aria-label={t('fieldStock')}
-                                    onChange={(e) => updateAddonStock(idx, e.target.value)}
-                                    className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                                  />
-                                </label>
-                                <label className="flex items-center gap-1.5">
-                                  <span className="text-xs text-muted-foreground">
-                                    {t('fieldLowStockThreshold')}
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="any"
-                                    value={addon.low_stock_threshold}
-                                    aria-label={t('fieldLowStockThreshold')}
-                                    onChange={(e) =>
-                                      updateAddonItem(idx, { low_stock_threshold: e.target.value })
-                                    }
-                                    className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
-                                  />
-                                </label>
-                              </>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <Button type="submit" className="w-full" disabled={savingAddonGroup}>
-                      {savingAddonGroup
-                        ? tCommon('saving')
-                        : editingAddonGroup
-                          ? tCommon('update')
-                          : tCommon('create')}
-                    </Button>
-                  </form>
-                </div>
-              </div>
-            </div>
-          )}
         </TabsContent>
       </Tabs>
+
+      {showAddonModal && (
+        <div
+          data-testid="addon-group-editor"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+        >
+          <div className="bg-card rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+            <div className="flex justify-between items-center p-6 border-b border-border shrink-0">
+              <h2 className="text-lg font-bold">
+                {editingAddonGroup ? t('editAddonGroupTitle') : t('addAddonGroupTitle')}
+              </h2>
+              <button
+                onClick={resetAddonForm}
+                aria-label={tCommon('close')}
+                className="text-gray-400 hover:text-muted-foreground"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <form onSubmit={handleAddonGroupSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    {t('fieldName')}
+                    <span className="text-red-500 ms-1">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={addonForm.name}
+                    onChange={(e) => setAddonForm({ ...addonForm, name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    {t('categoryDescription')}
+                  </label>
+                  <input
+                    type="text"
+                    value={addonForm.description}
+                    onChange={(e) => setAddonForm({ ...addonForm, description: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1">
+                      {t('addonMin')}
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={addonForm.min_selection}
+                      onChange={(e) =>
+                        setAddonForm({ ...addonForm, min_selection: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1">
+                      {t('addonMax')}
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={addonForm.max_selection}
+                      onChange={(e) =>
+                        setAddonForm({ ...addonForm, max_selection: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                    />
+                  </div>
+                </div>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={addonForm.is_required}
+                    onChange={(e) => setAddonForm({ ...addonForm, is_required: e.target.checked })}
+                    className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                  />
+                  <span className="text-sm text-foreground">{t('addonRequired')}</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={addonForm.price_pending}
+                    onChange={(e) =>
+                      setAddonForm({ ...addonForm, price_pending: e.target.checked })
+                    }
+                    data-testid="addon-group-price-pending"
+                    className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                  />
+                  <span className="text-sm text-foreground">{t('addonPricePending')}</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={addonForm.kitchen_price}
+                    onChange={(e) =>
+                      setAddonForm({ ...addonForm, kitchen_price: e.target.checked })
+                    }
+                    data-testid="addon-group-kitchen-price"
+                    className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                  />
+                  <span className="text-sm text-foreground">{t('addonKitchenPrice')}</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={addonForm.allow_multiple_quantities}
+                    onChange={(e) =>
+                      setAddonForm({
+                        ...addonForm,
+                        allow_multiple_quantities: e.target.checked,
+                      })
+                    }
+                    className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                  />
+                  <span className="text-sm text-foreground">
+                    {t('addonAllowMultipleQuantities')}
+                  </span>
+                </label>
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-sm font-medium text-foreground">
+                      {t('addonAddons')}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={addAddonItem}
+                      className="text-xs text-brand hover:underline"
+                    >
+                      {t('addAddonInline')}
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-[minmax(0,1fr)_6rem_1.5rem] gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <span>{t('nameLabel')}</span>
+                      <span>{t('columnPrice')}</span>
+                      <span aria-hidden="true" />
+                    </div>
+                    {addonList.map((addon, idx) => (
+                      <div key={idx} className="flex flex-wrap items-center gap-2">
+                        <div className="grid grid-cols-[minmax(0,1fr)_6rem_1.5rem] gap-2 items-center grow">
+                          <input
+                            type="text"
+                            aria-label={t('nameLabel')}
+                            value={addon.name}
+                            onChange={(e) => updateAddonItem(idx, { name: e.target.value })}
+                            placeholder={tCommon('namePlaceholder')}
+                            className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                          />
+                          <CurrencyAmountInput
+                            value={addon.price}
+                            format={amountFormat}
+                            onValueChange={(v) => updateAddonItem(idx, { price: v === '' ? 0 : v })}
+                            placeholder={tCommon('pricePlaceholder')}
+                            aria-label={t('columnPrice')}
+                            className="w-24 px-3 py-2 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                          />
+                          <button
+                            type="button"
+                            aria-label={tCommon('remove')}
+                            onClick={() => removeAddonItem(idx)}
+                            className="text-gray-400 hover:text-red-500"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                        <label className="flex items-center gap-1.5">
+                          <input
+                            type="checkbox"
+                            checked={addon.track_inventory}
+                            aria-label={t('fieldTrackInventory')}
+                            onChange={(e) =>
+                              updateAddonItem(idx, { track_inventory: e.target.checked })
+                            }
+                            className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            {t('fieldTrackInventory')}
+                          </span>
+                        </label>
+                        {addon.track_inventory && (
+                          <>
+                            <label className="flex items-center gap-1.5">
+                              <span className="text-xs text-muted-foreground">
+                                {t('fieldStock')}
+                              </span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={addon.stock_quantity}
+                                aria-label={t('fieldStock')}
+                                onChange={(e) => updateAddonStock(idx, e.target.value)}
+                                className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                              />
+                            </label>
+                            <label className="flex items-center gap-1.5">
+                              <span className="text-xs text-muted-foreground">
+                                {t('fieldLowStockThreshold')}
+                              </span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={addon.low_stock_threshold}
+                                aria-label={t('fieldLowStockThreshold')}
+                                onChange={(e) =>
+                                  updateAddonItem(idx, { low_stock_threshold: e.target.value })
+                                }
+                                className="w-20 px-2 py-1 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+                              />
+                            </label>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <Button type="submit" className="w-full" disabled={savingAddonGroup}>
+                  {savingAddonGroup
+                    ? tCommon('saving')
+                    : editingAddonGroup
+                      ? tCommon('update')
+                      : tCommon('create')}
+                </Button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showBulkTaxModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

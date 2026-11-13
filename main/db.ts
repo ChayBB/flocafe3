@@ -10476,6 +10476,15 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 143,
+    name: 'add_product_variant_group_name',
+    up: () => {
+      if (!getColumns(db, 'products').includes('variant_group_name')) {
+        db.exec('ALTER TABLE products ADD COLUMN variant_group_name TEXT');
+      }
+    },
+  },
 ];
 
 const LEGACY_LOCAL_MIGRATIONS: typeof MIGRATIONS = [

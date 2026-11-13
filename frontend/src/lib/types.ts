@@ -120,6 +120,7 @@ export interface Product {
   tags: string[] | null;
   dietary_tags?: string[] | null;
   variants?: ProductVariant[] | null;
+  variant_group_name?: string | null;
   modifiers: Record<string, unknown>[] | null;
   sort_order: number;
   category?: Category;

@@ -1205,7 +1205,7 @@ router.get('/', requirePermission('catalog.view'), (req: Request, res: Response)
     const activeOnly = req.query.active === 'true' || req.query.active === '1';
     const ctePrefix = activeOnly ? `WITH RECURSIVE ${ACTIVE_CATEGORIES_CTE_CLAUSES} ` : '';
     let query = `${ctePrefix}SELECT p.id, p.category_id, p.name, p.description, p.price, p.cost, p.sku, p.barcode,
-      p.sale_unit, p.allow_fractional_quantity, p.weight_precision,
+      p.sale_unit, p.allow_fractional_quantity, p.weight_precision, p.variant_group_name,
       p.inventory_product_id, p.inventory_deduction_quantity,
       p.is_active, p.sort_order, p.track_inventory, p.stock_quantity, p.low_stock_threshold,
       p.tax_type, p.tax_rate, p.tax_category_id, p.tax_behavior, p.cb_percent, p.tags, p.dietary_tags, p.deleted_at, p.created_at, p.updated_at,
@@ -1646,6 +1646,13 @@ router.post('/', requirePermission('catalog.manage'), (req: Request, res: Respon
     }
 
     const db = getDatabase();
+    if (
+      req.body.variant_group_name != null &&
+      (typeof req.body.variant_group_name !== 'string' ||
+        req.body.variant_group_name.trim().length > 80)
+    ) {
+      return res.status(400).json({ error: 'variant_group_name must be text up to 80 characters' });
+    }
     const inventoryLinkError = validateInventoryLinkFields(db, req.body);
     if (inventoryLinkError) {
       captureProductValidation('fc.backend.product.create.validation', 'inventory_link_invalid');
@@ -1744,6 +1751,11 @@ router.post('/', requirePermission('catalog.manage'), (req: Request, res: Respon
         now(),
       );
 
+      db.prepare('UPDATE products SET variant_group_name = ? WHERE id = ?').run(
+        normalizeNullableString(req.body.variant_group_name),
+        id,
+      );
+
       if (normalizedAddonGroupIds && normalizedAddonGroupIds.length > 0) {
         const insertAgp = db.prepare(
           'INSERT INTO addon_group_product (addon_group_id, product_id) VALUES (?, ?)',
@@ -1798,6 +1810,13 @@ router.post('/', requirePermission('catalog.manage'), (req: Request, res: Respon
 router.put('/:id', requirePermission('catalog.manage'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
+    if (
+      req.body.variant_group_name != null &&
+      (typeof req.body.variant_group_name !== 'string' ||
+        req.body.variant_group_name.trim().length > 80)
+    ) {
+      return res.status(400).json({ error: 'variant_group_name must be text up to 80 characters' });
+    }
     const product = db
       .prepare('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL')
       .get(req.params.id) as
@@ -2011,6 +2030,12 @@ router.put('/:id', requirePermission('catalog.manage'), (req: Request, res: Resp
 
     // Update product fields and add-on links atomically.
     const updateProduct = db.transaction(() => {
+      if (hasOwn(req.body, 'variant_group_name')) {
+        db.prepare('UPDATE products SET variant_group_name = ? WHERE id = ?').run(
+          normalizeNullableString(req.body.variant_group_name),
+          req.params.id,
+        );
+      }
       db.prepare(`
         UPDATE products SET
           category_id = CASE WHEN @has_category_id = 1 THEN @category_id ELSE category_id END,
