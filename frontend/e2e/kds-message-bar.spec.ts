@@ -54,7 +54,6 @@ test('the KDS message bar lists table moves, merges, take-away changes and emerg
     await page.getByTestId('kds-login-submit').click();
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible();
-  await page.getByRole('button', { name: 'Kanban' }).click();
   const bar = page.getByTestId('kds-message-bar');
   await expect(bar).toBeVisible();
   // The bar sits at the bottom edge of the screen, below the board.

@@ -831,6 +831,8 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
     stopRestPolling();
     updatingIdsRef.current.clear();
     setUpdating(null);
+    selectedStationRef.current = '';
+    setSelectedStation('');
     setUser(null);
     setOrders([]);
     setCounts({});
@@ -979,6 +981,11 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
     setCounts({});
     setAlerts([]);
     setConnected(false);
+    setConnectionMode(null);
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     const token = user?.token;
     if (token) tryWebSocket(token);
   };

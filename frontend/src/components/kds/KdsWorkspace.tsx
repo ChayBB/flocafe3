@@ -7,9 +7,7 @@ import { KdsKanbanBoard } from '@/components/kds/KdsKanbanBoard';
 import { KdsMessageBar } from '@/components/kds/KdsMessageBar';
 import { KdsSettingsDialog } from '@/components/kds/KdsSettingsDialog';
 import { KdsSearchBox } from '@/components/kds/KdsSearchBox';
-import { KdsTabsView } from '@/components/kds/KdsTabsView';
 import { kdsOrderMatches, normalizeKdsSearch } from '@/lib/kds-search';
-import { useKdsView } from '@/hooks/useKdsView';
 import { useKdsScreenMode } from '@/lib/kds-screen-mode';
 import type { KitchenStatus, UseKdsConnectionResult } from '@/hooks/useKdsConnection';
 import {
@@ -103,13 +101,11 @@ function serviceChangesById(orders: UseKdsConnectionResult['orders']): Map<numbe
 
 export function KdsWorkspace({
   conn,
-  serverDefault,
 }: {
   conn: UseKdsConnectionResult;
-  serverDefault: 'tabs' | 'kanban' | null;
+  serverDefault?: 'tabs' | 'kanban' | null;
 }) {
   const t = useTranslations('kds');
-  const { viewMode, setViewMode } = useKdsView(serverDefault);
   const screen = useKdsScreenMode();
 
   // Sound needs one tap per page in a browser; any tap or key press on the display unlocks it.
@@ -459,8 +455,6 @@ export function KdsWorkspace({
         userRole={conn.user!.role}
         connected={conn.connected}
         connectionMode={conn.connectionMode}
-        viewMode={viewMode}
-        onChangeView={setViewMode}
         stations={conn.stations}
         stationId={stationId}
         onChangeStation={conn.selectStation}
@@ -479,15 +473,8 @@ export function KdsWorkspace({
             <p className="text-lg">{t('searchNoResults', { query: search.trim() })}</p>
             <p className="text-sm">{t('searchNoResultsHint')}</p>
           </div>
-        ) : viewMode === 'kanban' ? (
-          <KdsKanbanBoard
-            orders={visibleOrders}
-            updating={conn.updating}
-            inactiveStatuses={inactiveStatuses}
-            updateItemStatus={conn.updateItemStatus}
-          />
         ) : (
-          <KdsTabsView
+          <KdsKanbanBoard
             orders={visibleOrders}
             updating={conn.updating}
             inactiveStatuses={inactiveStatuses}

@@ -112,7 +112,6 @@ test('Batch 5D: KDS and Server App render and function correctly in English and 
     await captureScreenshot(page, 'kds-item-toggle-en.png');
 
     // 1d. Standalone KDS Kanban View (EN)
-    await page.getByRole('button', { name: 'Kanban' }).click();
     await expect(page.getByText('Waiting', { exact: true })).toBeVisible();
     await expect(page.getByText('Preparing', { exact: true })).toBeVisible();
     await expect(page.getByText('Ready', { exact: true })).toBeVisible();

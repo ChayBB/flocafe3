@@ -5,7 +5,6 @@ import {
   ACTIVE_RELEASED_KDS_ORDER_IDS_SQL,
   expandCategoryIdsWithSubcategories,
   getDatabase,
-  listKdsStationCategories,
   annotateKdsItems,
   getKdsStationCategoryIds,
   getKdsStationRoutingScope,
@@ -30,7 +29,7 @@ const router = Router();
 router.use(requirePermission('kitchen.use'));
 router.use(requireKdsEnabled);
 
-// GET /api/kitchen/stations — the menu categories the KDS can show one at a time
+// GET /api/kitchen/stations — active kitchen stations within the signed-in user scope
 router.get('/stations', (req: Request, res: Response) => {
   try {
     res.json({ stations: selectableKdsStations(String((req as any).user?.userId || '')) });

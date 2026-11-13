@@ -2,7 +2,9 @@ import { test, expect } from '@playwright/test';
 import { E2E_BASE_URL as BASE, E2E_KDS_BASE_URL } from './helpers/urls';
 import { E2E_PASSWORD, getE2eToken } from './helpers/test-auth';
 
-test('a special-menu item waits for the kitchen price and takes it as entered', async ({ page }) => {
+test('a special-menu item waits for the kitchen price and takes it as entered', async ({
+  page,
+}) => {
   const headers = { Authorization: `Bearer ${getE2eToken()}` };
   const run = Math.random().toString(36).slice(2, 7);
 
@@ -66,7 +68,9 @@ test('a special-menu item waits for the kitchen price and takes it as entered', 
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Enter kitchen price' })).toBeHidden();
 
-  const after = await (await page.request.get(`${BASE}/api/orders/${created.id}`, { headers })).json();
+  const after = await (
+    await page.request.get(`${BASE}/api/orders/${created.id}`, { headers })
+  ).json();
   const pricedLine = after.order.items.find((item: { id: number }) => item.id === line.id);
   expect(pricedLine.unit_price).toBe(359);
   expect(Boolean(pricedLine.weight_pending)).toBe(false);
@@ -75,13 +79,14 @@ test('a special-menu item waits for the kitchen price and takes it as entered', 
   // The KDS drops the waiting note and shows the kitchen-set price in green.
   expect(pricedLine.special_instructions).toBeNull();
   await page.goto(`${E2E_KDS_BASE_URL}/kds-standalone`);
-  await expect(page.getByTestId('kds-login-form').or(page.getByTestId('kds-workspace'))).toBeVisible();
+  await expect(
+    page.getByTestId('kds-login-form').or(page.getByTestId('kds-workspace')),
+  ).toBeVisible();
   if (await page.getByTestId('kds-login-form').isVisible()) {
     await page.getByTestId('kds-login-email').fill('manager@flo.local');
     await page.getByTestId('kds-login-password').fill(E2E_PASSWORD);
     await page.getByTestId('kds-login-submit').click();
   }
-  await page.getByRole('button', { name: 'Kanban' }).click();
   const card = page.locator('div.select-none').filter({ hasText: `#${created.order_number}` });
   const price = card.getByTestId('kds-set-price');
   await expect(price).toContainText('359');

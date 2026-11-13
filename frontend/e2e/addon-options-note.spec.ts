@@ -192,7 +192,6 @@ test('a one-kind option folds once picked, and the size and option go into the s
       await page.getByTestId('kds-login-password').fill('E2ePass123!');
       await page.getByTestId('kds-login-submit').click();
     }
-    await page.getByRole('button', { name: 'Kanban' }).click();
     const kdsRow = page.getByTestId('kds-item-row').filter({ hasText: productName });
     await expect(kdsRow).toHaveText(`1×${productName} Shrimp ${run} (Large plate)`);
 

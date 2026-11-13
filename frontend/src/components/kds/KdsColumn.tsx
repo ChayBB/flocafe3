@@ -1,5 +1,6 @@
 'use client';
 
+import { KdsScrollArea } from './KdsScrollArea';
 import { useDroppable } from '@dnd-kit/react';
 import { ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
@@ -22,20 +23,25 @@ export function KdsColumn({ status, count, children }: KdsColumnProps) {
   });
 
   return (
-    <div data-testid={`kds-column-${status}`} className="flex-1 min-w-[260px] min-h-0 flex flex-col">
-      <div className={`flex items-center gap-2 px-3 py-2 ${config.bg} rounded-t-lg border border-border border-b-0`}>
+    <div
+      data-testid={`kds-column-${status}`}
+      className="flex-1 min-w-[260px] min-h-0 flex flex-col"
+    >
+      <div
+        className={`flex items-center gap-2 px-3 py-2 ${config.bg} rounded-t-lg border border-border border-b-0`}
+      >
         <div className={`w-2 h-2 rounded-full ${config.color}`} />
         <span className={`text-base font-semibold ${config.text}`}>{statusLabel}</span>
         <span className="ms-auto text-xs px-1.5 py-0.5 rounded-full bg-card/70 text-foreground font-medium tabular-nums">
           {count}
         </span>
       </div>
-      <div
-        ref={ref}
+      <KdsScrollArea
+        dropRef={ref}
+        hasItems={count > 0}
         className={`flex-1 border border-border border-t-0 rounded-b-lg p-2 space-y-2 overflow-y-auto bg-muted/40 transition-colors ${
           isDropTarget ? 'bg-muted ring-2 ring-border ring-inset' : ''
         }`}
-        style={{ minHeight: '60vh' }}
       >
         {children}
         {count === 0 && (
@@ -43,7 +49,7 @@ export function KdsColumn({ status, count, children }: KdsColumnProps) {
             <span>{t('emptyColumn')}</span>
           </div>
         )}
-      </div>
+      </KdsScrollArea>
     </div>
   );
 }

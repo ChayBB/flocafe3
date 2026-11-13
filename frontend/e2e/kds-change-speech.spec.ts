@@ -90,7 +90,6 @@ test('the KDS reads out the table and dish of an item changed to take-away or ca
   const row = (n: number) => page.getByTestId('kds-item-row').filter({ hasText: `${run}-${n}"` });
   await expect(row(1)).toBeVisible({ timeout: 20000 });
   await expect(row(2)).toBeVisible();
-  await page.getByRole('button', { name: 'Kanban' }).click();
   await page.clock.install();
 
   const takeaway = await page.request.patch(

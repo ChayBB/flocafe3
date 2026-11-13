@@ -9,7 +9,6 @@ import {
   getKdsItemParentOrderState,
   getKdsStationCategoryIds,
   getKdsStationRoutingScope,
-  getUserKdsStationIds,
   hasUserKdsStationAssignments,
   isDatabaseMaintenanceActive,
   isKdsStationItemAllowed,

@@ -588,6 +588,11 @@
     "costUnknown": "Cost unknown"
   },
   "kds": {
+    "scrollUp": "Scroll up",
+    "scrollDown": "Scroll down",
+    "scrollLatest": "Latest",
+    "enterFullscreen": "Expand screen",
+    "exitFullscreen": "Exit full screen",
     "addonsLabel": "Add-ons",
     "authFailed": "Authentication failed",
     "backTo": "Back to {status}",

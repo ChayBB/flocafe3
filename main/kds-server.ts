@@ -37,7 +37,6 @@ import {
   projectKdsItem,
   projectKdsOrder,
   KDS_MOVED_FROM_TABLE_SQL,
-  listKdsStationCategories,
   annotateKdsItems,
   UNRELEASED_KDS_ORDER_ITEM_ERROR,
 } from './db';

@@ -160,7 +160,6 @@ test('the item menu offers takeaway until served and cancel only while waiting; 
     await kds.getByTestId('kds-login-password').fill('E2ePass123!');
     await kds.getByTestId('kds-login-submit').click();
   }
-  await kds.getByRole('button', { name: 'Kanban' }).click();
   // Notes are unique to this run, so earlier runs' orders on the board never match.
   const card = (line: number) =>
     kds.getByTestId('kds-item-row').filter({ hasText: `${label}-${line}"` });

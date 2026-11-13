@@ -2,6 +2,8 @@
 
 import { PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDraggable, type DragEndEvent } from '@dnd-kit/react';
+import { KdsScrollArea } from './KdsScrollArea';
+import { parseDbTimestamp } from '@/lib/utils';
 import { Clock } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import toast from 'react-hot-toast';
@@ -147,7 +149,7 @@ export function KdsKanbanBoard({
           ...defaults.filter((sensor) => sensor !== PointerSensor),
           PointerSensor.configure({
             activationConstraints: [new PointerActivationConstraints.Distance({ value: 6 })],
-            preventActivation: () => false,
+            preventActivation: (event) => event.pointerType === 'touch',
           }),
         ]}
         onDragEnd={handleDragEnd}
@@ -229,6 +231,12 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
   return (
     <div
       ref={ref}
+      style={{ touchAction: 'auto' }}
+      data-kds-scroll-time={Math.max(
+        ...items.map((item) =>
+          parseDbTimestamp(item.updated_at || item.created_at || order.created_at).getTime(),
+        ),
+      )}
       className={`select-none cursor-grab active:cursor-grabbing transition ${
         isDragging ? 'opacity-40' : ''
       } ${busy ? 'pointer-events-none opacity-60' : ''}`}
@@ -337,9 +345,9 @@ function VoidedColumn({ groups }: { groups: Array<{ order: KdsOrder; items: KdsO
           {count}
         </span>
       </div>
-      <div
-        className="flex-1 border border-border border-t-0 rounded-b-lg p-2 space-y-2 overflow-y-auto bg-muted/40"
-        style={{ minHeight: '60vh' }}
+      <KdsScrollArea
+        className="border border-border border-t-0 p-2 space-y-2 bg-muted/40"
+        hasItems={count > 0}
       >
         {groups.map(({ order, items }) => (
           <div
@@ -382,7 +390,7 @@ function VoidedColumn({ groups }: { groups: Array<{ order: KdsOrder; items: KdsO
             <span>{t('emptyColumn')}</span>
           </div>
         )}
-      </div>
+      </KdsScrollArea>
     </div>
   );
 }

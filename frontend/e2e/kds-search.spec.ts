@@ -73,7 +73,6 @@ test('KDS search filters tickets by menu item, table, server and order number, a
     await page.getByTestId('kds-login-submit').click();
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible();
-  await page.getByRole('button', { name: 'Kanban' }).click();
 
   const search = page.getByTestId('kds-search-input');
   await expect(search).toHaveAttribute('placeholder', 'Search menu, table, server or order number');

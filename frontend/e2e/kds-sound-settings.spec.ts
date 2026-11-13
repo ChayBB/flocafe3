@@ -107,6 +107,16 @@ test('orders already in the kitchen when the display signs in or switches statio
     data: { name: categoryName },
   });
   expect(category.status()).toBe(201);
+  const stationCategoryId = (await category.json()).category.id;
+  expect(
+    (
+      await page.request.post(`${E2E_BASE_URL}/api/kitchen-stations`, {
+        headers,
+        data: { name: categoryName, category_ids: [stationCategoryId] },
+      })
+    ).status(),
+  ).toBe(201);
+
   const productName = `Soup ${run}`;
   const product = await page.request.post(`${E2E_BASE_URL}/api/products`, {
     headers,
@@ -221,6 +231,16 @@ test('KDS sound switches turn reading new items aloud and the ready-to-serve ann
     data: { name: categoryName },
   });
   expect(category.status()).toBe(201);
+  const stationCategoryId = (await category.json()).category.id;
+  expect(
+    (
+      await page.request.post(`${E2E_BASE_URL}/api/kitchen-stations`, {
+        headers,
+        data: { name: categoryName, category_ids: [stationCategoryId] },
+      })
+    ).status(),
+  ).toBe(201);
+
   const productName = `Lemonade ${run}`;
   const product = await page.request.post(`${E2E_BASE_URL}/api/products`, {
     headers,
@@ -477,7 +497,6 @@ test('a table with several items turning ready is announced once, and not again 
     await page.getByTestId('kds-login-submit').click();
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible();
-  await page.getByRole('button', { name: 'Kanban' }).click();
   await expect(page.getByText(`first round a`).first()).toBeVisible({ timeout: 15000 });
   const start = await sounds(page);
   const readyColumn = page.getByTestId('kds-column-ready');
@@ -565,7 +584,6 @@ test('the show-bell switch puts a bell button at the right end of the message ba
     await page.getByTestId('kds-login-submit').click();
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible();
-  await page.getByRole('button', { name: 'Kanban' }).click();
   await expect(page.getByTestId('kds-bell-button')).toHaveCount(0);
 
   await page.getByTestId('kds-settings-button').click();
@@ -635,7 +653,6 @@ test('an item switched to take-away still rings the ready bell and is announced 
     await page.getByTestId('kds-login-submit').click();
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible();
-  await page.getByRole('button', { name: 'Kanban' }).click();
   await expect(page.getByText(`to go ${run}`).first()).toBeVisible({ timeout: 15000 });
 
   const takeaway = await page.request.patch(

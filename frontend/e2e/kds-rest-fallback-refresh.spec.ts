@@ -43,19 +43,16 @@ test('KDS REST fallback refreshes the board after a status tap', async ({ page }
     await page.getByTestId('kds-login-submit').click();
   }
   await expect(page.getByTestId('kds-workspace')).toBeVisible();
-  await expect(page.getByText('Polling 5s')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTitle('REST polling (fallback)')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText('Polling 5s')).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Kanban' }).click();
-  await expect(page.getByRole('button', { name: 'Kanban' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
+  await expect(page.getByRole('button', { name: 'Tabs', exact: true })).toHaveCount(0);
 
   const getColumn = (name: string) =>
     page
       .locator('div.flex-1.min-w-\\[260px\\]')
       .filter({ has: page.getByText(name, { exact: true }) })
-      .locator('div[style*="min-height"]');
+      .getByTestId('kds-scroll-area');
   const waitingCol = getColumn('Waiting');
   const preparingCol = getColumn('Preparing');
   const cardIn = (col: Locator) =>

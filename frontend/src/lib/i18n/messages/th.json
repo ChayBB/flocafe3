@@ -588,6 +588,11 @@
     "costUnknown": "ไม่ทราบต้นทุน"
   },
   "kds": {
+    "scrollUp": "เลื่อนขึ้น",
+    "scrollDown": "เลื่อนลง",
+    "scrollLatest": "ล่าสุด",
+    "enterFullscreen": "ขยายเต็มจอ",
+    "exitFullscreen": "ย่อจอ",
     "addonsLabel": "ตัวเลือกเพิ่ม",
     "authFailed": "การยืนยันตัวตนไม่สำเร็จ",
     "backTo": "กลับไปที่ {status}",

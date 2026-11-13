@@ -1,9 +1,19 @@
 'use client';
 
-import { ChefHat, LogOut, Moon, Settings, Sun, Wifi, WifiOff } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  Maximize2,
+  Minimize2,
+  ChefHat,
+  LogOut,
+  Moon,
+  Settings,
+  Sun,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import type { ConnectionMode, KdsStation } from '@/hooks/useKdsConnection';
-import type { KdsViewMode } from '@/hooks/useKdsView';
 import type { KdsScreenMode } from '@/lib/kds-screen-mode';
 
 export interface KdsHeaderProps {
@@ -11,8 +21,6 @@ export interface KdsHeaderProps {
   userRole: string;
   connected: boolean;
   connectionMode: ConnectionMode;
-  viewMode: KdsViewMode;
-  onChangeView: (mode: KdsViewMode) => void;
   stations: KdsStation[];
   stationId: string;
   onChangeStation: (stationId: string) => void;
@@ -27,8 +35,6 @@ export function KdsHeader({
   userRole,
   connected,
   connectionMode,
-  viewMode,
-  onChangeView,
   stations,
   stationId,
   onChangeStation,
@@ -39,6 +45,12 @@ export function KdsHeader({
 }: KdsHeaderProps) {
   const t = useTranslations('kds');
   const tNav = useTranslations('nav');
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    const sync = () => setFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
 
   return (
     <div className="shrink-0 mb-4">
@@ -60,12 +72,14 @@ export function KdsHeader({
               <WifiOff size={16} className="text-amber-500" />
             </span>
           ) : null}
-          <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
+          <span
+            className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`}
+          />
           <span className="text-xs text-gray-400">
             {connected
               ? connectionMode === 'websocket'
                 ? t('connectionLive')
-                : t('connectionPolling')
+                : null
               : t('connectionConnecting')}
           </span>
 
@@ -86,30 +100,22 @@ export function KdsHeader({
             ))}
           </select>
 
-          <div className="flex items-center bg-muted rounded-lg p-0.5 ms-2" role="tablist">
-            <button
-              onClick={() => onChangeView('tabs')}
-              aria-pressed={viewMode === 'tabs'}
-              className={`min-w-11 min-h-11 px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                viewMode === 'tabs'
-                  ? 'bg-card text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t('viewTabs')}
-            </button>
-            <button
-              onClick={() => onChangeView('kanban')}
-              aria-pressed={viewMode === 'kanban'}
-              className={`min-w-11 min-h-11 px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                viewMode === 'kanban'
-                  ? 'bg-card text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t('viewKanban')}
-            </button>
-          </div>
+          <button
+            type="button"
+            data-testid="kds-fullscreen"
+            onClick={() => {
+              if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+              else {
+                const target = document.documentElement;
+                void target.requestFullscreen?.().catch(() => {});
+              }
+            }}
+            aria-label={fullscreen ? t('exitFullscreen') : t('enterFullscreen')}
+            title={fullscreen ? t('exitFullscreen') : t('enterFullscreen')}
+            className="flex min-h-12 min-w-12 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted"
+          >
+            {fullscreen ? <Minimize2 size={22} /> : <Maximize2 size={22} />}
+          </button>
 
           <button
             type="button"
