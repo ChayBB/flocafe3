@@ -1,3 +1,5 @@
+import { selectedKdsStationIds, selectableKdsStations } from '../services/kds-station-selection';
+import { buildActiveOrdersSnapshot } from '../services/kds';
 import { Router, Request, Response } from 'express';
 import {
   ACTIVE_RELEASED_KDS_ORDER_IDS_SQL,
@@ -29,9 +31,9 @@ router.use(requirePermission('kitchen.use'));
 router.use(requireKdsEnabled);
 
 // GET /api/kitchen/stations — the menu categories the KDS can show one at a time
-router.get('/stations', (_req: Request, res: Response) => {
+router.get('/stations', (req: Request, res: Response) => {
   try {
-    res.json({ stations: listKdsStationCategories(getDatabase()) });
+    res.json({ stations: selectableKdsStations(String((req as any).user?.userId || '')) });
   } catch (error: any) {
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -58,6 +60,19 @@ router.get('/orders', (req: Request, res: Response) => {
       return res.status(403).json({ error: 'User account is not active' });
     if (hasStationAssignments && stationIds.length === 0)
       return res.status(403).json({ error: 'No active kitchen station is assigned to this user' });
+    if (req.query.station_id !== undefined) {
+      if (
+        typeof req.query.station_id !== 'string' ||
+        !req.query.station_id ||
+        req.query.station_id.length > 128
+      ) {
+        return res.status(400).json({ error: 'Invalid station selection' });
+      }
+      const selectedIds = selectedKdsStationIds(userId, req.query.station_id);
+      if (!selectedIds)
+        return res.status(403).json({ error: 'Station selection is not permitted' });
+      return res.json(JSON.parse(buildActiveOrdersSnapshot(categoryIds, selectedIds, true)));
+    }
     const stationCategoryIds = getKdsStationCategoryIds(db, stationIds);
     if (!stationCategoryIds)
       return res.status(403).json({ error: 'Could not load station permissions' });

@@ -1,3 +1,4 @@
+import { selectedKdsStationIds, selectableKdsStations } from './services/kds-station-selection';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import expressRateLimit from 'express-rate-limit';
 import cors from 'cors';
@@ -40,7 +41,7 @@ import {
   annotateKdsItems,
   UNRELEASED_KDS_ORDER_ITEM_ERROR,
 } from './db';
-import { setupKdsWebSocket, notifyKdsUpdate } from './services/kds';
+import { setupKdsWebSocket, notifyKdsUpdate, buildActiveOrdersSnapshot } from './services/kds';
 import { reconcileActiveOrderStatusFromItems } from './services/orders';
 import { cloudSync } from './services/cloud-sync';
 import { getJWTSecret } from './security/jwt-secret';
@@ -380,7 +381,7 @@ export function startKdsServer(): Promise<void> {
         return res.status(403).json({ error: 'KDS is disabled for this business' });
       }
       try {
-        res.json({ stations: listKdsStationCategories(getDatabase()) });
+        res.json({ stations: selectableKdsStations(String((req as any).user?.userId || '')) });
       } catch (error: any) {
         console.error('[API] Internal error:', error);
         res.status(500).json({ error: 'Internal server error' });
@@ -410,6 +411,19 @@ export function startKdsServer(): Promise<void> {
           return res
             .status(403)
             .json({ error: 'No active kitchen station is assigned to this user' });
+        if (req.query.station_id !== undefined) {
+          if (
+            typeof req.query.station_id !== 'string' ||
+            !req.query.station_id ||
+            req.query.station_id.length > 128
+          ) {
+            return res.status(400).json({ error: 'Invalid station selection' });
+          }
+          const selectedIds = selectedKdsStationIds(kdsUser.userId, req.query.station_id);
+          if (!selectedIds)
+            return res.status(403).json({ error: 'Station selection is not permitted' });
+          return res.json(JSON.parse(buildActiveOrdersSnapshot(categoryIds, selectedIds, true)));
+        }
         const stationCategoryIds = getKdsStationCategoryIds(db, stationIds);
         const stationScope = getKdsStationRoutingScope(db, stationIds, categoryIds);
         const stationRoutingCategoryIds = stationScope?.tablelessCategoryIds;

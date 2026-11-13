@@ -170,7 +170,8 @@ actor are read together. This is a context policy, not a permission - see
 
 **Order cancellation and completion overrides.** Staff holding `orders.status.update` can cancel a
 whole order without a PIN only while the order and all of its items are `pending` and no bill holds
-collected funds. If the order or any item has advanced to `preparing` or later, or if any bill holds
+collected funds. No role can cancel an order while it or any item is `preparing`, even with a valid
+manager PIN. For other orders, if the order or any item has advanced past `pending`, or if any bill holds
 recorded collected payment, an active owner or manager approval PIN (`override_pin`, with
 `orders.status.update` and `orders.item.cancel`) is required. Completing an order blocked by
 unsettled payable bills, an unbilled positive total, or undelivered kitchen items (when

@@ -182,7 +182,7 @@ interface WsMessage {
   orders?: KdsOrder[];
   counts?: Record<string, number>;
   alerts?: KdsAlert[];
-  user?: { id: string; name: string; role: string };
+  user?: { id: string; name: string; role: string; stationIds?: string[] };
   message?: string;
 }
 
@@ -227,6 +227,8 @@ export interface UseKdsConnectionResult {
   ordersSynced: boolean;
   alerts: KdsAlert[];
   stations: KdsStation[];
+  selectedStation: string;
+  selectStation: (id: string) => void;
   counts: Record<string, number>;
   loading: boolean;
   connected: boolean;
@@ -260,6 +262,22 @@ const ITEM_STATUS_ENDPOINT = '/order-items/:itemId/status';
 const STATIONS_ENDPOINT = '/kitchen/stations';
 const UNPRINTED_KOTS_ENDPOINT = '/kds/unprinted-kots';
 const KDS_AUTH_BLOCKED_KEY = 'flocafe:kds-auth-blocked';
+const KDS_STATION_KEY = 'flocafe:kds-station';
+
+function readStoredStation(): string {
+  try {
+    return typeof window === 'undefined' ? '' : window.localStorage.getItem(KDS_STATION_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function storeStation(id: string): void {
+  try {
+    if (id) window.localStorage.setItem(KDS_STATION_KEY, id);
+    else window.localStorage.removeItem(KDS_STATION_KEY);
+  } catch {}
+}
 
 function isKdsAuthBlocked(): boolean {
   try {
@@ -297,6 +315,8 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
   const statusLabel = (s: KitchenStatus) => t(STATUS_CONFIG[normalizeKitchenStatus(s)].labelKey);
 
   const [user, setUser] = useState<KdsUser | null>(null);
+  // Each display keeps its station across reloads; the ref is read before the first socket opens.
+  const selectedStationRef = useRef(readStoredStation());
   const [orders, setOrdersState] = useState<KdsOrder[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   // Keep initial render deterministic with static server output;
@@ -380,7 +400,9 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
       const requestSequence = ++restRequestSequenceRef.current;
       restInFlightRequestRef.current = requestSequence;
       try {
-        const { data } = await api.get(`${ordersPath}?status=pending,preparing,ready,served`);
+        const { data } = await api.get(
+          `${ordersPath}?status=pending,preparing,ready,served${selectedStationRef.current ? `&station_id=${encodeURIComponent(selectedStationRef.current)}` : ''}`,
+        );
         if (
           generation !== sessionGenerationRef.current ||
           requestSequence !== restRequestSequenceRef.current ||
@@ -583,7 +605,7 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
         }
         setConnectionMode('websocket');
         setConnected(false);
-        ws.send(JSON.stringify({ type: 'auth', token }));
+        ws.send(JSON.stringify({ type: 'auth', token, station_id: selectedStationRef.current }));
         authTimeout = setTimeout(() => {
           if (wsRef.current !== ws || generation !== sessionGenerationRef.current) return;
           wsRef.current = null;
@@ -646,6 +668,15 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
               authTimeout = null;
             }
             setUser((prev) => (prev ? { ...prev, ...msg.user, token: prev.token } : null));
+            const pickedStation = selectedStationRef.current;
+            if (
+              pickedStation &&
+              (msg.user.stationIds?.length !== 1 || msg.user.stationIds[0] !== pickedStation)
+            ) {
+              selectedStationRef.current = '';
+              setSelectedStation('');
+              storeStation('');
+            }
             const authOrders = msg.orders;
             if (authOrders) setOrders((prev) => reconcileKdsOrders(prev, authOrders));
             setCounts(msg.counts || {});
@@ -892,6 +923,8 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
     return () => stopRestPolling();
   }, [connectionMode, user, startRestPolling, stopRestPolling, enabled]);
 
+  const [selectedStation, setSelectedStation] = useState('');
+  useEffect(() => setSelectedStation(selectedStationRef.current), []);
   const [stations, setStations] = useState<KdsStation[]>([]);
   const userId = user?.id;
   useEffect(() => {
@@ -935,12 +968,29 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
     [api, unprintedKotsPath],
   );
 
+  const selectStation = (id: string) => {
+    selectedStationRef.current = id;
+    setSelectedStation(id);
+    storeStation(id);
+    sessionGenerationRef.current += 1;
+    restRequestSequenceRef.current += 1;
+    stopRestPolling();
+    setOrders([]);
+    setCounts({});
+    setAlerts([]);
+    setConnected(false);
+    const token = user?.token;
+    if (token) tryWebSocket(token);
+  };
+
   return {
     user,
     orders,
     ordersSynced,
     alerts,
     stations,
+    selectedStation,
+    selectStation,
     counts,
     loading,
     connected,

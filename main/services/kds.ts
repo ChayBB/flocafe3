@@ -1,3 +1,4 @@
+import { selectedKdsStationIds } from './kds-station-selection';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
   ACTIVE_RELEASED_KDS_ORDER_IDS_SQL,
@@ -43,6 +44,7 @@ interface KdsClient {
   role: string | null;
   categoryIds: string[];
   stationIds: string[];
+  selectedStationId?: string;
   stationCategoryIds: string[];
   stationAssignmentsConfigured: boolean;
   token: string | null;
@@ -146,7 +148,7 @@ function isKdsClientAuthorized(client: KdsClient): boolean {
           getDatabase(),
           parseCategoryIds(currentUser.category_ids),
         );
-    const nextStationIds = getUserKdsStationIds(getDatabase(), client.userId);
+    const nextStationIds = selectedKdsStationIds(client.userId, client.selectedStationId || '');
     const nextStationCategoryIds = nextStationIds
       ? getKdsStationCategoryIds(getDatabase(), nextStationIds)
       : null;
@@ -357,6 +359,14 @@ function handleMessage(ws: WebSocket, message: any): void {
 
 function handleAuth(ws: WebSocket, client: KdsClient, message: any): void {
   const { token } = message;
+  if (
+    message.station_id !== undefined &&
+    (typeof message.station_id !== 'string' || message.station_id.length > 128)
+  ) {
+    closeKdsClient(client, 'Invalid station selection');
+    return;
+  }
+  client.selectedStationId = message.station_id || '';
 
   if (!isKdsEnabled()) {
     closeKdsClient(client, 'KDS is disabled');
@@ -394,7 +404,7 @@ function handleAuth(ws: WebSocket, client: KdsClient, message: any): void {
     const categoryIds = hasRole(user.role, ROLE_ACCESS.ownerManager)
       ? []
       : expandCategoryIdsWithSubcategories(db, parseCategoryIds(user.category_ids));
-    const stationIds = getUserKdsStationIds(getDatabase(), user.id);
+    const stationIds = selectedKdsStationIds(user.id, client.selectedStationId || '');
     const stationAssignmentsConfigured = hasUserKdsStationAssignments(getDatabase(), user.id);
     if (!stationIds || stationAssignmentsConfigured === null)
       throw new Error('Could not load station permissions');

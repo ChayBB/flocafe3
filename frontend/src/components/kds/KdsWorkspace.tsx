@@ -250,11 +250,7 @@ export function KdsWorkspace({
     }
     if (ready.length > 0) playKdsAlert(1);
   }, [conn.alerts, t]);
-  // Every display opens on all stations; picking one narrows the board to that category.
-  const [selectedStation, setSelectedStation] = useState('');
-  const stationId = conn.stations.some((station) => station.id === selectedStation)
-    ? selectedStation
-    : '';
+  const stationId = conn.selectedStation;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inactiveStages, setInactiveStages] = useState<InactiveStages>(readInactiveStages);
   const inactiveStatuses = inactiveStages[stationId] ?? NONE_INACTIVE;
@@ -274,15 +270,7 @@ export function KdsWorkspace({
     });
   };
 
-  const orders = useMemo(() => {
-    if (!stationId) return conn.orders;
-    return conn.orders
-      .map((order) => ({
-        ...order,
-        items: (order.items || []).filter((item) => item.station_category_id === stationId),
-      }))
-      .filter((order) => order.items.length > 0);
-  }, [conn.orders, stationId]);
+  const orders = conn.orders;
 
   // Search only narrows what is drawn; read-outs and ready announcements still follow `orders`.
   const [search, setSearch] = useState('');
@@ -293,9 +281,10 @@ export function KdsWorkspace({
   );
 
   // Items already in the kitchen when this display receives its orders are not announced, nor are items
-  // already ready. Every station counts, so switching station never reads out what was already there.
+  // already ready. The server only sends the picked station's dishes, so a new station starts unseeded.
   const knownItemIdsRef = useRef<Set<number> | null>(null);
   const knownStatusesRef = useRef<Map<number, string>>(new Map());
+  const seededStationRef = useRef(stationId);
   // An order note is read with the order's new items, once per wording.
   const readOrderNotesRef = useRef<Map<number, string>>(new Map());
   const lastReadyAtRef = useRef<Map<string, number>>(new Map());
@@ -305,6 +294,11 @@ export function KdsWorkspace({
   const ordersSynced = conn.ordersSynced;
   useEffect(() => {
     if (!ordersSynced) return;
+    if (seededStationRef.current !== stationId) {
+      seededStationRef.current = stationId;
+      knownItemIdsRef.current = null;
+      knownStatusesRef.current = new Map();
+    }
     const allLive = conn.orders.flatMap((order) => liveItems(order));
     const itemIds = new Set(allLive.map((item) => item.id));
     const knownItems = knownItemIdsRef.current;
@@ -439,7 +433,7 @@ export function KdsWorkspace({
     knownStatusesRef.current = new Map(
       allLive.map((item) => [item.id, item.status || ''] as const),
     );
-  }, [orders, conn.orders, ordersSynced, t]);
+  }, [orders, conn.orders, ordersSynced, stationId, t]);
 
   return (
     <div data-testid="kds-workspace" className="relative h-full flex-1 flex flex-col">
@@ -467,7 +461,7 @@ export function KdsWorkspace({
         onChangeView={setViewMode}
         stations={conn.stations}
         stationId={stationId}
-        onChangeStation={setSelectedStation}
+        onChangeStation={conn.selectStation}
         screenMode={screen.mode}
         onScreenMode={screen.setMode}
         onOpenSettings={() => setSettingsOpen(true)}
