@@ -14,13 +14,15 @@ export function spokenItemName(
   addons: NamedOption[] | null | undefined,
 ): string {
   const chosen = (addons ?? []).map((addon) => cleanItemText(addon.name)).filter(Boolean);
-  return [
+  const spoken = [
     joinedDish(productName, chosen[0]),
     ...chosen.slice(1),
     cleanItemText(String(variantName ?? '')),
   ]
     .filter(Boolean)
     .join(' ');
+  // Edge's Thai voice runs the dish together and clips its first syllable; a space keeps it whole.
+  return spoken.replace(/^ข้าวผัด(?=\s|$)/, 'ข้าว ผัด');
 }
 
 interface KdsLineItem {
