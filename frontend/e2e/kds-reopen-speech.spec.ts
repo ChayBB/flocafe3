@@ -32,7 +32,15 @@ async function recordSpeech(page: Page) {
         return Promise.resolve({ duration: 0 });
       }
       createBufferSource() {
-        return { buffer: null, onended: null, connect: (n: unknown) => n, start() {} };
+        const source = {
+          buffer: null as unknown,
+          onended: null as (() => void) | null,
+          connect: (n: unknown) => n,
+          start() {
+            setTimeout(() => this.onended?.(), 0);
+          },
+        };
+        return source;
       }
     }
     class FakeUtterance {

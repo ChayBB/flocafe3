@@ -21,8 +21,7 @@ export function spokenItemName(
   ]
     .filter(Boolean)
     .join(' ');
-  // Edge's Thai voice runs the dish together and clips its first syllable; a space keeps it whole.
-  return spoken.replace(/^ข้าวผัด(?=\s|$)/, 'ข้าว ผัด');
+  return spoken;
 }
 
 interface KdsLineItem {

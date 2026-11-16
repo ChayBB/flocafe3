@@ -1,5 +1,5 @@
 import api from '@/lib/api';
-import { noteKdsSpeechEnded, playKdsAudio, wakeKdsSpeaker } from '@/lib/kds-alert-sound';
+import { noteKdsSpeechEnded, playKdsAudio } from '@/lib/kds-alert-sound';
 
 /** Which sounds this KDS display plays; kept per display like its stage switches. */
 export interface KdsSoundSettings {
@@ -106,13 +106,6 @@ export async function kdsVoicesFor(lang: string): Promise<SpeechSynthesisVoice[]
     .sort((a, b) => Number(isNaturalVoice(b)) - Number(isNaturalVoice(a)));
 }
 
-// An online browser voice (Edge's "Online (Natural)") reconnects after a quiet spell and cuts the
-// start of its first sentence, which was the word "โต๊ะ"; a silent first sentence takes that cut.
-const VOICE_WARMUP_IDLE_MS = 20000;
-const VOICE_WARMUP_TIMEOUT_MS = 4000;
-let lastDeviceSpeechAt = -Infinity;
-let voiceWarming: Promise<unknown> | null = null;
-
 function utter(
   text: string,
   lang: string,
@@ -144,19 +137,43 @@ function utter(
   });
 }
 
+/** Length of the silent clip played before each device read-out. */
+const SPEECH_LEAD_MS = 800;
+
+/** A silent 16-bit mono WAV of the given length, decodable by the audio context. */
+function silentWav(ms: number, rate = 22050): ArrayBuffer {
+  const samples = Math.round((rate * ms) / 1000);
+  const buffer = new ArrayBuffer(44 + samples * 2);
+  const view = new DataView(buffer);
+  const text = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + samples * 2, true);
+  text(8, 'WAVE');
+  text(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, 'data');
+  view.setUint32(40, samples * 2, true);
+  return buffer;
+}
+
 async function speakOnDevice(
   text: string,
   lang: string,
   voice: SpeechSynthesisVoice,
 ): Promise<boolean> {
   // A browser voice also starts cold, so the speaker is woken first or it swallows the first word.
-  await wakeKdsSpeaker();
-  if (voiceWarming) await voiceWarming;
-  if (Date.now() - lastDeviceSpeechAt > VOICE_WARMUP_IDLE_MS) {
-    await utter(text.split(/\s+/)[0] || text, lang, voice, 0, VOICE_WARMUP_TIMEOUT_MS);
-  }
+  // A short silent clip, played through the same audio path as the read-out, gives the speaker
+  // time to wake before the first word, so the first syllable is not cut.
+  await playKdsAudio(silentWav(SPEECH_LEAD_MS));
   const spoke = await utter(text, lang, voice, 1, SPEECH_TIMEOUT_MS);
-  lastDeviceSpeechAt = Date.now();
   noteKdsSpeechEnded();
   return spoke;
 }
@@ -239,30 +256,6 @@ async function speakNow(rawText: string, lang: string): Promise<void> {
   if (await speakFromServer(text, lang)) return;
   const local = voices.find((voice) => voice !== preferred && voice.localService !== false);
   if (local) await speakOnDevice(text, lang, local);
-}
-
-/**
- * Warms an idle online device voice with a silent `firstWord` as soon as an order arrives, so the
- * warm-up overlaps the new-order beep instead of delaying the read-out after it.
- */
-export function primeKdsVoice(firstWord: string, lang: string): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window) || voiceWarming) return;
-  if (Date.now() - lastDeviceSpeechAt <= VOICE_WARMUP_IDLE_MS || !firstWord) return;
-  const chosenName = readKdsVoiceName();
-  if (chosenName.startsWith(KDS_SERVER_VOICE_PREFIX)) return;
-  voiceWarming = kdsVoicesFor(lang)
-    .then((voices) => {
-      const voice =
-        voices.find((candidate) => candidate.name === chosenName) ?? voices.find(isNaturalVoice);
-      return voice ? utter(firstWord, lang, voice, 0, VOICE_WARMUP_TIMEOUT_MS) : false;
-    })
-    .then((warmed) => {
-      if (warmed) lastDeviceSpeechAt = Date.now();
-    })
-    .catch(() => {})
-    .finally(() => {
-      voiceWarming = null;
-    });
 }
 
 /** Runs a sound task after every announcement queued before it. */
