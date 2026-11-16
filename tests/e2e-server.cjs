@@ -28,6 +28,7 @@ process.env.KDS_PORT = String(services[1].port);
 process.env.SERVER_APP_PORT = String(services[2].port);
 process.env.JWT_SECRET = process.env.FLO_E2E_JWT_SECRET || 'e2e-test-secret';
 process.env.FLO_AUTH_RATE_LIMIT_MAX = '1000';
+process.env.FLO_E2E_FAILED_LOGIN_MAX_ATTEMPTS = '100000';
 // The whole suite shares one server and one client IP, so a production-sized limit
 // here 429s the suite's own page loads instead of rate-limiting an abusive caller.
 process.env.FLO_SETTINGS_READ_RATE_LIMIT_MAX = '100000';
@@ -223,6 +224,11 @@ function seedUser(id, email, role) {
       'INSERT INTO users (id, name, email, password, role, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
     )
     .run(id, `E2E ${role}`, email, bcrypt.hashSync('E2ePass123!', 10), role, now(), now());
+  const codes = { server: '4242', manager: '4343', owner: '4444', chef: '4545', cashier: '4646' };
+  if (codes[role])
+    getDatabase()
+      .prepare('UPDATE users SET staff_code_hash = ? WHERE id = ?')
+      .run(bcrypt.hashSync(codes[role], 10), id);
 }
 
 function seedPosFixture() {

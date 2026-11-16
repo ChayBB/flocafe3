@@ -152,7 +152,14 @@ export function authRateLimit(
 
 // ── Shared Failed-Login Lockout (Install-wide across all login surfaces) ───────
 const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
-export const FAILED_LOGIN_MAX_ATTEMPTS = 5;
+// Test-only override: the e2e suite shares one IP, so the install-wide lockout must be raisable.
+const FAILED_LOGIN_TEST_MAX = Number(process.env.FLO_E2E_FAILED_LOGIN_MAX_ATTEMPTS);
+export const FAILED_LOGIN_MAX_ATTEMPTS =
+  process.env.NODE_ENV === 'test' &&
+  Number.isFinite(FAILED_LOGIN_TEST_MAX) &&
+  FAILED_LOGIN_TEST_MAX > 0
+    ? FAILED_LOGIN_TEST_MAX
+    : 5;
 export const FAILED_LOGIN_LOCKOUT_MINUTES = 15;
 
 export function checkLoginRateLimit(ip: string): { allowed: boolean; waitMinutes?: number } {
