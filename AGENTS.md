@@ -87,20 +87,26 @@ npm run test:e2e:browser # E2E tests (runs Playwright from frontend/)
 
 ## Verification
 
-Before reporting completion, run every applicable minimum check below for implementation work and executable code reviews. Do not substitute manual inspection, transpilation, or a narrower check for a listed command; if a check cannot run, report it as not run and disclose why.
+Verify only the files, behavior, and directly affected contracts changed by the task. Start with
+the smallest relevant checks below. Use project-wide commands only when no scoped equivalent
+exists and the command checks the affected target, such as a frontend production build.
 
-| Change type | Minimum verification |
+| Change type | Scoped verification |
 | --- | --- |
-| Documentation / templates | `npm run docs:check` and `git diff --check` |
-| Frontend | `npm run lint` and `npm run build:frontend` |
-| Translations / i18n | `npm run i18n:check` |
-| Backend / API | `npm run lint`, `npm run build`, and focused test suites |
-| Database migrations | Fresh database test and upgrade-path migration test |
-| E2E / Browser flows | `npm run test:e2e:browser` |
-| Tax / Auth / Security | Relevant focused test suite plus broader integration tests |
-| Packaging / Releases | Target platform build commands and release checks |
+| Documentation / templates | Lint edited Markdown, check changed links, and run `git diff --check`; use `npm run docs:check` when documentation structure or policy is affected |
+| Frontend | Lint changed frontend files, verify affected UI behavior, and run frontend type checking or `npm run build:frontend` when types or generated assets are affected |
+| Translations / i18n | Check changed messages and their consumers; use `npm run i18n:check` for message-key parity |
+| Backend / API | Lint changed backend files, run focused suites for affected routes/helpers, and run `npm run build` for backend TypeScript changes |
+| Database migrations | Fresh database and upgrade-path tests for the changed migration |
+| E2E / Browser flows | Run matching Playwright specs or `--grep` cases from `frontend/`; do not run the entire browser suite by default |
+| Tax / Auth / Security | Focused tests for the changed rules and integration tests for directly affected callers |
+| Packaging / Releases | Build and release checks for the affected platform and packaging path |
 
-Run `npm test` when a full validation pass is requested, before releases, or when changes touch multiple core subsystems.
+For a visual change, check appearance, responsive layout, and affected interactions; unrelated
+payment, tax, reporting, and other subsystem tests are outside scope. Expand checks only when a
+failure or a changed shared contract demonstrates a related impact. Run full suites such as
+`npm test` or `npm run test:e2e:browser` only when explicitly requested. Once the relevant checks
+pass, stop. Report what ran and any unresolved failure without claiming unrun checks passed.
 
 ## Maintaining this file
 
