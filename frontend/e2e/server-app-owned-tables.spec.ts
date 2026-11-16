@@ -17,7 +17,9 @@ async function signInAs(page: Page, name: string, password: string): Promise<voi
   });
   await page.reload();
   await page.getByPlaceholder('Staff code').fill(password === 'E2ePass123!' ? '4242' : password);
-  await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
+  await openServerAppTables(page);
+  // A staff member must choose a table before the table QR button is enabled.
+  await expect(page.getByTestId('server-app-table-qr-button')).toBeDisabled();
 }
 
 test('Server App lists only the tables a staff member owns, but a table QR still opens any table', async ({
@@ -54,7 +56,13 @@ test('Server App lists only the tables a staff member owns, but a table QR still
   await expect(page.getByRole('button', { name: new RegExp(mine) })).toBeVisible();
   await expect(page.getByRole('button', { name: new RegExp(theirs) })).toHaveCount(0);
   // No table is chosen until the staff member picks one.
-  await expect(page.locator('header')).toContainText('Select a table');
+  // Header shows the empty table placeholder ("Table —") until a table is picked.
+  await expect(page.locator('header')).toContainText('Table \u2014');
+  await page
+    .getByTestId('server-app-table-picker')
+    .getByRole('button', { name: new RegExp(mine) })
+    .click();
+  await expect(page.getByTestId('server-app-table-qr-button')).toBeEnabled();
 
   await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?table=${ids[theirs]}`);
   await expect(page.locator('header')).toContainText(theirs);

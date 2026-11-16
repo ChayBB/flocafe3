@@ -795,7 +795,11 @@ test('staff hand out a table QR from the POS and the Server App, and it stops wo
     await page.locator('button[type="submit"]').click();
     await page.waitForURL('**/pos/**', { timeout: 20000 });
     await page.getByRole('button', { name: 'Select Table' }).click();
-    await page.getByRole('button').filter({ hasText: table.name }).click();
+    await page
+      .getByTestId('server-app-table-picker')
+      .getByRole('button')
+      .filter({ hasText: table.name })
+      .click();
     await page.getByTestId('cart-table-qr-button').click();
 
     // Opening the QR again shows the party's code, not a new one.
@@ -854,7 +858,7 @@ test('staff hand out a table QR from the POS and the Server App, and it stops wo
       ['flocafe:server-app-token', getE2eToken('e2e-server', 'server@flo.local', 'server')],
     );
     await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?table=${table.id}`);
-    await logoutServerApp(page);
+    await page.getByTestId('server-app-table-qr-button').click();
     await expect(page.getByTestId('guest-table-qr').getByRole('img', { name: 'QR' })).toBeVisible();
   } finally {
     await request.put(`${E2E_BASE_URL}/api/settings/business`, {

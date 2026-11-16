@@ -1,4 +1,4 @@
-import { logoutServerApp } from './helpers/server-app';
+import { logoutServerApp, openServerAppTables } from './helpers/server-app';
 import { test, expect, Page } from '@playwright/test';
 import { E2E_SERVER_APP_BASE_URL } from './helpers/urls';
 import { E2E_PASSWORD, getE2eToken } from './helpers/test-auth';
@@ -29,6 +29,9 @@ async function submitLogin(page: Page, _identifier: string, secret: string): Pro
 
 async function signIn(page: Page, identifier = SERVER_EMAIL, secret = E2E_PASSWORD): Promise<void> {
   await submitLogin(page, identifier, secret);
+  // Staff choose a table first; the table QR button appears only after that.
+  await openServerAppTables(page);
+  await page.getByTestId('server-app-table-picker').getByRole('button').first().click();
   await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
 }
 
@@ -162,11 +165,12 @@ test.describe('Server App session', () => {
 
   test('a server signs in with the staff name and 4-digit staff code', async ({ page }) => {
     const name = `Coded ${Math.random().toString(36).slice(2, 7)}`;
-    await createStaff(page, { name, password: '1357', role: 'server', staff_code: '4821' });
+    await createStaff(page, { name, password: '1357', role: 'server', staff_code: '7319' });
     await openLogin(page);
-    await submitLogin(page, name, '4820');
+    await submitLogin(page, name, '7318');
     await expect(page.getByTestId('server-app-table-qr-button')).toHaveCount(0);
-    await signIn(page, name, '4821');
+    await submitLogin(page, name, '7319');
+    await expect(page.getByTestId('server-app-staff-name')).toContainText(name);
   });
 
   test('a wrong code is refused and the screen stays signed out', async ({ page }) => {

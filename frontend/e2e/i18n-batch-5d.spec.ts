@@ -188,7 +188,8 @@ test('Batch 5D: KDS and Server App render and function correctly in English and 
     });
     await page.goto(`${BASE_SERVER_APP}/server-standalone`);
     await expect(page.getByText('การสั่งซื้อที่โต๊ะสำหรับพนักงานบริการ')).toBeVisible();
-    await expect(page.getByPlaceholder('ชื่อพนักงาน')).toBeVisible();
+    // Login takes only the 4-digit staff code (no name field).
+    await expect(page.getByPlaceholder('รหัสพนักงาน')).toBeVisible();
     await captureScreenshot(page, 'server-login-th.png');
 
     // 2c. Server App Main UI (TH)
