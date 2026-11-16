@@ -147,8 +147,9 @@ async function main() {
     path.join(out, 'index.html'),
     fs
       .readFileSync(path.join(site, 'pos.html'), 'utf8')
-      .replace(/^(\s*<script type="module")/m, `${preloadLinks}$1`),
+      .replace(/^(\s*<script defer)/m, `${preloadLinks}$1`),
   );
+  fs.copyFileSync(path.join(site, 'menu-loader.js'), path.join(out, 'menu-loader.js'));
   fs.copyFileSync(path.join(site, '_redirects'), path.join(out, '_redirects'));
   console.log(JSON.stringify(exportPresentation()));
   precompress(out);

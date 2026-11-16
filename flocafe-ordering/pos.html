@@ -7,7 +7,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
   <title>สั่งอาหาร | FloCafe</title>
   <link rel="stylesheet" href="./styles.css">
-  <script type="module" src="./order.js"></script>
+  <script defer src="./menu-loader.js"></script>
   <style>
     .boot { padding: 12px; font-family: system-ui, sans-serif; color: #737373; }
     .boot-bar, .boot-card { background: #ececec; border-radius: 8px; animation: boot 1.2s ease-in-out infinite alternate; }
@@ -16,9 +16,17 @@
     .boot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
     .boot-card { aspect-ratio: 1; }
     @keyframes boot { to { opacity: .45; } }
+    #menu-recovery { margin: 24px auto; padding: 20px; max-width: 420px; font: 16px/1.6 system-ui, sans-serif; color: #111; background: #fff; text-align: center; border: 1px solid #e5e5e5; border-radius: 12px; }
+    #menu-recovery[hidden], #menu-retry[hidden] { display: none; }
+    #menu-retry { display: inline-block; padding: 10px 18px; color: #fff; background: #111; border-radius: 8px; }
   </style>
 </head>
 <body>
+  <section id="menu-recovery" role="status" aria-live="polite">
+    <p id="menu-recovery-message">กำลังโหลดเมนู… หากรอนานให้รีเฟรชหน้าเว็บ</p>
+    <p id="menu-recovery-code"></p>
+    <a id="menu-retry" href="" hidden>โหลดใหม่</a>
+  </section>
   <div id="root"><div class="boot" role="status">กำลังโหลดเมนู…<div class="boot-row"><div class="boot-bar"></div><div class="boot-bar"></div><div class="boot-bar"></div><div class="boot-bar"></div><div class="boot-bar"></div></div><div class="boot-grid"><div class="boot-card"></div><div class="boot-card"></div><div class="boot-card"></div><div class="boot-card"></div></div></div></div>
 </body>
 </html>

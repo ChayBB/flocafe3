@@ -268,9 +268,11 @@ function Ordering() {
     }
   }, []);
 
+  const sentRequest = useRef(0);
   const refreshSent = useCallback(async () => {
     const current = context.current;
     if (!current) return;
+    const requestId = ++sentRequest.current;
     try {
       const response = await request('/api/v1/table-session/orders', {
         headers: { Authorization: `Bearer ${current.token}` },
@@ -278,7 +280,7 @@ function Ordering() {
       if (!response.ok) return;
       const body = await response.json();
       const orders = readSentOrders(body);
-      if (!orders) return;
+      if (!orders || requestId !== sentRequest.current || context.current !== current) return;
       setBillAwaitingPayment(body.bill_awaiting_payment === true);
       const seen = announced.current;
       for (const order of orders) {
@@ -317,6 +319,7 @@ function Ordering() {
   }, [ready, expired, refreshSent]);
 
   useEffect(() => {
+    window.dispatchEvent(new Event('flo-menu-mounted'));
     void Promise.resolve().then(() => load());
     void fetch(assetUrl('./menu-presentation.json'), {
       credentials: 'omit',
@@ -532,8 +535,10 @@ function Ordering() {
       setPending(undefined);
       setCart([]);
       setOrderNote('');
-      setStatus('ระบบได้รับออเดอร์แล้ว รอร้านยืนยัน');
+      setStatus('ได้รับออเดอร์แล้ว กำลังดำเนินการ');
+      const sentNotice = 'ได้รับออเดอร์แล้ว กำลังดำเนินการ';
       void refreshSent();
+      window.setTimeout(() => setStatus((s) => (s === sentNotice ? '' : s)), 5000);
     } catch {
       setStatus('ยังไม่ทราบผลการส่ง กรุณากดส่งรายการเดิมอีกครั้งจากแท็บนี้');
     } finally {
@@ -571,7 +576,10 @@ function Ordering() {
         </header>
       )}
       {status && (
-        <p className="my-2 rounded-lg bg-muted px-3 py-2 text-sm break-all" role="status">
+        <p
+          className="my-2 rounded-lg bg-muted px-3 py-2 text-center text-sm break-all"
+          role="status"
+        >
           {status}
         </p>
       )}
@@ -648,7 +656,7 @@ function Ordering() {
                 </p>
               )}
               {status && (
-                <p role="status" className="mb-2 rounded-lg bg-muted p-2 text-sm">
+                <p role="status" className="mb-2 rounded-lg bg-muted p-2 text-center text-sm">
                   {status}
                 </p>
               )}
@@ -657,9 +665,13 @@ function Ordering() {
                   {t('newItems')}
                 </p>
                 {lines.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    className="w-full rounded-lg py-6 text-center text-sm text-muted-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-brand"
+                  >
                     {t('emptyDraft')}
-                  </p>
+                  </button>
                 ) : (
                   <div className="space-y-3">
                     {lines.map((line) => {
@@ -873,7 +885,9 @@ function Ordering() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById('root')!, {
+  onUncaughtError: () => window.dispatchEvent(new Event('flo-menu-render-error')),
+}).render(
   <IntlProvider locale="th-TH" messages={messages} timeZone="Asia/Bangkok">
     <Ordering />
     <Toaster containerStyle={{ zIndex: 2147483647 }} />
