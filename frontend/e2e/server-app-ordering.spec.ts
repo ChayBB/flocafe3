@@ -1,6 +1,6 @@
 import { test, expect, Locator, Page } from '@playwright/test';
-import { E2E_BASE_URL, E2E_SERVER_APP_BASE_URL } from './helpers/urls';
-import { openServerAppTables } from './helpers/server-app';
+import { E2E_BASE_URL, E2E_KDS_BASE_URL, E2E_SERVER_APP_BASE_URL } from './helpers/urls';
+import { openServerAppTables, logoutServerApp } from './helpers/server-app';
 import { getE2eToken } from './helpers/test-auth';
 
 const TOKEN_KEY = 'flocafe:server-app-token';
@@ -34,6 +34,213 @@ async function pickTable(page: Page, tableName: string): Promise<void> {
 }
 
 test.describe('Server App tableside ordering', () => {
+  test('the flag switches languages instantly and the service menu keeps four cards with eight reserved rows', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openServerApp(page, getE2eToken('e2e-server', 'server@flo.local', 'server'));
+    const flag = page.getByTestId('server-app-language-button');
+    await expect(flag).toHaveAttribute('aria-label', 'Change language');
+    await flag.click();
+    await expect(flag).toHaveAttribute('aria-label', 'เปลี่ยนภาษา');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await page.getByTestId('server-app-header-grid-circle').click();
+    const menu = page.getByTestId('service-menu');
+    await expect(menu.getByRole('heading')).toHaveText('กรุณาเลือกบริการ');
+    await expect(menu).toContainText('วันนี้ต้องการรับบริการด้านใดดีค่ะ');
+    const cards = menu.getByTestId('service-menu-card');
+    await expect(cards).toHaveCount(4);
+    for (const card of await cards.all()) {
+      expect((await card.boundingBox())?.width).toBeCloseTo(116, 2);
+      expect((await card.boundingBox())?.height).toBeCloseTo(116, 2);
+    }
+    const grid = menu.getByTestId('service-menu-grid');
+    expect(
+      await grid.evaluate(
+        (element) => getComputedStyle(element).gridTemplateRows.split(' ').length,
+      ),
+    ).toBe(8);
+    expect((await grid.boundingBox())?.height).toBeCloseTo(1040, 2);
+    await menu.screenshot({ path: test.info().outputPath('service-menu-thai.png') });
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await flag.click();
+    await expect(flag).toHaveAttribute('aria-label', 'Change language');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await page.getByTestId('server-app-header-grid-circle').press('Enter');
+    await expect(menu.getByRole('heading')).toHaveText('Please select a service');
+    await expect(cards).toHaveText([
+      'Request cutlery',
+      'Request condiments',
+      'Refill drink',
+      'Other',
+    ]);
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+  });
+
+  test('the table selector uses the shared font and reference dimensions in Thai and English', async ({
+    page,
+  }) => {
+    const table = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+      headers: {
+        Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+      },
+      data: { number: `Header ${Date.now()}`, capacity: 2 },
+    });
+    expect(table.ok()).toBeTruthy();
+    await page.goto(`${E2E_KDS_BASE_URL}/kds-standalone`);
+    await expect(
+      page.getByTestId('kds-login-form').or(page.getByTestId('kds-workspace')),
+    ).toBeVisible();
+    if (await page.getByTestId('kds-login-form').isVisible()) {
+      await page.getByTestId('kds-login-email').fill('manager@flo.local');
+      await page.getByTestId('kds-login-password').fill('E2ePass123!');
+      await page.getByTestId('kds-login-submit').click();
+    }
+    const typography = (element: Element) => {
+      const style = getComputedStyle(element);
+      return {
+        family: style.fontFamily,
+        size: style.fontSize,
+        weight: style.fontWeight,
+        lineHeight: style.lineHeight,
+        spacing: style.letterSpacing,
+      };
+    };
+    const reference = await page.getByTestId('kds-search-input').evaluate(typography);
+    await openServerApp(page, getE2eToken('e2e-server', 'server@flo.local', 'server'));
+    const coverSize = await page.evaluate(async () => {
+      const image = new Image();
+      image.src = '/images/server-app-cover-1920x1080.jpg';
+      await image.decode();
+      return [image.naturalWidth, image.naturalHeight];
+    });
+    expect(coverSize).toEqual([1920, 1080]);
+    const text = page.getByTestId('server-app-header-table').locator('> span.truncate').first();
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const selector = page.getByTestId('server-app-table-button');
+      await expect(selector).toBeVisible();
+      expect(await selector.evaluate(typography)).toEqual({ ...reference, weight: '500' });
+      expect((await selector.boundingBox())?.height).toBe(38);
+      await expect(selector).toHaveCSS('border-radius', '10px');
+      await expect(selector).toHaveCSS('border-color', 'rgb(229, 229, 229)');
+      await expect(selector).toHaveCSS('padding-inline-start', '10px');
+      await expect(selector).toHaveCSS('padding-inline-end', '10px');
+      await expect(selector).toHaveCSS('border-width', '1px');
+      const circles = page.getByTestId('server-app-header-circles');
+      const circleBox = (await circles.boundingBox())!;
+      const headerBox = (await page.getByTestId('server-app-header').boundingBox())!;
+      expect(circleBox.width).toBe(130);
+      expect(circleBox.y - headerBox.y).toBe(10);
+      expect(headerBox.x + headerBox.width - circleBox.x - circleBox.width).toBe(12);
+      const staffName = page.getByTestId('server-app-staff-name');
+      await expect(staffName).toHaveText('E2E server');
+      await expect(staffName).toHaveCSS('color', 'rgb(255, 255, 255)');
+      const staffNameBox = (await staffName.boundingBox())!;
+      expect(circleBox.x - staffNameBox.x - staffNameBox.width).toBe(12);
+      expect(staffNameBox.x).toBeGreaterThanOrEqual(
+        (await selector.boundingBox())!.x + (await selector.boundingBox())!.width,
+      );
+      const flagBox = (await circles
+        .getByTestId('server-app-language-button')
+        .locator('svg')
+        .boundingBox())!;
+      expect(flagBox.width).toBeCloseTo(21.6, 1);
+      expect(flagBox.height).toBeCloseTo(21.6, 1);
+      await expect(circles.getByTestId('server-app-header-empty-circle')).toHaveCount(0);
+      const gridCircle = circles.getByTestId('server-app-header-grid-circle');
+      expect((await gridCircle.boundingBox())!.x - circleBox.x).toBe(92);
+      await expect(gridCircle.locator('svg')).toBeVisible();
+      expect((await gridCircle.locator('svg').boundingBox())!.width).toBe(18);
+      const theme = circles.getByTestId('server-app-theme-button');
+      const themeBox = (await theme.boundingBox())!;
+      expect((await theme.locator('svg').boundingBox())!.width).toBeCloseTo(19.8, 1);
+      expect(themeBox.x - circleBox.x).toBe(46);
+      const pressed = await theme.getAttribute('aria-pressed');
+      await theme.click();
+      await expect(theme).toHaveAttribute('aria-pressed', pressed === 'true' ? 'false' : 'true');
+      await theme.click();
+      await expect(theme).toHaveAttribute('aria-pressed', pressed ?? 'false');
+      await page.mouse.move(0, 0);
+      for (const circle of await circles.locator(':scope > span, button').all()) {
+        expect((await circle.boundingBox())?.width).toBe(38);
+        expect((await circle.boundingBox())?.height).toBe(38);
+        await expect(circle).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+      }
+      await page.evaluate(() => document.documentElement.classList.add('dark'));
+      await expect(selector).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+      await expect(selector).toHaveCSS('color', 'rgb(17, 17, 17)');
+      await page.evaluate(() => document.documentElement.classList.remove('dark'));
+      for (const label of ['โต๊ะ 9', 'Table 9']) {
+        await text.evaluate((element, text) => {
+          element.textContent = text;
+        }, label);
+        expect(await text.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+        expect(await text.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
+          true,
+        );
+      }
+      await selector.screenshot({ path: test.info().outputPath(`selector-${width}.png`) });
+      await page
+        .getByTestId('server-app-header')
+        .screenshot({ path: test.info().outputPath(`header-${width}.png`) });
+      await selector.click();
+      await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
+      await expect(page.getByPlaceholder('Staff name')).toHaveCount(0);
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(page.getByTestId('server-app-table-button')).toBeVisible();
+    }
+    await text.evaluate((element) => {
+      element.textContent = 'โต๊ะ 9 Table 9';
+    });
+    await page.evaluate(() => document.fonts.ready);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('DOM.enable');
+    await cdp.send('CSS.enable');
+    const { root } = await cdp.send('DOM.getDocument');
+    const { nodeId } = await cdp.send('DOM.querySelector', {
+      nodeId: root.nodeId,
+      selector: '[data-testid="server-app-header-table"] > span.truncate',
+    });
+    console.log('Table selector typography:', reference);
+    console.log(
+      'Rendered selector fonts:',
+      await cdp.send('CSS.getPlatformFontsForNode', { nodeId }),
+    );
+    await cdp.detach();
+  });
+
+  test('the empty ticket returns to the menu on mobile', async ({ page }) => {
+    const table = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+      headers: {
+        Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+      },
+      data: { number: `Empty ticket ${Date.now()}`, capacity: 2 },
+    });
+    expect(table.ok()).toBeTruthy();
+    await page.request.put(`${E2E_BASE_URL}/api/settings/language`, {
+      headers: {
+        Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+      },
+      data: { value: 'en' },
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openServerApp(page, getE2eToken('e2e-server', 'server@flo.local', 'server'));
+    await expect(page.getByTestId('pos-product-grid')).toBeVisible();
+    await page.getByTestId('server-app-cart-button').click();
+    const drawer = page.getByRole('dialog');
+    await drawer.getByRole('button', { name: 'Tap menu items to add them here.' }).click();
+    await expect(drawer).toBeHidden();
+    await page.getByTestId('pos-product-grid').getByPlaceholder('Search menu').fill('E2E Coffee');
+    await expect(page.getByTestId('pos-product-grid').getByPlaceholder('Search menu')).toHaveValue(
+      'E2E Coffee',
+    );
+  });
+
   test('sends the order note with the ticket from the shared POS product grid', async ({
     page,
   }) => {
@@ -170,7 +377,7 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.getByTestId('pos-product-grid')).toHaveCount(0);
   });
 
-  test('a phone opens on the table list and toggles it with Select Table; a tablet always shows it', async ({
+  test('the table button opens the card picker without a dropdown or staff sign-in', async ({
     page,
   }) => {
     const managerToken = getE2eToken('e2e-manager', 'manager@flo.local', 'manager');
@@ -186,35 +393,76 @@ test.describe('Server App tableside ordering', () => {
     await openServerApp(page, serverToken);
     const picker = page.getByTestId('server-app-table-button');
     await expect(picker).toHaveAttribute('aria-label', 'Select a table');
-    await expect(picker).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
     await page.getByRole('button', { name: new RegExp(tableName) }).click();
     await expect(page.locator('header')).toContainText(tableName);
     // Picking a table folds the list away.
     await expect(page.getByRole('heading', { name: 'Tables' })).toHaveCount(0);
-    await expect(picker).toHaveAttribute('aria-expanded', 'false');
 
-    // Tapping Select Table brings the list back and hides it again.
+    const tokenBefore = await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY);
     await picker.click();
-    await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
-    await picker.click();
-    await expect(page.getByRole('heading', { name: 'Tables' })).toHaveCount(0);
-    await picker.click();
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
+    await expect(page.getByPlaceholder('Staff name')).toHaveCount(0);
+    const option = page
+      .getByTestId('server-app-table-picker')
+      .getByRole('button', { name: new RegExp(tableName) });
+    await option.focus();
+    await option.press('Enter');
+    await expect(page.getByTestId('server-app-table-picker')).toBeHidden();
+    expect(await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY)).toBe(tokenBefore);
+    await expect(page.locator('header')).toContainText(tableName);
+    await openServerAppTables(page);
+    const qr = page.getByTestId('server-app-table-qr-button');
+    await expect(qr).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(qr).toHaveCSS('border-width', '0px');
+    await expect(qr).toHaveCSS('box-shadow', 'none');
+    await expect(qr).toHaveCSS('opacity', '1');
+    await expect(qr).toHaveCSS('translate', '0px 15px');
+    await qr.hover();
+    await expect(qr).toHaveCSS('opacity', '1');
+    await expect(qr).toHaveCSS('color', 'rgb(255, 255, 255)');
+    await expect(qr.locator('svg')).toHaveCSS('color', 'rgb(255, 255, 255)');
+    const label = page.getByTestId('server-app-qr-label');
+    const topFont = await picker.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return [style.fontFamily, style.fontSize, style.fontWeight, style.lineHeight];
+    });
+    expect(
+      await label.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return [style.fontFamily, style.fontSize, style.fontWeight, style.lineHeight];
+      }),
+    ).toEqual(topFont);
+    await expect(label).toHaveText('Show QR');
+    await qr.click();
+    await expect(page.getByTestId('guest-table-qr')).toBeVisible();
+    await page
+      .getByTestId('guest-table-qr')
+      .getByRole('button', { name: 'Close', exact: true })
+      .click();
 
-    // A tablet shows the tables beside the menu with no Select Table or emergency button.
+    // A tablet keeps the table list beside the menu and offers the dropdown in the header.
     for (const size of [
       { width: 1024, height: 768 },
       { width: 820, height: 1180 },
     ]) {
       await page.setViewportSize(size);
       await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
-      await expect(page.getByTestId('server-app-table-button')).toHaveCount(0);
+      await expect(page.getByTestId('server-app-table-button')).toBeVisible();
       await expect(page.getByTestId('server-app-emergency-button')).toHaveCount(0);
       await expect(page.getByRole('button', { name: new RegExp(tableName) })).toBeVisible();
     }
   });
 
   test('fits mobile viewports without horizontal overflow', async ({ page }) => {
+    const table = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+      headers: {
+        Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+      },
+      data: { number: `Responsive ${Date.now()}`, capacity: 2 },
+    });
+    expect(table.ok()).toBeTruthy();
     const serverToken = getE2eToken(
       'e2e-server',
       `server-${Date.now()}-${Math.random()}@flo.local`,
@@ -230,19 +478,21 @@ test.describe('Server App tableside ordering', () => {
       // Select Table opens the tables; beside it sit language, theme, order history and the session button.
       const header = page.locator('header');
       const tableButton = header.getByTestId('server-app-table-button');
-      const logoutButton = header.getByRole('button', { name: 'Logout' });
+      const logoutButton = header.getByTestId('server-app-table-qr-button');
       const languageButton = header.getByTestId('server-app-language-button');
       const historyButton = header.getByTestId('server-app-history-button');
       await expect(tableButton).toBeVisible();
       await expect(logoutButton).toBeVisible();
-      await expect(header.getByRole('button')).toHaveCount(5);
+      await expect(header.getByRole('button')).toHaveCount(7);
       await expect(header.getByRole('img', { name: 'Flo' })).toHaveCount(0);
 
       for (const button of [tableButton, logoutButton, languageButton, historyButton]) {
         const box = await button.boundingBox();
         expect(box).not.toBeNull();
-        expect(box!.width).toBeGreaterThanOrEqual(44);
-        expect(box!.height).toBeGreaterThanOrEqual(44);
+        expect(box!.width).toBeGreaterThanOrEqual(button === languageButton ? 38 : 44);
+        expect(box!.height).toBeGreaterThanOrEqual(
+          button === tableButton || button === languageButton ? 38 : 44,
+        );
       }
 
       const hasOverflow = await page.evaluate(() => {
@@ -251,18 +501,17 @@ test.describe('Server App tableside ordering', () => {
       expect(hasOverflow).toBeFalsy();
     }
 
-    // A tablet drops Select Table from the header, keeping language, theme, history and session, and still fits.
+    // The tablet header retains the selector and fits beside language, theme, history and session.
     await page.setViewportSize({ width: 768, height: 1024 });
-    await expect(page.locator('header').getByRole('button')).toHaveCount(4);
+    await expect(page.locator('header').getByRole('button')).toHaveCount(7);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth),
     ).toBeFalsy();
 
     await page.setViewportSize({ width: 390, height: 844 });
-    const header = page.locator('header');
     await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
 
-    await header.getByRole('button', { name: 'Logout' }).click();
+    await logoutServerApp(page);
     await expect(page.getByRole('button', { name: 'Sign In' })).toBeVisible();
   });
 
@@ -409,8 +658,8 @@ test.describe('Server App tableside ordering', () => {
     await expect(removeButton).toBeDisabled();
     await expect(editButton).toBeDisabled();
     await expect(tableBButton).toBeDisabled();
-    // A tablet has no Select Table button; the table buttons themselves are frozen.
-    await expect(tablePickerButton).toHaveCount(0);
+    // Table selection stays frozen in both the dropdown and the table list.
+    await expect(tablePickerButton).toBeDisabled();
     await expect(notesInput).toBeDisabled();
 
     // Bypassing disabled UI via synthetic clicks or search Enter must also be blocked by the in-flight ref.
@@ -429,7 +678,7 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.getByText('Order sent').first()).toBeVisible();
     await expect(page.getByText('Tap menu items to add them here.').first()).toBeVisible();
     // Sending clears the table; picking it again shows what was sent.
-    await expect(page.locator('header')).toContainText('Select a table');
+    await expect(page.getByTestId('server-app-header-table')).toContainText('Table —');
     await pickTable(page, tableAName);
     await expect(sentCoffee(page, 1).first()).toBeVisible();
     releaseKotPrint();
@@ -438,7 +687,7 @@ test.describe('Server App tableside ordering', () => {
     await search.fill('E2E Coffee');
     await search.press('Enter');
     await page.getByRole('button', { name: 'Add to order' }).first().click();
-    await expect(page.locator('header')).toContainText('Select a table');
+    await expect(page.getByTestId('server-app-header-table')).toContainText('Table —');
     await pickTable(page, tableAName);
     await expect(sentCoffee(page.locator('main'), 1)).toHaveCount(2);
     await expect.poll(() => kotPrintPayloads.length).toBe(2);
@@ -909,7 +1158,7 @@ test.describe('Server App tableside ordering', () => {
     const delayedAuthMeResponse = page.waitForResponse((res) => res.url().includes('/api/auth/me'));
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await authMeIntercepted;
-    await page.locator('header').getByRole('button', { name: 'Logout' }).click();
+    await logoutServerApp(page);
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
     releaseAuthMe();
     await delayedAuthMeResponse;

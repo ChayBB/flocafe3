@@ -2,35 +2,28 @@
 
 import type { ReactNode } from 'react';
 import { Prompt } from 'next/font/google';
-import { ChefHat, ChevronDown, Moon, Sun } from 'lucide-react';
+import { ChefHat, History, Moon, Sun } from 'lucide-react';
 import { useTranslations } from 'use-intl';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { LANGUAGES, type Language } from '@/lib/i18n/languages';
+import type { Language } from '@/lib/i18n/languages';
 import { LanguageFlag } from './LanguageFlag';
+import { ServiceMenu } from './ServiceMenu';
+import { TableUserSelector } from './TableUserSelector';
 
 // A soft, rounded Thai and Latin face that keeps the header relaxed and easy to read.
 const headerFont = Prompt({ subsets: ['thai', 'latin'], weight: ['400', '500'], display: 'swap' });
 
-const TABLE_CHIP =
-  'flex min-w-0 items-center gap-2 rounded-2xl bg-[#F4EDE4] py-2 ps-2 pe-3 text-[15px] text-neutral-800 shadow-md';
-
 const ICON_BUTTON =
-  'flex size-11 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 disabled:opacity-50';
+  'flex size-[38px] shrink-0 items-center justify-center rounded-full bg-white p-[7px] transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2';
 
 export const HEADER_PILL =
   'flex h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-sm font-medium sm:px-5 sm:text-[15px] shadow-md transition-colors disabled:opacity-50';
 
 export const HEADER_PILL_FILLED = `${HEADER_PILL} border-2 border-white/80 bg-brand text-white hover:brightness-110`;
 
-/**
- * The Server App and table-QR menu header: the table and customer top left, language, tables and
- * theme top right, and the logo with order history, staff and the table QR under the cover.
- */
+export const HEADER_TEXT_ACTION =
+  'flex h-11 shrink-0 translate-y-[15px] items-center justify-center gap-2 bg-transparent px-4 font-sans text-sm font-medium leading-5 tracking-normal text-white opacity-100 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-100 sm:px-5';
+
+/** Shared branding and controls for the Server App and table-QR menu. */
 export function ServerAppHeader({
   logoUrl,
   coverUrl,
@@ -38,14 +31,17 @@ export function ServerAppHeader({
   customerName,
   language,
   onLanguage,
-  onTables,
+  onStaffLogin,
+  staffLoginLabel,
+  staffName,
   tablesExpanded,
+  onShowTables,
+  tableSelectionDisabled,
   dark,
   onDark,
   onHistory,
   historyDisabled,
   staffButton,
-  onShowQr,
 }: {
   logoUrl: string | null;
   coverUrl: string | null;
@@ -53,124 +49,108 @@ export function ServerAppHeader({
   customerName: ReactNode;
   language: Language;
   onLanguage: (language: Language) => void;
-  onTables?: () => void;
+  onStaffLogin: () => void;
+  staffLoginLabel: string;
+  staffName?: string;
   tablesExpanded?: boolean;
+  onShowTables?: () => void;
+  tableSelectionDisabled?: boolean;
   dark?: boolean;
   onDark?: () => void;
   onHistory: () => void;
   historyDisabled: boolean;
   staffButton: ReactNode;
-  onShowQr?: () => void;
 }) {
   const t = useTranslations('serverApp');
-  const tTables = useTranslations('tables');
-  const languages = (Object.keys(LANGUAGES) as Language[]).filter(
-    (code) => LANGUAGES[code].selectable,
-  );
-  const chipBody = (
-    <>
-      <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-brand ring-1 ring-black/5">
-        {logoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={logoUrl} alt="" className="size-full object-contain" />
-        ) : (
-          <ChefHat size={15} />
-        )}
-      </span>
-      <span className="truncate">{tableText}</span>
-      {customerName && (
-        <>
-          <span aria-hidden="true" className="h-4 w-px shrink-0 bg-neutral-300" />
-          <span data-testid="server-app-header-customer" className="min-w-0 truncate">
-            {customerName}
-          </span>
-        </>
-      )}
-    </>
-  );
   return (
     <header
       data-testid="server-app-header"
       className={`relative bg-background ${headerFont.className}`}
     >
-      <div className="relative flex min-h-48 flex-col overflow-hidden bg-gradient-to-br from-brand to-orange-300 sm:min-h-60">
-        {coverUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={coverUrl}
-            alt=""
-            data-testid="server-app-header-cover"
-            className="absolute inset-0 size-full object-cover"
+      <div className="relative flex min-h-48 flex-col overflow-hidden bg-[#F3D4A8] sm:min-h-60">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={coverUrl || '/images/server-app-cover-1920x1080.jpg'}
+          alt=""
+          data-testid={coverUrl ? 'server-app-header-cover' : 'server-app-header-default-cover'}
+          className="absolute inset-0 size-full object-cover"
+        />
+        <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[#FFF4DD]/35 to-transparent" />
+        <div className="relative flex w-full items-start gap-3 px-3 pt-2.5">
+          <TableUserSelector
+            tableName={tableText}
+            userName={customerName}
+            expanded={tablesExpanded}
+            onShowTables={onShowTables}
+            disabled={tableSelectionDisabled}
+            label={t('selectTable')}
           />
-        )}
-        <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/35 to-transparent" />
-        <div className="relative mx-auto flex w-full max-w-6xl items-start gap-2 px-3 pt-3">
-          {onTables ? (
-            <button
-              type="button"
-              onClick={onTables}
-              aria-expanded={tablesExpanded}
-              aria-label={t('selectTable')}
-              title={t('selectTable')}
-              data-testid="server-app-table-button"
-              className={`${TABLE_CHIP} transition-colors hover:bg-[#EDE3D6]`}
-            >
-              <span
-                data-testid="server-app-header-table"
-                className="flex min-w-0 items-center gap-2"
-              >
-                {chipBody}
-              </span>
-              <ChevronDown
-                size={18}
-                aria-hidden="true"
-                className={`shrink-0 text-neutral-500 transition-transform ${tablesExpanded ? 'rotate-180' : ''}`}
-              />
-            </button>
-          ) : (
-            <p data-testid="server-app-header-table" className={TABLE_CHIP}>
-              {chipBody}
-            </p>
-          )}
-          <div className="ms-auto flex shrink-0 items-center rounded-full border-2 border-white/80 bg-black/45 px-1 shadow-md">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  data-testid="server-app-language-button"
-                  aria-label={t('changeLanguage')}
-                  title={t('changeLanguage')}
-                  className={ICON_BUTTON}
-                >
-                  <LanguageFlag language={language} className="size-8 ring-2 ring-white" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="max-h-[60vh] overflow-y-auto">
-                {languages.map((code) => (
-                  <DropdownMenuItem
-                    key={code}
-                    onSelect={() => onLanguage(code)}
-                    className={`gap-2.5 ${code === language ? 'font-medium text-brand' : ''}`}
-                  >
-                    <LanguageFlag language={code} className="size-5 ring-1 ring-border" />
-                    {LANGUAGES[code].nativeName}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {onDark && (
+          <div className="ms-auto flex shrink-0 items-center gap-3">
+            {staffName && (
               <button
                 type="button"
-                onClick={onDark}
-                aria-pressed={dark}
-                aria-label={t('darkMode')}
-                title={t('darkMode')}
-                data-testid="server-app-theme-button"
-                className={ICON_BUTTON}
+                onClick={onStaffLogin}
+                disabled={tableSelectionDisabled}
+                aria-label={staffLoginLabel}
+                data-testid="server-app-staff-name"
+                title={staffName}
+                className="max-w-12 truncate font-sans text-sm font-medium leading-5 text-white drop-shadow-sm sm:max-w-32"
               >
-                {dark ? <Sun size={22} /> : <Moon size={22} />}
+                {staffName}
               </button>
             )}
+            <div data-testid="server-app-header-circles" className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="server-app-language-button"
+                aria-label={t('changeLanguage')}
+                title={t('changeLanguage')}
+                onClick={() => onLanguage(language === 'th' ? 'en' : 'th')}
+                className={ICON_BUTTON}
+              >
+                <LanguageFlag language={language} className="size-[21.6px]" />
+              </button>
+              {onDark ? (
+                <button
+                  type="button"
+                  onClick={onDark}
+                  aria-pressed={dark}
+                  aria-label={t('darkMode')}
+                  title={t('darkMode')}
+                  data-testid="server-app-theme-button"
+                  className={`${ICON_BUTTON} text-[#111111]`}
+                >
+                  {dark ? <Sun size={19.8} /> : <Moon size={19.8} />}
+                </button>
+              ) : (
+                <span
+                  data-testid="server-app-header-empty-circle"
+                  aria-hidden="true"
+                  className="size-[38px] shrink-0 rounded-full bg-white"
+                />
+              )}
+              <ServiceMenu onStaffLogin={onStaffLogin}>
+                <button
+                  data-testid="server-app-header-grid-circle"
+                  type="button"
+                  aria-label={t('serviceMenuTitle')}
+                  className={`${ICON_BUTTON} text-[#111111]`}
+                >
+                  <svg
+                    aria-hidden="true"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  >
+                    <path d="M4 7h16 M4 17h10" />
+                  </svg>
+                </button>
+              </ServiceMenu>
+            </div>
           </div>
         </div>
         <div className="relative mx-auto mt-auto flex w-full max-w-6xl flex-wrap items-end gap-3 px-3 pb-3 pt-3">
@@ -194,22 +174,12 @@ export function ServerAppHeader({
               onClick={onHistory}
               disabled={historyDisabled}
               aria-label={t('orderHistory')}
-              className={HEADER_PILL_FILLED}
+              className={HEADER_TEXT_ACTION}
             >
+              <History size={17} aria-hidden="true" className="shrink-0" />
               {t('orderHistory')}
             </button>
             {staffButton}
-            {onShowQr && (
-              <button
-                type="button"
-                onClick={onShowQr}
-                title={tTables('guestQrButton')}
-                data-testid="server-app-table-qr-button"
-                className={`${HEADER_PILL} border border-white/80 bg-black/45 text-white hover:bg-black/60`}
-              >
-                {t('showQr')}
-              </button>
-            )}
           </div>
         </div>
       </div>

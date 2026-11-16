@@ -1,3 +1,4 @@
+import { logoutServerApp } from './helpers/server-app';
 import { test, expect } from '@playwright/test';
 import { E2E_BASE_URL, E2E_SERVER_APP_BASE_URL } from './helpers/urls';
 import { E2E_PASSWORD, getE2eToken } from './helpers/test-auth';
@@ -129,19 +130,25 @@ test.describe('Server App guest from a table QR', () => {
     await expect(header.getByTestId('server-app-login-button')).toHaveText('Staff');
     await expect(header.getByRole('img', { name: 'Flo' })).toHaveCount(0);
     await expect(header.getByTestId('server-app-table-button')).toHaveCount(0);
-    await expect(header.getByTestId('server-app-session-button')).toHaveCount(0);
+    await expect(header.getByTestId('server-app-table-qr-button')).toHaveCount(0);
     await expect(header).toContainText(table.name);
     await expect(page.getByRole('heading', { name: 'Tables' })).toHaveCount(0);
 
     // A guest may switch the page's language, and the choice outlives a reload.
     const history = page.getByTestId('server-app-history-button');
+    await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(history).toHaveCSS('color', 'rgb(255, 255, 255)');
+    await expect(history).toHaveCSS('box-shadow', 'none');
+    await expect(history).toHaveCSS('border-width', '0px');
+    await expect(history).toHaveCSS('opacity', '1');
+    await expect(history).toHaveCSS('translate', '0px 15px');
+    await history.hover();
+    await expect(history).toHaveCSS('opacity', '1');
     await page.getByTestId('server-app-language-button').click();
-    await page.getByRole('menuitem', { name: 'ไทย' }).click();
     await expect(history).toHaveAttribute('aria-label', 'ประวัติการสั่ง');
     await page.reload();
     await expect(history).toHaveAttribute('aria-label', 'ประวัติการสั่ง');
     await page.getByTestId('server-app-language-button').click();
-    await page.getByRole('menuitem', { name: 'English' }).click();
     await expect(history).toHaveAttribute('aria-label', 'Order history');
     await expect(page.getByPlaceholder('Phone')).toHaveCount(0);
 
@@ -186,6 +193,9 @@ test.describe('Server App guest from a table QR', () => {
     await expect(
       page.getByTestId('server-app-guest-history-item').filter({ hasText: 'E2E Coffee' }).first(),
     ).toBeVisible();
+    await expect(page.getByTestId('server-app-guest-history-item').first()).toContainText(
+      'Waiting',
+    );
     await page.keyboard.press('Escape');
 
     // The Guest account that placed the orders never shows up as staff.
@@ -267,10 +277,8 @@ test.describe('Server App guest from a table QR', () => {
     await expect(html).not.toHaveClass(/(^|\s)dark(\s|$)/);
 
     await page.getByTestId('server-app-login-button').click();
-    await page.getByPlaceholder('Staff name').fill('server@flo.local');
-    await page.getByPlaceholder('Staff code').fill('E2ePass123!');
-    await page.getByRole('button', { name: 'Sign In' }).click();
-    await expect(page.locator('header').getByTestId('server-app-staff-name')).toBeVisible();
+    await page.getByPlaceholder('Staff code').fill('4242');
+    await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
     await expect(html).toHaveClass(/(^|\s)dark(\s|$)/);
   });
 
@@ -303,21 +311,53 @@ test.describe('Server App guest from a table QR', () => {
     const table = await createTable(page);
     await setEnglish(page);
     await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
-    await page.getByTestId('server-app-login-button').click();
-    await page.getByPlaceholder('Staff name').fill('server@flo.local');
-    await page.getByPlaceholder('Staff code').fill('E2ePass123!');
-    await page.getByRole('button', { name: 'Sign In' }).click();
+    await page.getByTestId('server-app-header-grid-circle').click();
+    const service = page.getByTestId('service-menu');
+    await service.getByRole('button', { name: 'Other', exact: true }).click();
+    await expect(service.getByRole('heading')).toHaveText('Other');
+    const staffTile = service.getByTestId('service-menu-staff');
+    const leaveTile = service.getByTestId('service-menu-leave');
+    await expect(leaveTile).toBeDisabled();
+    const staffBox = (await staffTile.boundingBox())!;
+    const leaveBox = (await leaveTile.boundingBox())!;
+    expect(leaveBox.x).toBeGreaterThan(staffBox.x);
+    expect(leaveBox.y).toBeCloseTo(staffBox.y, 1);
+    const exit = service.getByTestId('service-menu-exit');
+    expect((await exit.boundingBox())!.y).toBeGreaterThan(staffBox.y + staffBox.height);
+    await service.screenshot({ path: test.info().outputPath('other-staff-leave-exit.png') });
+    await exit.click();
+    await expect(service).toBeHidden();
+    await page.getByTestId('server-app-header-grid-circle').click();
+    await service.getByRole('button', { name: 'Other', exact: true }).click();
+    await service.getByRole('button', { name: 'Back', exact: true }).click();
+    await expect(service.getByTestId('service-menu-card')).toHaveCount(4);
+    await service.getByRole('button', { name: 'Other', exact: true }).click();
+    await service.getByTestId('service-menu-staff').click();
+    await expect(service).toHaveCount(0);
+    const rejectedLogin = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/auth/login') && response.request().method() === 'POST',
+    );
+    await page.getByPlaceholder('Staff code').fill('0000');
+    expect((await rejectedLogin).status()).toBe(401);
+    await expect(page.getByPlaceholder('Staff code')).toBeVisible();
+    await expect(page.locator('header')).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('flocafe:server-app-token'))).toBeNull();
+    await page.getByPlaceholder('Staff code').fill('4242');
 
     const header = page.locator('header');
-    await expect(header.getByTestId('server-app-staff-name')).toHaveText('E2E server');
-    await expect(header.getByTestId('server-app-table-button')).toHaveCount(0);
+    await expect(header).toContainText('E2E server');
+    await expect(header.getByTestId('server-app-table-button')).toHaveAttribute(
+      'aria-label',
+      'Select a table',
+    );
     await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
-    await expect(header.getByTestId('server-app-session-button')).toHaveClass(/bg-brand/);
+    await expect(header.getByTestId('server-app-table-qr-button')).toHaveClass(/bg-transparent/);
     await expect(header.getByTestId('server-app-login-button')).toHaveCount(0);
     await expect(header).toContainText(table.name);
 
     // Signing out returns to the guest view of the same table.
-    await header.getByTestId('server-app-session-button').click();
+    await logoutServerApp(page);
     await expect(header.getByTestId('server-app-guest-name')).toBeVisible();
     await expect(header).toContainText(table.name);
   });
@@ -814,7 +854,7 @@ test('staff hand out a table QR from the POS and the Server App, and it stops wo
       ['flocafe:server-app-token', getE2eToken('e2e-server', 'server@flo.local', 'server')],
     );
     await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?table=${table.id}`);
-    await page.getByTestId('server-app-table-qr-button').click();
+    await logoutServerApp(page);
     await expect(page.getByTestId('guest-table-qr').getByRole('img', { name: 'QR' })).toBeVisible();
   } finally {
     await request.put(`${E2E_BASE_URL}/api/settings/business`, {

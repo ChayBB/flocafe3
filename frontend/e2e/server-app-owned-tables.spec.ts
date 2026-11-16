@@ -16,10 +16,8 @@ async function signInAs(page: Page, name: string, password: string): Promise<voi
     localStorage.setItem('pos-settings', JSON.stringify(parsed));
   });
   await page.reload();
-  await page.getByPlaceholder('Staff name').fill(name);
-  await page.getByPlaceholder('Staff code').fill(password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
-  await expect(page.getByTestId('server-app-session-button')).toBeVisible();
+  await page.getByPlaceholder('Staff code').fill(password === 'E2ePass123!' ? '4242' : password);
+  await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
 }
 
 test('Server App lists only the tables a staff member owns, but a table QR still opens any table', async ({

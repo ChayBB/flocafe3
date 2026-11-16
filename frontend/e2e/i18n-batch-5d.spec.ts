@@ -127,7 +127,7 @@ test('Batch 5D: KDS and Server App render and function correctly in English and 
     await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Server App');
     await expect(page.getByText('Tableside ordering for service staff')).toBeVisible();
-    await expect(page.getByPlaceholder('Staff name')).toBeVisible();
+    await expect(page.getByPlaceholder('Staff name')).toHaveCount(0);
     await expect(page.getByPlaceholder('Staff code')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign In' })).toBeVisible();
     await captureScreenshot(page, 'server-login-en.png');

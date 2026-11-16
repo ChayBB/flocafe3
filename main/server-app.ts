@@ -397,7 +397,7 @@ export function startServerApp(): Promise<void> {
       res.send(image.body);
     });
 
-    app.post('/api/auth/login', loginAuthRateLimit(), (req: Request, res: Response) => {
+    app.post('/api/auth/login', loginAuthRateLimit(), async (req: Request, res: Response) => {
       if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });
       try {
         const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -409,8 +409,12 @@ export function startServerApp(): Promise<void> {
         }
 
         const identifier = String(req.body?.identifier ?? req.body?.email ?? '').trim();
-        const password = req.body?.password;
-        if (!identifier || !password)
+        const codeOnly = req.body?.staff_code !== undefined;
+        const password = codeOnly ? req.body.staff_code : req.body?.password;
+        if (
+          (codeOnly && !/^\d{4}$/.test(String(password ?? ''))) ||
+          (!codeOnly && (!identifier || !password))
+        )
           return res
             .status(400)
             .json({ error: 'Staff name or email and code or password required' });
@@ -419,11 +423,15 @@ export function startServerApp(): Promise<void> {
         const db = getDatabase();
         const bcrypt = require('bcryptjs');
         const email = normalizeEmail(identifier);
-        const candidates = db
-          .prepare(
-            'SELECT * FROM users WHERE is_active = 1 AND (name = ? COLLATE NOCASE OR email = ?)',
-          )
-          .all(identifier, email) as any[];
+        const candidates = (
+          codeOnly
+            ? db.prepare('SELECT * FROM users WHERE is_active = 1').all()
+            : db
+                .prepare(
+                  'SELECT * FROM users WHERE is_active = 1 AND (name = ? COLLATE NOCASE OR email = ?)',
+                )
+                .all(identifier, email)
+        ) as any[];
         const compare = (plain: string, hash: unknown) => {
           try {
             return typeof hash === 'string' && bcrypt.compareSync(plain, hash);
@@ -431,12 +439,22 @@ export function startServerApp(): Promise<void> {
             return false;
           }
         };
-        const matches = candidates.filter(
-          (candidate) =>
-            compare(secret, candidate.staff_code_hash) ||
-            compare(secret, candidate.pin_hash) ||
-            compare(secret, candidate.password),
-        );
+        const matches = [];
+        for (const candidate of candidates) {
+          let matched = false;
+          for (const hash of [candidate.staff_code_hash, candidate.pin_hash, candidate.password]) {
+            if (codeOnly) {
+              try {
+                matched = typeof hash === 'string' && (await bcrypt.compare(secret, hash));
+              } catch {
+                matched = false;
+              }
+            } else matched = compare(secret, hash);
+            if (matched) break;
+          }
+          if (matched) matches.push(candidate);
+          if (matches.length > 1) break;
+        }
         if (matches.length > 1) {
           incrementFailedLogin(ip);
           return res.status(401).json({
@@ -444,7 +462,21 @@ export function startServerApp(): Promise<void> {
             code: 'ambiguous_credentials',
           });
         }
-        const user = matches[0];
+        const verified = matches[0];
+        const current =
+          codeOnly && verified
+            ? (db
+                .prepare('SELECT * FROM users WHERE id = ? AND is_active = 1')
+                .get(verified.id) as any)
+            : verified;
+        const user =
+          current &&
+          (!codeOnly ||
+            ['staff_code_hash', 'pin_hash', 'password'].every(
+              (key) => current[key] === verified[key],
+            ))
+            ? current
+            : undefined;
         if (!user) {
           const attemptsRemaining = incrementFailedLogin(ip);
           return res.status(401).json({

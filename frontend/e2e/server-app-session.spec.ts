@@ -1,3 +1,4 @@
+import { logoutServerApp } from './helpers/server-app';
 import { test, expect, Page } from '@playwright/test';
 import { E2E_SERVER_APP_BASE_URL } from './helpers/urls';
 import { E2E_PASSWORD, getE2eToken } from './helpers/test-auth';
@@ -17,15 +18,18 @@ async function openLogin(page: Page): Promise<void> {
   await page.reload();
 }
 
-async function submitLogin(page: Page, identifier: string, secret: string): Promise<void> {
-  await page.getByPlaceholder('Staff name').fill(identifier);
-  await page.getByPlaceholder('Staff code').fill(secret);
-  await page.getByRole('button', { name: 'Sign In' }).click();
+async function submitLogin(page: Page, _identifier: string, secret: string): Promise<void> {
+  const code = secret === E2E_PASSWORD ? '4242' : secret.replace(/\D/g, '').slice(0, 4);
+  const response = page.waitForResponse(
+    (res) => res.url().endsWith('/api/auth/login') && res.request().method() === 'POST',
+  );
+  await page.getByPlaceholder('Staff code').fill(code);
+  await response;
 }
 
 async function signIn(page: Page, identifier = SERVER_EMAIL, secret = E2E_PASSWORD): Promise<void> {
   await submitLogin(page, identifier, secret);
-  await expect(page.getByTestId('server-app-session-button')).toBeVisible();
+  await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
 }
 
 async function createStaff(
@@ -40,15 +44,77 @@ async function createStaff(
 }
 
 test.describe('Server App session', () => {
+  test('one staff-code field signs in automatically once four digits are entered', async ({
+    page,
+  }) => {
+    const name = `Auto ${Date.now()}`;
+    await createStaff(page, { name, password: '7314', role: 'server', staff_code: '7314' });
+    await openLogin(page);
+    await expect(page.locator('form input')).toHaveCount(1);
+    let attempts = 0;
+    page.on('request', (request) => {
+      if (request.url().endsWith('/api/auth/login') && request.method() === 'POST') attempts++;
+    });
+    await page.getByPlaceholder('Staff code').fill('731');
+    expect(attempts).toBe(0);
+    await page.getByPlaceholder('Staff code').fill('7314');
+    await expect(page.getByTestId('server-app-staff-name')).toHaveText(name);
+    await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
+    expect(attempts).toBe(1);
+    await expect(page.locator('form input')).toHaveCount(0);
+  });
+
+  test('code-only login rejects unknown, ambiguous and unauthorized codes', async ({ page }) => {
+    const headers = {
+      Authorization: `Bearer ${getE2eToken('e2e-owner', 'owner@flo.local', 'owner')}`,
+    };
+    for (const name of [`Duplicate A ${Date.now()}`, `Duplicate B ${Date.now()}`]) {
+      await createStaff(page, { name, password: '8625', role: 'server', staff_code: '8625' });
+    }
+    await createStaff(page, {
+      name: `Cashier ${Date.now()}`,
+      password: '9846',
+      role: 'cashier',
+      staff_code: '9846',
+    });
+    const post = (staff_code: string) =>
+      page.request.post(`${E2E_SERVER_APP_BASE_URL}/api/auth/login`, { data: { staff_code } });
+    expect((await post('0000')).status()).toBe(401);
+    const duplicate = await post('8625');
+    expect(duplicate.status()).toBe(401);
+    expect((await duplicate.json()).code).toBe('ambiguous_credentials');
+    expect((await post('9846')).status()).toBe(403);
+    const created = await page.request.post(`${E2E_BASE_URL}/api/staff`, {
+      headers,
+      data: {
+        name: `Inactive ${Date.now()}`,
+        password: '7356',
+        role: 'server',
+        staff_code: '7356',
+      },
+    });
+    const body = await created.json();
+    const id = body.user?.id ?? body.staff?.id;
+    expect(id).toBeTruthy();
+    expect(
+      (
+        await page.request.post(`${E2E_BASE_URL}/api/staff/${id}/deactivate`, {
+          headers,
+        })
+      ).ok(),
+    ).toBeTruthy();
+    expect((await post('7356')).status()).toBe(401);
+  });
+
   test('sign-in screen shows a red user icon and the signed-in header a green one', async ({
     page,
   }) => {
     await openLogin(page);
     await expect(page.locator('form svg.text-red-600')).toBeVisible();
-    await expect(page.getByTestId('server-app-session-button')).toHaveCount(0);
+    await expect(page.getByTestId('server-app-table-qr-button')).toHaveCount(0);
 
     await signIn(page);
-    await expect(page.getByTestId('server-app-session-button')).toHaveClass(/bg-brand/);
+    await expect(page.getByTestId('server-app-table-qr-button')).toHaveClass(/bg-transparent/);
   });
 
   test('the session token ends at a 06:00 boundary within the next 24 hours', async ({ page }) => {
@@ -73,10 +139,10 @@ test.describe('Server App session', () => {
     expect(await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY)).toBeNull();
   });
 
-  test('pressing the user icon signs out', async ({ page }) => {
+  test('the staff sign-in screen still offers sign-out', async ({ page }) => {
     await openLogin(page);
     await signIn(page);
-    await page.getByTestId('server-app-session-button').click();
+    await logoutServerApp(page);
     await expect(page.locator('form svg.text-red-600')).toBeVisible();
   });
 
@@ -99,14 +165,14 @@ test.describe('Server App session', () => {
     await createStaff(page, { name, password: '1357', role: 'server', staff_code: '4821' });
     await openLogin(page);
     await submitLogin(page, name, '4820');
-    await expect(page.getByTestId('server-app-session-button')).toHaveCount(0);
+    await expect(page.getByTestId('server-app-table-qr-button')).toHaveCount(0);
     await signIn(page, name, '4821');
   });
 
   test('a wrong code is refused and the screen stays signed out', async ({ page }) => {
     await openLogin(page);
     await submitLogin(page, 'E2E server', '000000x');
-    await expect(page.getByTestId('server-app-session-button')).toHaveCount(0);
+    await expect(page.getByTestId('server-app-table-qr-button')).toHaveCount(0);
     await expect(page.locator('form svg.text-red-600')).toBeVisible();
   });
 
@@ -120,6 +186,6 @@ test.describe('Server App session', () => {
     const login = await response;
     expect(login.status()).toBe(401);
     expect((await login.json()).code).toBe('ambiguous_credentials');
-    await expect(page.getByTestId('server-app-session-button')).toHaveCount(0);
+    await expect(page.getByTestId('server-app-table-qr-button')).toHaveCount(0);
   });
 });

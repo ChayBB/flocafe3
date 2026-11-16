@@ -34,7 +34,11 @@ import {
 import { useSyncServerLanguage, writeLanguageOverride } from '@/lib/i18n';
 import type { Language } from '@/lib/i18n/languages';
 import { usePosSettingsStore } from '@/store/pos-settings';
-import { HEADER_PILL_FILLED, ServerAppHeader } from '@/components/server-app/ServerAppHeader';
+import {
+  HEADER_PILL_FILLED,
+  HEADER_TEXT_ACTION,
+  ServerAppHeader,
+} from '@/components/server-app/ServerAppHeader';
 import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/GuestOrderHistory';
 import { useReloadOnNewBuild } from '@/hooks/useReloadOnNewBuild';
 import { holdDarkClass } from '@/lib/kds-screen-mode';
@@ -324,7 +328,6 @@ export default function ServerStandalonePage() {
   const api = useMemo(() => (typeof window !== 'undefined' ? createApi() : null), []);
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [user, setUser] = useState<User | null>(null);
   const [disabled, setDisabled] = useState(false);
@@ -460,6 +463,7 @@ export default function ServerStandalonePage() {
   const [, setCustomerSearched] = useState(false);
   const phoneDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const tablePickerRef = useRef<HTMLElement>(null);
+  const menuRef = useRef<HTMLElement>(null);
   // Set when the cart sent the server to pick a table, so the cart comes back ready to send.
   const reopenCartAfterTableRef = useRef(false);
   const phoneAbortRef = useRef<AbortController | null>(null);
@@ -869,7 +873,6 @@ export default function ServerStandalonePage() {
       orderLoadedTableIdRef.current = '';
       activeUserIdRef.current = null;
       setUser(null);
-      setEmail('');
       setPassword('');
       setDraft([]);
       setOrderNotes('');
@@ -1397,6 +1400,19 @@ export default function ServerStandalonePage() {
     setSelectedTableId(tableId);
   }
 
+  function selectTableFromPicker(tableId: string) {
+    const table = staffTables.find((table) => table.id === tableId);
+    if (!table || sendInFlightRef.current) return;
+    selectTable(table.id);
+    if (!isWide) setTablePickerOpen(false);
+    const order = table.activeOrder || table.current_order;
+    if (order?.serve_confirm_requested_at) setOrderedItemsOpen(true);
+    if (reopenCartAfterTableRef.current) {
+      reopenCartAfterTableRef.current = false;
+      if (!isWide) setMobileCartOpen(true);
+    }
+  }
+
   function openAddonModal(
     product: Product,
     quantity: number,
@@ -1417,14 +1433,15 @@ export default function ServerStandalonePage() {
     setEditingDraftLine(line);
   }
 
-  async function handleLogin(event: FormEvent) {
-    event.preventDefault();
-    if (!api) return;
+  const loginInFlightRef = useRef(false);
+  async function handleLogin(event?: FormEvent, code = password) {
+    event?.preventDefault();
+    if (!api || loginInFlightRef.current || !/^\d{4}$/.test(code)) return;
+    loginInFlightRef.current = true;
     setLoginLoading(true);
     try {
       const res = await api.post('/api/auth/login', {
-        identifier: email.trim(),
-        password,
+        staff_code: code,
       });
       authSessionSeqRef.current += 1;
       localStorage.setItem(TOKEN_KEY, res.data.access_token);
@@ -1456,6 +1473,7 @@ export default function ServerStandalonePage() {
       toastApiError(error, t('signInFailed'), apiErrorT);
     } finally {
       setLoginLoading(false);
+      loginInFlightRef.current = false;
     }
   }
 
@@ -1989,7 +2007,7 @@ export default function ServerStandalonePage() {
     awaitingPayment(activeTable?.activeOrder || activeTable?.current_order);
   const headerTableText = activeTable
     ? t('tableLabel', { name: activeTable.name ?? String(activeTable.number) })
-    : t('selectTable');
+    : t('tableLabel', { name: guestTable?.name || '—' });
   const canMoveTable = tenantCan(user as unknown as Tenant, 'tables.orders.move');
   const draftTotal = draft.reduce((sum, line) => {
     const addonTotal = line.addons.reduce(
@@ -2120,11 +2138,11 @@ export default function ServerStandalonePage() {
     );
   }
 
-  if (!user && !guestMode) {
+  if (showLogin || (!user && !guestMode)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <form
-          onSubmit={handleLogin}
+          onSubmit={(event) => void handleLogin(event)}
           className="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-sm"
         >
           {regional?.server_time && regional.timezone && (
@@ -2144,21 +2162,22 @@ export default function ServerStandalonePage() {
           </div>
           <div className="space-y-3">
             <input
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              type="text"
-              autoComplete="username"
-              placeholder={t('staffNamePlaceholder')}
-              required
-              className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-            />
-            <input
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) => {
+                const code = event.target.value.replace(/\D/g, '').slice(0, 4);
+                setPassword(code);
+                if (code.length === 4) void handleLogin(undefined, code);
+              }}
               type="password"
-              autoComplete="current-password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={4}
+              minLength={4}
+              disabled={loginLoading}
               placeholder={t('staffCodePlaceholder')}
+              aria-label={t('staffCodePlaceholder')}
               required
+              autoFocus
               className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
             />
             <button
@@ -2169,13 +2188,25 @@ export default function ServerStandalonePage() {
             </button>
           </div>
           <p className="mt-4 text-center text-xs text-muted-foreground">{t('loginHint')}</p>
-          {guestTable && (
+          {user && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowLogin(false);
+                logout();
+              }}
+              className="mt-3 w-full text-center text-sm font-medium text-muted-foreground underline"
+            >
+              {tNav('logout')}
+            </button>
+          )}
+          {(guestTable || user) && (
             <button
               type="button"
               onClick={() => setShowLogin(false)}
               className="mt-3 w-full text-center text-sm font-medium text-muted-foreground underline"
             >
-              {t('continueAsGuest')}
+              {user ? tCommon('cancel') : t('continueAsGuest')}
             </button>
           )}
         </form>
@@ -2259,7 +2290,16 @@ export default function ServerStandalonePage() {
           {t('newItems')}
         </p>
         {draft.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('emptyDraft')}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setMobileCartOpen(false);
+              menuRef.current?.scrollIntoView({ block: 'start' });
+            }}
+            className="w-full rounded-lg py-6 text-center text-sm text-muted-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-brand"
+          >
+            {t('emptyDraft')}
+          </button>
         ) : (
           <div className="space-y-3">
             {draft.map((line) => (
@@ -2431,28 +2471,44 @@ export default function ServerStandalonePage() {
         })()}
         language={language}
         onLanguage={chooseLanguage}
-        onTables={
-          user && !isWide && !sending ? () => setTablePickerOpen((open) => !open) : undefined
-        }
+        onStaffLogin={() => setShowLogin(true)}
+        staffLoginLabel={tAuth('signIn')}
+        staffName={user?.name}
         tablesExpanded={showTablePicker}
+        onShowTables={
+          user
+            ? () => {
+                setTablePickerOpen(true);
+                window.setTimeout(
+                  () =>
+                    tablePickerRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+                  0,
+                );
+              }
+            : undefined
+        }
+        tableSelectionDisabled={sending}
         dark={staffSeesDark}
         onDark={user ? toggleStaffDark : undefined}
         onHistory={() => (user ? setOrderedItemsOpen(true) : setGuestHistoryOpen(true))}
         historyDisabled={user ? !activeTable : !guestTable}
-        onShowQr={user && selectedTableId ? () => setTableQrOpen(true) : undefined}
         staffButton={
           user ? (
             <button
               type="button"
-              onClick={logout}
-              aria-label={tNav('logout')}
-              title={tNav('logout')}
-              data-testid="server-app-session-button"
-              className={`${HEADER_PILL_FILLED} max-w-[8rem] sm:max-w-[11rem]`}
+              onClick={() => setTableQrOpen(true)}
+              disabled={!selectedTableId || sending}
+              aria-label={t('showQr')}
+              title={tTables('guestQrButton')}
+              data-testid="server-app-table-qr-button"
+              className={`${HEADER_TEXT_ACTION} max-w-[8rem] sm:max-w-[11rem]`}
             >
-              <UserRound size={17} aria-hidden="true" className="shrink-0" />
-              <span data-testid="server-app-staff-name" className="truncate">
-                {user.name}
+              <QrCode size={17} aria-hidden="true" className="shrink-0" />
+              <span
+                data-testid="server-app-qr-label"
+                className="truncate font-sans text-sm font-medium leading-5 tracking-normal"
+              >
+                {t('showQr')}
               </span>
             </button>
           ) : (
@@ -2489,6 +2545,7 @@ export default function ServerStandalonePage() {
           className={`mx-auto grid max-w-6xl min-w-0 gap-3 px-4 py-2 md:p-3 ${showTablePicker ? 'md:grid-cols-[180px_1fr] lg:grid-cols-[220px_1fr_340px]' : 'lg:grid-cols-[1fr_340px]'}`}
         >
           <GuestAlerts api={api} apiPrefix="/api" enabled={!!user} />
+
           {tableQrOpen && api && selectedTableId && (
             <GuestTableQrDialog
               tableId={selectedTableId}
@@ -2522,6 +2579,7 @@ export default function ServerStandalonePage() {
           {showTablePicker && (
             <section
               ref={tablePickerRef}
+              id="server-app-table-picker"
               data-testid="server-app-table-picker"
               className="min-w-0 scroll-mt-20 md:rounded-lg md:border md:border-border md:bg-card md:p-3"
             >
@@ -2558,15 +2616,7 @@ export default function ServerStandalonePage() {
                       key={table.id}
                       disabled={sending}
                       // A phone folds the list away once a table is picked, leaving the menu.
-                      onClick={() => {
-                        selectTable(table.id);
-                        if (!isWide) setTablePickerOpen(false);
-                        if (tone === 'confirm') setOrderedItemsOpen(true);
-                        if (reopenCartAfterTableRef.current) {
-                          reopenCartAfterTableRef.current = false;
-                          if (!isWide) setMobileCartOpen(true);
-                        }
-                      }}
+                      onClick={() => selectTableFromPicker(table.id)}
                       data-table-tone={tone}
                       className={`flex min-h-14 items-center gap-2 rounded-lg border px-2 py-2 text-start text-gray-900 disabled:opacity-50 ${toneClass} ${selected ? 'ring-2 ring-brand' : ''}`}
                     >
@@ -2618,7 +2668,10 @@ export default function ServerStandalonePage() {
 
           {/* svh, not dvh: the menu keeps its height while a phone browser's toolbar slides in and out.
               On a phone the menu has no frame of its own, so the photos get the full width. */}
-          <section className="flex h-[calc(100svh-5rem)] min-h-96 min-w-0 flex-col md:rounded-lg md:border md:border-border md:bg-card md:p-3">
+          <section
+            ref={menuRef}
+            className="flex h-[calc(100svh-5rem)] min-h-96 min-w-0 flex-col md:rounded-lg md:border md:border-border md:bg-card md:p-3"
+          >
             {user && !tablePickerOpen && activeTable && !isWide && showKitchenSummary && (
               <div data-testid="server-app-table-actions" className="mb-3">
                 <TableKitchenSummary

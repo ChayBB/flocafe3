@@ -58,3 +58,8 @@ server-app-bundle.zip
 /flocafe-*.zip
 /kds-tablet-*.log
 /selected-kds-*.log
+
+# Local test-run logs and editor backups
+/shared-run*.log
+/shared-run*.err
+*.bak-*
