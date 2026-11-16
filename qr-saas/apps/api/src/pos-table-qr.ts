@@ -24,16 +24,19 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         await sql.begin(async (tx) => {
           await tx`
           UPDATE dining_tables d SET name = s.name, bill_awaiting_payment = s.awaiting_payment,
+            pos_active_order_numbers = coalesce(s.active_order_numbers, d.pos_active_order_numbers),
+            pos_active_orders_synced_at = CASE WHEN s.active_order_numbers IS NOT NULL THEN now() ELSE d.pos_active_orders_synced_at END,
             qr_ordering_until = CASE WHEN s.active THEN now() + interval '365 days' ELSE NULL END,
             qr_session_generation = CASE WHEN NOT s.active THEN NULL
               WHEN d.qr_ordering_until > now() THEN coalesce(d.qr_session_generation, gen_random_uuid())
               ELSE gen_random_uuid() END
           FROM jsonb_to_recordset(${tx.json(body.tables)})
-            AS s(pos_table_id text, name text, active boolean, awaiting_payment boolean)
+            AS s(pos_table_id text, name text, active boolean, awaiting_payment boolean, active_order_numbers jsonb)
           WHERE d.tenant_id = ${tenantId} AND d.branch_id = ${branchId}
             AND d.pos_installation_id IS NOT DISTINCT FROM ${installationId}::uuid
             AND d.pos_table_id = s.pos_table_id
             AND (d.name IS DISTINCT FROM s.name OR d.bill_awaiting_payment IS DISTINCT FROM s.awaiting_payment
+              OR (s.active_order_numbers IS NOT NULL AND (d.pos_active_order_numbers IS DISTINCT FROM s.active_order_numbers OR d.pos_active_orders_synced_at IS NULL))
               OR (s.active AND (d.qr_ordering_until IS NULL OR d.qr_ordering_until < now() + interval '1 day' OR d.qr_session_generation IS NULL))
               OR (NOT s.active AND (d.qr_ordering_until IS NOT NULL OR d.qr_session_generation IS NOT NULL)))
         `;
@@ -59,6 +62,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
               name: t.String({ minLength: 1, maxLength: 80 }),
               active: t.Boolean(),
               awaiting_payment: t.Boolean(),
+              active_order_numbers: t.Optional(t.Array(t.String({ minLength: 1, maxLength: 80 }))),
             }),
             { minItems: 1, maxItems: 250 },
           ),

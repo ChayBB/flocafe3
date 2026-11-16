@@ -648,6 +648,17 @@ tables and previously closed stickers. Inactive tables reject sessions and revok
 Resetting guest sessions revokes current tokens; active tables resume after POS synchronization.
 The customer page renews a revoked cached session automatically when no submission has an unknown
 outcome. Cloud orders for mapped tables can only be accepted into their linked POS table.
+The connector also synchronizes the numbers of unpaid active dine-in orders for each table.
+Cloud history retains unacknowledged submissions and acknowledged orders still in that snapshot,
+including fully served but unpaid orders. Orders from completed visits remain stored but are
+excluded from the table's current history. This requires Cloud migration
+`011_table_active_orders.sql` and `012_table_active_orders_snapshot_time.sql`.
+Orders created or acknowledged after the last snapshot stay visible until POS synchronization
+can classify them. A missing snapshot from an older connector preserves the last
+known snapshot rather than clearing it.
+Table QR submissions append to the latest active dine-in order, including a fully served order;
+completed and cancelled orders are excluded. Concurrent QR submissions for one table are serialized,
+and replaying a submission does not add its items again.
 The local Server App and integrated Cloud ordering reject new items only while a printed bill
 awaits cashier receipt confirmation. Confirmation clears the hold without reopening the table.
 Cloud rejects new submissions with `409 bill_awaiting_payment`

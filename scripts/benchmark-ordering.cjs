@@ -12,12 +12,14 @@ const table = '11111111-1111-4111-8111-111111111111';
 const item = '22222222-2222-4222-8222-222222222222';
 const token = 'a'.repeat(43);
 const renewedToken = 'b'.repeat(43);
+let css;
 const samples = [];
 let requests = [];
 let scenario = 'ok';
 let presentationReads = 0;
 let awaitingPayment = false;
 let orderWrites = 0;
+let sentOrders = [];
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/')) {
@@ -73,15 +75,23 @@ const server = http.createServer(async (req, res) => {
         ? {
             items: [{ id: item, name: 'Benchmark Coffee', price_satang: 5000, category: 'Drinks' }],
           }
-        : { orders: [], bill_awaiting_payment: awaitingPayment };
+        : { orders: sentOrders, bill_awaiting_payment: awaitingPayment };
     res.end(JSON.stringify(data));
+    return;
+  }
+  if (url.pathname === '/styles.css') {
+    res.setHeader('Content-Type', 'text/css');
+    res.end(css);
     return;
   }
   if (url.pathname === '/') {
     res.setHeader('Content-Type', 'text/html');
-    res.end(
-      '<html lang="th"><div id="root"></div><script type="module" src="/order.js"></script></html>',
-    );
+    res.end(fs.readFileSync(path.resolve(__dirname, '../flocafe-ordering/pos.html'), 'utf8'));
+    return;
+  }
+  if (url.pathname === '/menu-loader.js') {
+    res.setHeader('Content-Type', 'text/javascript');
+    res.end(fs.readFileSync(path.resolve(__dirname, '../flocafe-ordering/menu-loader.js')));
     return;
   }
   if (url.pathname.endsWith('/menu-presentation.json')) {
@@ -101,6 +111,15 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function main() {
+  const { createRequire } = require('node:module');
+  const frontend = path.resolve(__dirname, '../frontend');
+  const fromFrontend = createRequire(path.join(frontend, 'package.json'));
+  const cssPath = path.join(frontend, 'src/app/globals.css');
+  css = (
+    await fromFrontend('postcss')([
+      fromFrontend('@tailwindcss/postcss')({ base: frontend, optimize: true }),
+    ]).process(fs.readFileSync(cssPath, 'utf8'), { from: cssPath })
+  ).css;
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const browser = await chromium.launch({
     chromiumSandbox: true,
@@ -244,6 +263,13 @@ async function main() {
       await product.waitFor();
       await page.getByRole('button', { name: labels.currentTicket, exact: true }).click();
       await page.getByRole('button', { name: labels.sendToKitchen, exact: true }).waitFor();
+      await page.getByRole('button', { name: labels.emptyDraft, exact: true }).click();
+      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      assert(
+        await page.getByTestId('pos-product-grid').isVisible(),
+        'empty ticket returns to the menu',
+      );
+      await page.getByRole('button', { name: labels.currentTicket, exact: true }).click();
       assert(
         await page.getByRole('button', { name: labels.sendToKitchen, exact: true }).isDisabled(),
       );
@@ -304,10 +330,112 @@ async function main() {
         'a payment hold still permits checking an uncertain previous attempt',
       );
       await retryButton.click();
-      await retryPage.getByRole('status').filter({ hasText: 'ระบบได้รับออเดอร์แล้ว' }).waitFor();
+      await retryPage.getByRole('status').filter({ hasText: 'ได้รับออเดอร์แล้ว' }).waitFor();
+      assert.equal(
+        await retryPage
+          .getByRole('status')
+          .filter({ hasText: 'ได้รับออเดอร์แล้ว กำลังดำเนินการ' })
+          .first()
+          .evaluate((element) => getComputedStyle(element).textAlign),
+        'center',
+      );
       assert.equal(orderWrites, 2);
       await retryContext.close();
       checks.push('payment hold permits an uncertain accepted-order replay');
+      scenario = 'ok';
+      awaitingPayment = false;
+      const receipt = (id, number, name, status) => ({
+        id,
+        pos_order_number: number,
+        status,
+        items: [{ name, quantity: 1, note: '', status, addons: [] }],
+      });
+      const old = receipt(
+        '44444444-4444-4444-8444-444444444444',
+        'PAID-OLD',
+        'Previous meal',
+        'served',
+      );
+      const fresh = receipt(
+        '55555555-5555-4555-8555-555555555555',
+        'CURRENT',
+        'Current meal',
+        'preparing',
+      );
+      sentOrders = [old, fresh];
+      const historyContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const historyPage = await historyContext.newPage();
+      await historyPage.clock.install();
+      await historyPage.goto(`http://127.0.0.1:${server.address().port}/#table=${table}`);
+      await historyPage.getByRole('button', { name: labels.currentTicket, exact: true }).click();
+      await historyPage.getByText('Previous meal', { exact: true }).waitFor();
+      sentOrders = [fresh];
+      await historyPage.clock.runFor(15000);
+      await historyPage.getByText('Previous meal', { exact: true }).waitFor({ state: 'hidden' });
+      await historyPage.getByText('Current meal', { exact: true }).waitFor();
+      assert.equal(await historyPage.getByText('#PAID-OLD', { exact: true }).count(), 0);
+      await historyContext.close();
+      sentOrders = [];
+      checks.push('paid receipts disappear on history refresh while the current order remains');
+      for (const failure of ['script', 'render', 'timeout']) {
+        const recoveryContext = await browser.newContext();
+        const recoveryPage = await recoveryContext.newPage();
+        const diagnostics = [];
+        recoveryPage.on('console', (message) => {
+          if (message.text().startsWith('[FloCafe menu]')) diagnostics.push(message.text());
+        });
+        await recoveryContext.addInitScript(() =>
+          sessionStorage.setItem('recovery-sentinel', 'keep'),
+        );
+        if (failure === 'script') {
+          await recoveryPage.route('**/order.js', (route) => route.abort(), { times: 1 });
+        } else if (failure === 'render') {
+          await recoveryPage.route(
+            '**/menu-presentation.json',
+            (route) =>
+              route.fulfill({
+                json: { categories: [], products: [{ variants: null }], popular: [] },
+              }),
+            { times: 1 },
+          );
+        } else {
+          await recoveryPage.clock.install();
+          await recoveryPage.route('**/order.js', () => {});
+        }
+        const writesBefore = orderWrites;
+        await recoveryPage.goto(`http://127.0.0.1:${server.address().port}/#table=${table}`);
+        if (failure === 'timeout') await recoveryPage.clock.runFor(30001);
+        const code =
+          failure === 'script'
+            ? 'MENU_SCRIPT_FAILED'
+            : failure === 'render'
+              ? 'MENU_RENDER_FAILED'
+              : 'MENU_START_TIMEOUT';
+        await recoveryPage.getByText(`รหัสข้อผิดพลาด: ${code}`, { exact: true }).waitFor();
+        assert(await recoveryPage.getByRole('link', { name: 'โหลดใหม่', exact: true }).isVisible());
+        assert.equal(diagnostics.length, 1);
+        assert(!diagnostics[0].includes(token), 'diagnostics must not expose a table token');
+        if (failure !== 'timeout') {
+          await recoveryPage.getByRole('link', { name: 'โหลดใหม่', exact: true }).click();
+          await recoveryPage
+            .getByTestId('pos-product-grid')
+            .getByText('Benchmark Coffee', { exact: true })
+            .first()
+            .waitFor();
+          assert.equal(new URL(recoveryPage.url()).hash, `#table=${table}`);
+          assert(new URL(recoveryPage.url()).searchParams.has('reload'));
+          assert.equal(
+            await recoveryPage.evaluate(() => sessionStorage.getItem('recovery-sentinel')),
+            'keep',
+          );
+          assert(await recoveryPage.locator('#menu-recovery').isHidden());
+        }
+        assert.equal(orderWrites, writesBefore, 'recovery never sends an order');
+        await recoveryContext.close();
+        checks.push(
+          `${failure} failure displays recovery without clearing storage or sending orders`,
+        );
+      }
     }
     const result = {
       kind: 'controlled browser fixture; not production latency',

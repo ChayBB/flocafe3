@@ -17,7 +17,7 @@ test.skipIf(!databaseUrl || !redisUrl)(
     try {
       await sql.unsafe(`CREATE SCHEMA ${schema}`);
       await sql.unsafe(`SET search_path TO ${schema}, public`);
-      for (const file of [...new Bun.Glob('*.sql').scanSync('db/migrations')].sort()) {
+      for (const file of [...new Bun.Glob('*.sql').scanSync('db/migrations')].sort().filter(file => file !== '011_table_active_orders.sql')) {
         await sql.begin(async (tx) => {
           await tx.unsafe(await Bun.file(`db/migrations/${file}`).text());
         });
@@ -26,6 +26,10 @@ test.skipIf(!databaseUrl || !redisUrl)(
         await sql`INSERT INTO tenants(name) VALUES ('Payment gate fixture') RETURNING id`;
       const [branch] =
         await sql`INSERT INTO branches(tenant_id,name) VALUES (${tenant.id},'Fixture') RETURNING id`;
+      const [legacy] = await sql`INSERT INTO dining_tables(tenant_id,branch_id,name) VALUES (${tenant.id},${branch.id},'Existing table') RETURNING id`;
+      await sql.unsafe(await Bun.file('db/migrations/011_table_active_orders.sql').text());
+      const [upgraded] = await sql`SELECT name,pos_active_order_numbers FROM dining_tables WHERE id=${legacy.id}`;
+      expect(upgraded).toEqual({ name: 'Existing table', pos_active_order_numbers: null });
       const [item] =
         await sql`INSERT INTO menu_items(tenant_id,branch_id,external_id,name,price_satang)
       VALUES (${tenant.id},${branch.id},'rice','Rice',5000) RETURNING id`;
@@ -77,14 +81,14 @@ test.skipIf(!databaseUrl || !redisUrl)(
           },
           body: JSON.stringify({ ...table, ...body }),
         });
-      const sync = (active: boolean, awaiting_payment: boolean, authorized = true) =>
+      const sync = (active: boolean, awaiting_payment: boolean, authorized = true, active_order_numbers?: string[]) =>
         fetch(`${base}/api/v1/connectors/table-states`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             ...(authorized ? { Authorization: `Bearer ${connector}` } : {}),
           },
-          body: JSON.stringify({ tables: [{ ...table, active, awaiting_payment }] }),
+          body: JSON.stringify({ tables: [{ ...table, active, awaiting_payment, active_order_numbers }] }),
         });
       const opened = await manage({ action: 'open', awaiting_payment: false });
       expect(opened.status).toBe(200);
@@ -134,8 +138,27 @@ test.skipIf(!databaseUrl || !redisUrl)(
         (await sql`SELECT COUNT(*)::int AS count FROM outbox_events WHERE kind='order.created'`)[0]
           .count,
       ).toBe(1);
+      const [event] = await sql`SELECT id FROM outbox_events WHERE payload->>'order_id'=${orderId}`;
+      await sql`INSERT INTO connector_deliveries(event_id,tenant_id,branch_id,status,pos_receipt_id,pos_order_number)
+        VALUES (${event.id},${tenant.id},${branch.id},'acknowledged',${randomUUID()},'POS-OLD')`;
+      await sql`UPDATE orders SET status='served' WHERE id=${orderId}`;
+      const historyOrders = async () => (await (await fetch(`${base}/api/v1/table-session/orders`, { headers: { Authorization: `Bearer ${token}` } })).json()).orders;
+      expect((await sync(true, false, true, ['POS-OLD'])).status).toBe(200);
+      expect((await historyOrders()).map((row: { id: string }) => row.id)).toContain(orderId);
+      expect((await sync(true, false, true, [])).status).toBe(200);
+      expect(await historyOrders()).toEqual([]);
+      expect((await sql`SELECT COUNT(*)::int AS count FROM orders WHERE id=${orderId}`)[0].count).toBe(1);
+      const next = await order(randomUUID());
+      expect(next.status).toBe(200);
+      const nextId = (await next.json()).order_id;
+      const [nextEvent] = await sql`SELECT id FROM outbox_events WHERE payload->>'order_id'=${nextId}`;
+      await sql`INSERT INTO connector_deliveries(event_id,tenant_id,branch_id,status,pos_receipt_id,pos_order_number,acknowledged_at)
+        VALUES (${nextEvent.id},${tenant.id},${branch.id},'acknowledged',${randomUUID()},'POS-NEW',now())`;
+      await sql`UPDATE orders SET status='pos_accepted',created_at=now()-interval '1 hour' WHERE id=${nextId}`;
+      expect((await historyOrders()).map((row: { id: string }) => row.id)).toEqual([nextId]);
+      expect((await (await order(key)).json()).order_id).toBe(orderId);
       expect((await sync(true, false)).status).toBe(200);
-      expect((await order(randomUUID())).status).toBe(200);
+      expect((await historyOrders()).map((row: { id: string }) => row.id)).toEqual([nextId]);
       expect((await sql`SELECT COUNT(*)::int AS count FROM orders`)[0].count).toBe(2);
       expect((await sync(false, false)).status).toBe(200);
       expect((await order(randomUUID())).status).toBe(401);

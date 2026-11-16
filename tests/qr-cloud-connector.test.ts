@@ -194,7 +194,12 @@ async function verifyOrderAcceptance() {
   let pageBody: unknown = order;
   const acknowledgements: { pos_receipt_id: string }[] = [];
   const kitchenReports: { order_id: string; statuses: string[] }[] = [];
-  const tableStates: { pos_table_id: string; active: boolean; awaiting_payment: boolean }[][] = [];
+  const tableStates: {
+    pos_table_id: string;
+    active: boolean;
+    awaiting_payment: boolean;
+    active_order_numbers: string[];
+  }[][] = [];
   https.request = (
     options: { method: string; path: string; rejectUnauthorized: boolean },
     callback: (response: unknown) => void,
@@ -287,7 +292,11 @@ async function verifyOrderAcceptance() {
         body: JSON.stringify({ table_id, confirmed }),
       });
     const orders = () =>
-      db.prepare("SELECT id, table_id FROM orders WHERE table_id LIKE 'cloud-table-%'").all();
+      db
+        .prepare(
+          "SELECT id, table_id, order_number FROM orders WHERE table_id LIKE 'cloud-table-%'",
+        )
+        .all();
     assert.equal((await fetch(route)).status, 401);
     assert.equal((await fetch(route, { headers: headersFor(staff) })).status, 403);
     assert.equal((await accept('cloud-table-a', false)).status, 400);
@@ -479,6 +488,7 @@ async function verifyOrderAcceptance() {
       tableStates.at(-1)?.find((table) => table.pos_table_id === 'cloud-table-a');
     await processCloudOrderDelivery(config.readConfig(), signal);
     assert.equal(latestTable()?.awaiting_payment, true);
+    assert.ok(latestTable()?.active_order_numbers.includes(placed.order_number));
     assert.equal(latestTable()?.active, true);
     db.prepare("UPDATE orders SET bill_payment_received_at = datetime('now') WHERE id = ?").run(
       placed.id,
@@ -491,6 +501,7 @@ async function verifyOrderAcceptance() {
       'cashier confirmation releases a free table without opening its QR',
     );
     assert.equal(latestTable()?.active, true);
+    assert.ok(!latestTable()?.active_order_numbers.includes(placed.order_number));
     assert.equal(
       outbound.includes('POST /api/v1/connectors/table-qr'),
       false,
@@ -589,6 +600,89 @@ async function verifyOrderAcceptance() {
       acknowledgements.length,
       3,
       'a price mismatch stays in the inbox without a POS write or ACK',
+    );
+    db.prepare(
+      "INSERT INTO products (id, name, price) VALUES ('served-topup', 'Top-up fixture', 20)",
+    ).run();
+    const topUp = (key: string, source?: 'cloud') =>
+      placeGuestOrder(undefined, {
+        tableId: 'cloud-table-b',
+        key,
+        source,
+        note: null,
+        items: [{ product_id: 'served-topup', quantity: 1 }],
+      });
+    const first = await topUp('served-first', 'cloud');
+    assert.equal(first.kind, 'placed');
+    const original = db
+      .prepare('SELECT id, order_number FROM orders WHERE table_id = ?')
+      .get('cloud-table-b');
+    const markServed = () => {
+      db.prepare("UPDATE order_items SET status = 'served' WHERE order_id = ?").run(original.id);
+      db.prepare("UPDATE orders SET status = 'served' WHERE id = ?").run(original.id);
+    };
+    markServed();
+    const second = await topUp('served-second', 'cloud');
+    assert.equal(second.kind, 'placed');
+    assert.equal(
+      second.orderNumber,
+      original.order_number,
+      'Cloud top-up reuses an unpaid served order',
+    );
+    markServed();
+    const friends = await Promise.all([topUp('friend-one', 'cloud'), topUp('friend-two')]);
+    assert.ok(
+      friends.every(
+        (result) => result.kind === 'placed' && result.orderNumber === original.order_number,
+      ),
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS n FROM orders WHERE table_id = ?').get('cloud-table-b').n,
+      1,
+    );
+    const countItems = () =>
+      db.prepare('SELECT COUNT(*) AS n FROM order_items WHERE order_id = ?').get(original.id).n;
+    assert.equal(countItems(), 4);
+    assert.deepEqual(
+      db
+        .prepare('SELECT status FROM order_items WHERE order_id = ? ORDER BY id')
+        .all(original.id)
+        .map((item) => item.status),
+      ['served', 'served', 'pending', 'pending'],
+      'only the newly ordered food returns to the kitchen queue',
+    );
+    assert.equal(
+      db.prepare('SELECT subtotal FROM orders WHERE id = ?').get(original.id).subtotal,
+      80,
+    );
+    const replay = await topUp('served-second', 'cloud');
+    assert.equal(replay.kind, 'placed');
+    assert.equal(replay.replayed, true);
+    assert.equal(countItems(), 4, 'retry does not duplicate food');
+    markServed();
+    db.prepare("UPDATE orders SET bill_requested_at = datetime('now') WHERE id = ?").run(
+      original.id,
+    );
+    const paymentLocked = await topUp('served-held', 'cloud');
+    assert.equal(paymentLocked.kind, 'held');
+    assert.equal(paymentLocked.body.code, 'bill_awaiting_payment');
+    assert.equal(countItems(), 4);
+    db.prepare(
+      "UPDATE orders SET status = 'completed', bill_payment_received_at = datetime('now') WHERE id = ?",
+    ).run(original.id);
+    const nextVisit = await topUp('after-completed', 'cloud');
+    assert.equal(nextVisit.kind, 'placed');
+    assert.notEqual(
+      nextVisit.orderNumber,
+      original.order_number,
+      'a completed bill is never reused',
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS n FROM orders WHERE table_id = ?').get('cloud-table-b').n,
+      2,
+    );
+    console.log(
+      'Served-order top-ups, concurrent friends, payment hold and closed-bill boundaries passed',
     );
   } finally {
     https.request = originalRequest;

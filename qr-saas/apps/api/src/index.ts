@@ -256,8 +256,16 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
      'addons',(SELECT coalesce(jsonb_agg(jsonb_build_object('name',a->>'name','quantity',(a->>'quantity')::int)),'[]'::jsonb) FROM jsonb_array_elements(i.addons_snapshot) a)
    ) ORDER BY i.id) FROM order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS items
    FROM orders o JOIN table_sessions s ON s.id=o.table_session_id AND (s.tenant_id,s.branch_id)=(o.tenant_id,o.branch_id)
+   JOIN dining_tables d ON (d.id,d.tenant_id,d.branch_id)=(s.table_id,s.tenant_id,s.branch_id)
    WHERE o.tenant_id=${session.tenant_id} AND o.branch_id=${session.branch_id} AND s.table_id=${session.table_id}
      AND (CASE WHEN ${session.qr_generation}::uuid IS NULL THEN s.id=${session.id} ELSE s.qr_generation=${session.qr_generation}::uuid END)
+     AND (d.pos_active_order_numbers IS NULL OR d.pos_active_orders_synced_at IS NULL OR o.created_at > d.pos_active_orders_synced_at OR NOT EXISTS (
+       SELECT 1 FROM outbox_events e JOIN connector_deliveries cd ON cd.event_id=e.id
+       WHERE e.tenant_id=o.tenant_id AND e.branch_id=o.branch_id AND e.kind='order.created'
+         AND e.payload->>'order_id'=o.id::text AND cd.pos_order_number IS NOT NULL
+         AND (cd.acknowledged_at IS NULL OR cd.acknowledged_at <= d.pos_active_orders_synced_at)
+         AND NOT (d.pos_active_order_numbers ? cd.pos_order_number)
+     ))
    ORDER BY o.created_at DESC LIMIT 20`;
  const [table]=await sql`SELECT bill_awaiting_payment FROM dining_tables
    WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id}`;

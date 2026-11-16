@@ -136,6 +136,11 @@ async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {
     number: string;
     is_active: number;
   }[];
+  const activeOrders = pos
+    .prepare(
+      "SELECT table_id, order_number FROM orders WHERE type = 'dine_in' AND status IN ('pending', 'preparing', 'ready', 'served') AND bill_payment_received_at IS NULL",
+    )
+    .all() as { table_id: string; order_number: string }[];
   for (let offset = 0; offset < tables.length; offset += 250) {
     if (signal.aborted || readConfig().cloudUrl !== config.cloudUrl) return;
     await syncConnectorTableStates(
@@ -145,6 +150,9 @@ async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {
         name: table.number,
         active: Boolean(table.is_active),
         awaiting_payment: tableAwaitingBillPayment(pos, table.id),
+        active_order_numbers: activeOrders
+          .filter((order) => order.table_id === table.id)
+          .map((order) => order.order_number),
       })),
     );
   }

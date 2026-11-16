@@ -240,7 +240,13 @@ export function manageConnectorTableQr(
 
 export function syncConnectorTableStates(
   options: FetchEventsOptions,
-  tables: { pos_table_id: string; name: string; active: boolean; awaiting_payment: boolean }[],
+  tables: {
+    pos_table_id: string;
+    name: string;
+    active: boolean;
+    awaiting_payment: boolean;
+    active_order_numbers: string[];
+  }[],
 ): Promise<unknown> {
   return requestConnectorJson(
     options,

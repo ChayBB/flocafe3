@@ -21,6 +21,8 @@ test.skipIf(!testUrl)(
       tenant_id uuid, branch_id uuid, name text, pos_table_id text, pos_installation_id uuid,
       qr_ordering_until timestamptz, qr_session_generation uuid,
       bill_awaiting_payment boolean NOT NULL DEFAULT false,
+      pos_active_order_numbers jsonb,
+      pos_active_orders_synced_at timestamptz,
       UNIQUE(tenant_id, branch_id, pos_table_id)
     )`;
       await sql`CREATE TEMP TABLE table_sessions (

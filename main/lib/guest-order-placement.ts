@@ -156,7 +156,7 @@ export async function placeGuestOrder(
     const open = db
       .prepare(
         `SELECT id FROM orders WHERE table_id = ? AND type = 'dine_in'
-         AND status IN ('pending', 'preparing', 'ready') ORDER BY id DESC LIMIT 1`,
+         AND status IN ('pending', 'preparing', 'ready', 'served') ORDER BY id DESC LIMIT 1`,
       )
       .get(input.tableId) as { id: number } | undefined;
     const existingItemIds = new Set(
