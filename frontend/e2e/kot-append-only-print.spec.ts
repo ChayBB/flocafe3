@@ -149,8 +149,12 @@ test('adding an item to an occupied table only prints the newly appended item on
     });
 
     let kotRequestBody: { orderId?: number; items?: Array<{ id: number }> } | null = null;
+    let releasePrinter = () => {};
+    const printerHeld = new Promise<void>((resolve) => (releasePrinter = resolve));
     await page.route('**/api/printers/print-kot', async (route) => {
       kotRequestBody = route.request().postDataJSON();
+      // A slow kitchen printer must not hold the table sheet open.
+      await printerHeld;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -175,13 +179,19 @@ test('adding an item to an occupied table only prints the newly appended item on
     await page.getByText(tableNumber, { exact: true }).click();
 
     await expect(page.getByRole('button', { name: /Add 1 item to order/i })).toBeVisible();
+    const kotRequest = page.waitForRequest((request) =>
+      request.url().includes('/api/printers/print-kot'),
+    );
+    await page.getByRole('button', { name: /Add 1 item to order/i }).click();
+    await kotRequest;
+
+    await expect(page.getByText(/Items added to order/)).toBeVisible();
+    await expect(page.getByRole('button', { name: /Add 1 item to order/i })).toHaveCount(0);
     const kotResponse = page.waitForResponse((response) =>
       response.url().includes('/api/printers/print-kot'),
     );
-    await page.getByRole('button', { name: /Add 1 item to order/i }).click();
+    releasePrinter();
     await kotResponse;
-
-    await expect(page.getByText(/Items added to order/)).toBeVisible();
 
     expect(kotRequestBody, 'the append must trigger a KOT print').not.toBeNull();
     expect(kotRequestBody!.orderId).toBe(order.id);

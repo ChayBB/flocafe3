@@ -3423,18 +3423,15 @@ export default function POSPage() {
         Array.isArray(data.added_items) && data.added_items.length > 0
           ? data.added_items
           : (updatedOrder.items || []).filter((item) => !existingItemIds.has(Number(item.id)));
-      await printKotIfEnabled(
-        appendedItems.length > 0 ? { ...updatedOrder, items: appendedItems } : updatedOrder,
-      );
-      if (!isSessionCurrent()) {
-        if (buildCartFingerprint(useCartStore.getState()) === cartFingerprint) {
-          useCartStore.getState().clearCart();
-        }
-        return;
+      if (buildCartFingerprint(useCartStore.getState()) === cartFingerprint) {
+        useCartStore.getState().clearCart();
       }
-      cart.clearCart();
       setCheckoutTable(null);
       refreshTables();
+      // The items are saved; the ticket prints behind the closed sheet so a slow printer cannot hold it open.
+      void printKotIfEnabled(
+        appendedItems.length > 0 ? { ...updatedOrder, items: appendedItems } : updatedOrder,
+      );
     } catch (error) {
       if (!isSessionCurrent()) return;
       if (error instanceof OrderAttemptStorageError)
@@ -4140,10 +4137,9 @@ export default function POSPage() {
             setPaymentBill(bill);
             setCheckoutOverridePin(overridePin);
           }}
-          onAddCartToOrder={(table, order) => {
-            if (!checkoutTable) return;
-            handleAddCartToOrder(table, order);
-          }}
+          onAddCartToOrder={(table, order) =>
+            checkoutTable ? handleAddCartToOrder(table, order) : undefined
+          }
           onOrderMoved={({ sourceTable, targetTable }) => {
             if (cart.tableId === sourceTable.id) {
               cart.setTableId(targetTable.id);

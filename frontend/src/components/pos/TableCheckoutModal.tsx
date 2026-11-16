@@ -41,7 +41,7 @@ interface Props {
   canGenerateBill: boolean;
   canReadBills?: boolean;
   onPayment: (bill: Bill, overridePin?: string) => void;
-  onAddCartToOrder?: (table: Table, order: Order) => void;
+  onAddCartToOrder?: (table: Table, order: Order) => Promise<void> | void;
   onOrderMoved?: (result: { sourceTable: Table; targetTable: Table; order: Order }) => void;
   tables?: Table[];
 }
