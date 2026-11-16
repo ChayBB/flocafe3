@@ -23,6 +23,7 @@ import {
   queueKdsSound,
   speakKds,
   speakKdsNow,
+  primeKdsVoice,
   writeKdsSoundSettings,
   type KdsSoundSetting,
   type KdsSoundSettings,
@@ -355,6 +356,7 @@ export function KdsWorkspace({
       });
       if (parts.length > 0) {
         const lang = kdsSpeechLang();
+        primeKdsVoice(parts[0].text.split(/\s+/)[0] ?? '', lang);
         queueKdsSound(async () => {
           for (const [index, part] of parts.entries()) {
             if (index > 0) await new Promise((resolve) => setTimeout(resolve, part.pauseMs));
