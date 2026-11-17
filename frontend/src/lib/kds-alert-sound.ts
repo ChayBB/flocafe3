@@ -204,13 +204,8 @@ export async function playKdsAudio(data: ArrayBuffer): Promise<boolean> {
     source.connect(audio.destination);
     const lead = Date.now() - lastAudioEndedAt > AUDIO_IDLE_MS ? AUDIO_WAKE_LEAD_S : 0;
     if (lead > 0) playWakeSignal(audio, lead);
-    // A suspended context never fires onended; the timeout keeps the sound queue moving.
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, (buffer.duration + lead) * 1000 + 1000);
-      source.onended = () => {
-        clearTimeout(timer);
-        resolve();
-      };
+      source.onended = () => resolve();
       source.start(audio.currentTime + lead);
     });
     lastAudioEndedAt = Date.now();

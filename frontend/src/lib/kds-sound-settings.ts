@@ -48,6 +48,7 @@ export function writeKdsSoundSettings(settings: KdsSoundSettings): void {
 
 const VOICE_WAIT_MS = 1000;
 const SPEECH_TIMEOUT_MS = 20000;
+const SPEECH_START_TIMEOUT_MS = 3000;
 let speechQueue: Promise<void> = Promise.resolve();
 const serverVoiceMissing = new Set<string>();
 
@@ -131,8 +132,18 @@ function utter(
       done(started);
       if (!started || volume === 0) window.speechSynthesis.cancel();
     }, timeoutMs);
+    // A tablet browser that refuses speech without a fresh tap never starts it, so fall through fast.
+    const startTimer = window.setTimeout(
+      () => {
+        if (started) return;
+        done(false);
+        window.speechSynthesis.cancel();
+      },
+      Math.min(timeoutMs, SPEECH_START_TIMEOUT_MS),
+    );
     const done = (spoke: boolean) => {
       window.clearTimeout(timer);
+      window.clearTimeout(startTimer);
       resolve(spoke);
     };
     utterance.onstart = () => {
