@@ -33,7 +33,22 @@ withInterfaces(
   () => {
     assert.equal(getLocalIP(), '192.168.1.42');
     assert.equal(getAllLocalIPs()[0], '192.168.1.42');
-    assert.equal(getAllLocalIPs().length, 4);
+    assert.deepEqual(getAllLocalIPs(), ['192.168.1.42', '100.100.1.2']);
+  },
+);
+
+withInterfaces(
+  {
+    'vEthernet (WSL (Hyper-V firewall))': [v4('172.21.0.1')],
+    'Ethernet 2': [v4('192.168.56.1')],
+    'Wi-Fi': [v4('172.20.10.5')],
+  } as Ifaces,
+  () => {
+    assert.deepEqual(
+      getAllLocalIPs(),
+      ['172.20.10.5'],
+      'WSL and VM host-only adapters are not offered to phones',
+    );
   },
 );
 

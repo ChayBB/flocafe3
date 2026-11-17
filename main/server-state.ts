@@ -58,7 +58,16 @@ function listLocalIPv4(): string[] {
       }
     }
   }
-  return candidates.sort((x, y) => y.score - x.score || x.order - y.order).map((c) => c.address);
+  const ranked = candidates.sort((x, y) => y.score - x.score || x.order - y.order);
+  // WSL, Docker and VM host-only adapters only reach this computer, so phones are never sent there.
+  // A VPN mesh address (100.64.0.0/10) stays, since devices on the mesh can reach it.
+  const reachable = ranked.filter((c) => c.score >= 0 || isMeshAddress(c.address));
+  return (reachable.length > 0 ? reachable : ranked).map((c) => c.address);
+}
+
+function isMeshAddress(address: string): boolean {
+  const [a, b] = address.split('.').map(Number);
+  return a === 100 && b >= 64 && b <= 127;
 }
 
 /** Returns the best-ranked valid non-loopback IPv4 address on the machine. */
