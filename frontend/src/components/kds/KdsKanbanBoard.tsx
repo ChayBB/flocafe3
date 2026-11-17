@@ -252,7 +252,7 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
                 : order.type}
             </Badge>
             {order.table?.name && (
-              <Badge variant="secondary" className="bg-muted text-foreground">
+              <Badge variant="secondary" className="bg-[#03b881] font-semibold text-white">
                 {t('tableLabel', { name: order.table.name })}
               </Badge>
             )}
@@ -350,7 +350,7 @@ function VoidedColumn({ groups }: { groups: Array<{ order: KdsOrder; items: KdsO
                 #{order.order_number}
               </Ltr>
               {order.table?.name && (
-                <Badge variant="secondary" className="bg-muted text-foreground">
+                <Badge variant="secondary" className="bg-[#03b881] font-semibold text-white">
                   {t('tableLabel', { name: order.table.name })}
                 </Badge>
               )}
