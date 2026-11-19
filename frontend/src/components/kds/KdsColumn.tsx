@@ -38,7 +38,7 @@ export function KdsColumn({ status, count, children }: KdsColumnProps) {
       </div>
       <KdsScrollArea
         dropRef={ref}
-        className={`flex-1 border border-border border-t-0 rounded-b-lg p-2 space-y-2 overflow-y-auto bg-muted/40 transition-colors ${
+        className={`flex-1 border border-border border-t-0 rounded-b-lg px-0.5 py-1 space-y-1 overflow-y-auto bg-muted/40 transition-colors ${
           isDropTarget ? 'bg-muted ring-2 ring-border ring-inset' : ''
         }`}
       >

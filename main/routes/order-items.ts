@@ -27,6 +27,7 @@ import { hasPermission, requirePermission } from '../services/authorization';
 import { ROLE_ACCESS, hasRole } from '../../shared/role-permissions';
 import { cloudSync } from '../services/cloud-sync';
 import { isOperationReference, serializeOperationFailure } from '../lib/operation-failure';
+import { assertNoOutOfStockStageLock } from '../services/kds-out-of-stock';
 
 const router = Router();
 
@@ -67,6 +68,7 @@ interface OrderItemRow {
   order_id: number | string;
   status: string;
   category_id?: string | null;
+  out_of_stock_at?: string | null;
 }
 
 // PATCH /api/order-items/:id/status — update a single item's kitchen status
@@ -316,6 +318,7 @@ router.patch(
             });
           }
         }
+        assertNoOutOfStockStageLock(item);
 
         const updatedAt = now();
         const updateResult =

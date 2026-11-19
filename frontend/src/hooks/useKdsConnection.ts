@@ -141,6 +141,12 @@ export interface KdsOrderItem {
   /** When service staff confirmed the served item reached the table, and who. */
   served_confirmed_at?: string | null;
   served_confirmed_by_name?: string | null;
+  /** When the kitchen flagged the dish out of stock, asking service staff to cancel it. */
+  out_of_stock_at?: string | null;
+  /** A line priced after the order: its weight in kg, whether it still waits, and how it is priced. */
+  weight?: number | null;
+  weight_pending?: number | boolean | null;
+  pending_price_mode?: 'weight' | 'kitchen_price' | null;
   store_timezone?: string;
 }
 
@@ -247,12 +253,21 @@ export interface UseKdsConnectionResult {
   /** Prints a missing kitchen ticket again; `gone` means it was already printed or dropped. */
   reprintUnprintedKot: (ref: string) => Promise<'printed' | 'gone' | 'failed'>;
   dropUnprintedKot: (ref: string) => Promise<void>;
+  /** Moves an item to `status`, or with `outOfStock` set flags or clears it as out of stock instead. */
   updateItemStatus: (
     itemId: number,
     status: KitchenStatus,
-    opts?: { silent?: boolean; expectedStatus?: KitchenStatus },
+    opts?: KdsItemUpdateOptions,
   ) => Promise<boolean>;
   ConfirmDialog: ReactNode;
+}
+
+/** `outOfStock` flags the dish and `priceEntry` weighs or prices it; either keeps its stage. */
+export interface KdsItemUpdateOptions {
+  silent?: boolean;
+  expectedStatus?: KitchenStatus;
+  outOfStock?: boolean;
+  priceEntry?: { weight: number } | { price: number };
 }
 
 const LOGIN_ENDPOINT = '/auth/login';
@@ -477,19 +492,22 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
   }, [fetchOrdersRest, stopRestPolling]);
 
   const updateItemStatus = useCallback(
-    async (
-      itemId: number,
-      status: KitchenStatus,
-      opts: { silent?: boolean; expectedStatus?: KitchenStatus } = {},
-    ) => {
+    async (itemId: number, status: KitchenStatus, opts: KdsItemUpdateOptions = {}) => {
       const generation = sessionGenerationRef.current;
       updatingIdsRef.current.add(itemId);
       setUpdating(itemId);
       try {
-        await api.patch(itemStatusPath.replace(':itemId', String(itemId)), {
-          status,
-          ...(opts.expectedStatus ? { expected_status: opts.expectedStatus } : {}),
-        });
+        await api.patch(
+          itemStatusPath.replace(':itemId', String(itemId)),
+          opts.priceEntry
+            ? opts.priceEntry
+            : opts.outOfStock !== undefined
+              ? { out_of_stock: opts.outOfStock }
+              : {
+                  status,
+                  ...(opts.expectedStatus ? { expected_status: opts.expectedStatus } : {}),
+                },
+        );
         // A closed socket stays in wsRef for the reconnect timer, so test readiness, not presence.
         if (
           generation === sessionGenerationRef.current &&
@@ -498,7 +516,15 @@ export function useKdsConnection(options: UseKdsConnectionOptions): UseKdsConnec
           await fetchOrdersRest();
         }
         if (generation === sessionGenerationRef.current && !opts.silent) {
-          toast.success(t('itemMarked', { status: statusLabel(status) }));
+          toast.success(
+            opts.priceEntry
+              ? Object.hasOwn(opts.priceEntry, 'price')
+                ? t('priceEntrySaved')
+                : t('weightEntrySaved')
+              : opts.outOfStock === undefined
+                ? t('itemMarked', { status: statusLabel(status) })
+                : t(opts.outOfStock ? 'outOfStockSent' : 'outOfStockCleared'),
+          );
         }
         return true;
       } catch (error: unknown) {

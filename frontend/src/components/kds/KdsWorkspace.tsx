@@ -458,8 +458,8 @@ export function KdsWorkspace({
         stations={conn.stations}
         stationId={stationId}
         onChangeStation={conn.selectStation}
-        screenMode={screen.mode}
-        onScreenMode={screen.setMode}
+        fontScale={screen.fontScale}
+        onFontScale={screen.setFontScale}
         onOpenSettings={() => setSettingsOpen(true)}
         onLogout={conn.handleLogout}
       />
@@ -511,6 +511,8 @@ export function KdsWorkspace({
         onScreenMode={screen.setMode}
         brightness={screen.brightness}
         onBrightness={screen.setBrightness}
+        fontScale={screen.fontScale}
+        onFontScale={screen.setFontScale}
         onClose={() => setSettingsOpen(false)}
       />
       {conn.ConfirmDialog}

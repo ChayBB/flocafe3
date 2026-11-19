@@ -6285,7 +6285,8 @@ router.patch(
       }
 
       const isItemVoidInProgress = item.status === 'ready';
-      if (item.status === 'preparing') {
+      // A dish the kitchen flagged out of stock was never cooked, so it may still be cancelled.
+      if (item.status === 'preparing' && !item.out_of_stock_at) {
         return res.status(409).json({
           error: 'Cannot cancel an item while it is preparing',
           code: 'ITEM_PREPARING',
@@ -6426,8 +6427,8 @@ router.patch(
           });
         }
 
-        // Preparation cannot be cancelled, even with manager approval.
-        if (currentItem.status === 'preparing') {
+        // Preparation cannot be cancelled, even with manager approval, unless the kitchen ran out.
+        if (currentItem.status === 'preparing' && !currentItem.out_of_stock_at) {
           throw Object.assign(new Error('Cannot cancel an item while it is preparing'), {
             statusCode: 409,
             code: 'ITEM_PREPARING',
@@ -6520,8 +6521,8 @@ router.patch(
           cancelOrderItemAndRestoreStock(db, currentItem, actorId, reason, {
             skipStockRestore: isUnreleasedOrderRow(currentOrder),
           });
-          if (currentItem.status === 'pending') {
-            // The kitchen had not started it: flag the cancellation on the KDS.
+          if (currentItem.status === 'pending' || currentItem.out_of_stock_at) {
+            // The kitchen had not started it, or ran out: flag the cancellation on the KDS.
             db.prepare(
               "UPDATE order_items SET service_change = 'cancelled', service_change_at = ? WHERE id = ?",
             ).run(now(), itemId);
@@ -7340,9 +7341,238 @@ router.patch(
 );
 
 /**
- * Completes a line that was priced after the order. A weighed line's unit price is the base price
- * per kg times the weight; a kitchen-priced line takes the set price the kitchen gives as entered.
+ * The per-kg price of a weighed line. A line weighed before keeps its base price in the weighing
+ * audit record, since its unit price already includes the earlier weight.
  */
+function weighedBaseUnitPrice(
+  db: ReturnType<typeof getDatabase>,
+  item: OrderItemRow,
+  decimals: number,
+): number {
+  if (item.weight_pending || item.weight == null) return Number(item.unit_price);
+  const audit = db
+    .prepare(
+      `SELECT details_json FROM order_audit_log
+       WHERE order_item_id = ? AND action = 'item_weighed'
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(item.id) as { details_json: string | null } | undefined;
+  try {
+    const base = Number(JSON.parse(audit?.details_json ?? 'null')?.base_unit_price);
+    if (Number.isFinite(base) && base > 0) return base;
+  } catch {}
+  return Number((Number(item.unit_price) / Number(item.weight)).toFixed(decimals));
+}
+
+/**
+ * Prices a line that is priced after the order, as often as the kitchen re-weighs or re-prices it.
+ * A weighed line's unit price is the base price per kg times the weight; a kitchen-priced line
+ * takes the set price as entered. Throws errors carrying an HTTP `statusCode`.
+ */
+export function applyPendingPriceEntry(
+  db: ReturnType<typeof getDatabase>,
+  params: {
+    orderId: string;
+    itemId: string;
+    actorId: string;
+    mode: PendingPriceMode;
+    value: unknown;
+  },
+): Record<string, unknown> {
+  const { orderId, itemId, actorId, mode, value } = params;
+  const weight = mode === 'weight' ? Number(value) : null;
+  const kitchenPrice = mode === 'kitchen_price' ? Number(value) : null;
+  if (
+    weight !== null &&
+    (!Number.isFinite(weight) ||
+      weight < 0.3 ||
+      weight > 100 ||
+      Number(weight.toFixed(3)) !== weight)
+  ) {
+    throw Object.assign(new Error('weight must be between 0.3 and 100 with at most 3 decimals'), {
+      statusCode: 400,
+    });
+  }
+  if (
+    kitchenPrice !== null &&
+    (!Number.isFinite(kitchenPrice) ||
+      kitchenPrice <= 0 ||
+      kitchenPrice > 1_000_000 ||
+      Number(kitchenPrice.toFixed(2)) !== kitchenPrice)
+  ) {
+    throw Object.assign(
+      new Error('price must be above 0 and at most 1,000,000 with at most 2 decimals'),
+      { statusCode: 400 },
+    );
+  }
+
+  return withTxn(() => {
+    const currentOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as
+      | EditableOrderRow
+      | undefined;
+    if (!currentOrder) throw Object.assign(new Error('Order not found'), { statusCode: 404 });
+    const item = db
+      .prepare('SELECT * FROM order_items WHERE id = ? AND order_id = ?')
+      .get(itemId, orderId) as OrderItemRow | undefined;
+    if (!item) {
+      throw Object.assign(new Error('Item not found in this order'), { statusCode: 404 });
+    }
+    const itemMode = item.pending_price_mode === 'kitchen_price' ? 'kitchen_price' : 'weight';
+    const pricedLater =
+      Boolean(item.weight_pending) ||
+      item.weight != null ||
+      item.pending_price_mode === 'kitchen_price';
+    if (!pricedLater || itemMode !== mode) {
+      throw Object.assign(
+        new Error(
+          mode === 'weight'
+            ? 'This item is not waiting for a weight'
+            : 'This item is not waiting for a kitchen price',
+        ),
+        { statusCode: 409 },
+      );
+    }
+    if (isTerminalItemStatus(item.status)) {
+      throw Object.assign(new Error('This item can no longer be edited'), { statusCode: 400 });
+    }
+    if (['completed', 'cancelled'].includes(currentOrder.status)) {
+      throw Object.assign(new Error('Cannot edit items on completed or cancelled orders'), {
+        statusCode: 400,
+      });
+    }
+    const bills = db.prepare('SELECT * FROM bills WHERE order_id = ?').all(orderId) as {
+      split_group_id: string | null;
+      payment_status: string;
+      paid_amount: number | null;
+    }[];
+    if (bills.some((bill) => bill.split_group_id)) {
+      throw Object.assign(new Error('Items cannot be changed after a check has been split'), {
+        statusCode: 409,
+      });
+    }
+    if (
+      bills.some((bill) => ['paid', 'refunded', 'partially_refunded'].includes(bill.payment_status))
+    ) {
+      throw Object.assign(new Error('Cannot edit items on a paid or refunded order'), {
+        statusCode: 409,
+      });
+    }
+
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id) as
+      | ProductRow
+      | undefined;
+    if (!product) {
+      throw Object.assign(new Error(`Product ${item.product_id} not found`), {
+        statusCode: 404,
+      });
+    }
+
+    const tenantInfo = {
+      country: getSettingValue('country') || '',
+      business_type: getSettingValue('business_type') || 'restaurant',
+      state_code: getSettingValue('state_code') || '',
+      currency: getTenantCurrency(),
+      taxes_enabled: getSettingValue('taxes_enabled') === 'true',
+    };
+    const decimals = getCurrencyFractionDigits(tenantInfo.currency);
+    const customer = currentOrder.customer_id
+      ? (db
+          .prepare('SELECT * FROM customers WHERE id = ?')
+          .get(currentOrder.customer_id) as TaxCustomerRow)
+      : null;
+
+    const quantity = Number(item.quantity);
+    const baseUnitPrice =
+      weight !== null ? weighedBaseUnitPrice(db, item, decimals) : Number(item.unit_price);
+    const unitPrice =
+      weight !== null
+        ? Number((baseUnitPrice * weight).toFixed(decimals))
+        : Number(Number(kitchenPrice).toFixed(decimals));
+    const addons = db
+      .prepare('SELECT price, quantity FROM order_item_addons WHERE order_item_id = ?')
+      .all(item.id) as { price: number; quantity: number }[];
+    const addonPerUnitTotal = addons.reduce(
+      (sum, addon) => sum + Number(addon.price || 0) * Number(addon.quantity || 1),
+      0,
+    );
+    const itemBaseTotal = (unitPrice + addonPerUnitTotal) * quantity;
+    const itemDiscount = resolveEditedItemDiscountAmount(
+      db,
+      item,
+      itemBaseTotal,
+      quantity,
+      quantity,
+      decimals,
+    );
+    const itemSubtotal = Math.max(0, Number((itemBaseTotal - itemDiscount).toFixed(decimals)));
+    const taxResult = calculateItemTax(tenantInfo, product, itemSubtotal, customer);
+    const itemTotal =
+      itemSubtotal + (taxResult.tax_type === 'inclusive' ? 0 : taxResult.tax_amount);
+
+    db.prepare(`
+      UPDATE order_items
+      SET unit_price = ?,
+          weight = ?,
+          weight_pending = 0,
+          special_instructions = ?,
+          subtotal = ?,
+          tax_amount = ?,
+          tax_breakdown = ?,
+          tax_snapshot = ?,
+          tax_type = ?,
+          discount_amount = ?,
+          total = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      unitPrice,
+      weight,
+      withoutPendingPriceNotes(item.special_instructions),
+      itemSubtotal,
+      taxResult.tax_amount,
+      JSON.stringify(taxResult.tax_breakdown),
+      taxResult.tax_snapshot ? JSON.stringify(taxResult.tax_snapshot) : null,
+      taxResult.tax_type,
+      itemDiscount,
+      itemTotal,
+      now(),
+      item.id,
+    );
+
+    persistRecomputedOrderTotals(db, orderId, currentOrder, {
+      tenantInfo,
+      customer,
+      bills,
+      decimals,
+    });
+
+    recordOrderAudit(db, {
+      orderId,
+      orderItemId: itemId,
+      actorUserId: actorId,
+      action: mode === 'weight' ? 'item_weighed' : 'item_kitchen_priced',
+      details:
+        mode === 'weight'
+          ? { weight, base_unit_price: baseUnitPrice, unit_price: unitPrice }
+          : { kitchen_price: unitPrice, previous_unit_price: Number(item.unit_price) },
+    });
+
+    syncOrderPromotions(db, orderId);
+    const updatedOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as Record<
+      string,
+      unknown
+    >;
+    const items = attachEffectiveAddons(
+      db,
+      db
+        .prepare('SELECT * FROM order_items WHERE order_id = ?')
+        .all(orderId)
+        .map(parseItemJson) as { id: number }[],
+    );
+    return { ...updatedOrder, items };
+  });
+}
+
 function completePendingPriceLine(mode: PendingPriceMode) {
   return (req: Request, res: Response) => {
     try {
@@ -7350,195 +7580,13 @@ function completePendingPriceLine(mode: PendingPriceMode) {
       const itemId = String(req.params.itemId);
       const actorId = String((req as Request & { user?: { userId?: string } }).user?.userId || '');
       if (!actorId) return res.status(403).json({ error: 'Authentication required' });
-
-      const weight = mode === 'weight' ? Number(req.body?.weight) : null;
-      const kitchenPrice = mode === 'kitchen_price' ? Number(req.body?.price) : null;
-      if (
-        weight !== null &&
-        (!Number.isFinite(weight) ||
-          weight < 0.3 ||
-          weight > 100 ||
-          Number(weight.toFixed(3)) !== weight)
-      ) {
-        return res
-          .status(400)
-          .json({ error: 'weight must be between 0.3 and 100 with at most 3 decimals' });
-      }
-      if (
-        kitchenPrice !== null &&
-        (!Number.isFinite(kitchenPrice) ||
-          kitchenPrice <= 0 ||
-          kitchenPrice > 1_000_000 ||
-          Number(kitchenPrice.toFixed(2)) !== kitchenPrice)
-      ) {
-        return res
-          .status(400)
-          .json({ error: 'price must be above 0 and at most 1,000,000 with at most 2 decimals' });
-      }
-
-      const db = getDatabase();
-      const order = withTxn(() => {
-        const currentOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as
-          | EditableOrderRow
-          | undefined;
-        if (!currentOrder) throw Object.assign(new Error('Order not found'), { statusCode: 404 });
-        const item = db
-          .prepare('SELECT * FROM order_items WHERE id = ? AND order_id = ?')
-          .get(itemId, orderId) as OrderItemRow | undefined;
-        if (!item) {
-          throw Object.assign(new Error('Item not found in this order'), { statusCode: 404 });
-        }
-        const itemMode = item.pending_price_mode === 'kitchen_price' ? 'kitchen_price' : 'weight';
-        if (!item.weight_pending || itemMode !== mode) {
-          throw Object.assign(
-            new Error(
-              mode === 'weight'
-                ? 'This item is not waiting for a weight'
-                : 'This item is not waiting for a kitchen price',
-            ),
-            { statusCode: 409 },
-          );
-        }
-        if (isTerminalItemStatus(item.status)) {
-          throw Object.assign(new Error('This item can no longer be edited'), { statusCode: 400 });
-        }
-        if (['completed', 'cancelled'].includes(currentOrder.status)) {
-          throw Object.assign(new Error('Cannot edit items on completed or cancelled orders'), {
-            statusCode: 400,
-          });
-        }
-        const bills = db.prepare('SELECT * FROM bills WHERE order_id = ?').all(orderId) as {
-          split_group_id: string | null;
-          payment_status: string;
-          paid_amount: number | null;
-        }[];
-        if (bills.some((bill) => bill.split_group_id)) {
-          throw Object.assign(new Error('Items cannot be changed after a check has been split'), {
-            statusCode: 409,
-          });
-        }
-        if (
-          bills.some((bill) =>
-            ['paid', 'refunded', 'partially_refunded'].includes(bill.payment_status),
-          )
-        ) {
-          throw Object.assign(new Error('Cannot edit items on a paid or refunded order'), {
-            statusCode: 409,
-          });
-        }
-
-        const product = db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id) as
-          | ProductRow
-          | undefined;
-        if (!product) {
-          throw Object.assign(new Error(`Product ${item.product_id} not found`), {
-            statusCode: 404,
-          });
-        }
-
-        const tenantInfo = {
-          country: getSettingValue('country') || '',
-          business_type: getSettingValue('business_type') || 'restaurant',
-          state_code: getSettingValue('state_code') || '',
-          currency: getTenantCurrency(),
-          taxes_enabled: getSettingValue('taxes_enabled') === 'true',
-        };
-        const decimals = getCurrencyFractionDigits(tenantInfo.currency);
-        const customer = currentOrder.customer_id
-          ? (db
-              .prepare('SELECT * FROM customers WHERE id = ?')
-              .get(currentOrder.customer_id) as TaxCustomerRow)
-          : null;
-
-        const quantity = Number(item.quantity);
-        const unitPrice =
-          weight !== null
-            ? Number((Number(item.unit_price) * weight).toFixed(decimals))
-            : Number(Number(kitchenPrice).toFixed(decimals));
-        const addons = db
-          .prepare('SELECT price, quantity FROM order_item_addons WHERE order_item_id = ?')
-          .all(item.id) as { price: number; quantity: number }[];
-        const addonPerUnitTotal = addons.reduce(
-          (sum, addon) => sum + Number(addon.price || 0) * Number(addon.quantity || 1),
-          0,
-        );
-        const itemBaseTotal = (unitPrice + addonPerUnitTotal) * quantity;
-        const itemDiscount = resolveEditedItemDiscountAmount(
-          db,
-          item,
-          itemBaseTotal,
-          quantity,
-          quantity,
-          decimals,
-        );
-        const itemSubtotal = Math.max(0, Number((itemBaseTotal - itemDiscount).toFixed(decimals)));
-        const taxResult = calculateItemTax(tenantInfo, product, itemSubtotal, customer);
-        const itemTotal =
-          itemSubtotal + (taxResult.tax_type === 'inclusive' ? 0 : taxResult.tax_amount);
-
-        db.prepare(`
-          UPDATE order_items
-          SET unit_price = ?,
-              weight = ?,
-              weight_pending = 0,
-              special_instructions = ?,
-              subtotal = ?,
-              tax_amount = ?,
-              tax_breakdown = ?,
-              tax_snapshot = ?,
-              tax_type = ?,
-              discount_amount = ?,
-              total = ?,
-              updated_at = ?
-          WHERE id = ?
-        `).run(
-          unitPrice,
-          weight,
-          withoutPendingPriceNotes(item.special_instructions),
-          itemSubtotal,
-          taxResult.tax_amount,
-          JSON.stringify(taxResult.tax_breakdown),
-          taxResult.tax_snapshot ? JSON.stringify(taxResult.tax_snapshot) : null,
-          taxResult.tax_type,
-          itemDiscount,
-          itemTotal,
-          now(),
-          item.id,
-        );
-
-        persistRecomputedOrderTotals(db, orderId, currentOrder, {
-          tenantInfo,
-          customer,
-          bills,
-          decimals,
-        });
-
-        recordOrderAudit(db, {
-          orderId,
-          orderItemId: itemId,
-          actorUserId: actorId,
-          action: mode === 'weight' ? 'item_weighed' : 'item_kitchen_priced',
-          details:
-            mode === 'weight'
-              ? { weight, base_unit_price: Number(item.unit_price), unit_price: unitPrice }
-              : { kitchen_price: unitPrice, previous_unit_price: Number(item.unit_price) },
-        });
-
-        syncOrderPromotions(db, orderId);
-        const updatedOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as Record<
-          string,
-          unknown
-        >;
-        const items = attachEffectiveAddons(
-          db,
-          db
-            .prepare('SELECT * FROM order_items WHERE order_id = ?')
-            .all(orderId)
-            .map(parseItemJson) as { id: number }[],
-        );
-        return { ...updatedOrder, items };
+      const order = applyPendingPriceEntry(getDatabase(), {
+        orderId,
+        itemId,
+        actorId,
+        mode,
+        value: mode === 'weight' ? req.body?.weight : req.body?.price,
       });
-
       cloudSync.recordOrderChanged(orderId, 'order.item_edited');
       notifyKdsUpdate();
       res.json({ order });

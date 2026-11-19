@@ -180,7 +180,16 @@ async function main() {
     assertEqualOrThrow(responseItem.weight_pending, 0, 'response carries the weighed line');
 
     const again = await weigh(orderId, tofu.id, 0.5);
-    assertEqualOrThrow(again.status, 409, 'a weighed line cannot be weighed twice');
+    assertEqualOrThrow(again.status, 200, 'the kitchen can weigh a line again');
+    assertEqualOrThrow(
+      itemsOf(orderId)[0].unit_price,
+      125,
+      'a re-weighed line uses the original price per kg, not the earlier weighed price',
+    );
+    assertEqualOrThrow(orderRow(orderId).subtotal, 325, 're-weighing recomputes the order');
+    const back = await weigh(orderId, tofu.id, 0.35);
+    assertEqualOrThrow(back.status, 200, 'weighing has no limit on how often');
+    assertEqualOrThrow(itemsOf(orderId)[0].unit_price, 87.5, 'the third weighing is still exact');
 
     const audit = db
       .prepare(
@@ -326,7 +335,10 @@ async function main() {
     );
     assertEqualOrThrow(orderRow(specialOrderId).total, 718, 'the order total is recomputed');
     const pricedAgain = await setPrice(400);
-    assertEqualOrThrow(pricedAgain.status, 409, 'a priced line cannot be priced twice');
+    assertEqualOrThrow(pricedAgain.status, 200, 'the kitchen can change its price again');
+    assertEqualOrThrow(orderRow(specialOrderId).total, 800, 'the new price recomputes the order');
+    const pricedBack = await setPrice(359);
+    assertEqualOrThrow(pricedBack.status, 200, 'pricing has no limit on how often');
     const plainPrice = await api(baseUrl, `/api/orders/${orderId}/items/${plain.id}/price`, {
       method: 'PATCH',
       headers: cashierAuth,

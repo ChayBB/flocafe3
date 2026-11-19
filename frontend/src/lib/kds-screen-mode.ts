@@ -9,8 +9,14 @@ export const KDS_SCREEN_MODES: readonly KdsScreenMode[] = ['day', 'night'];
 export const KDS_BRIGHTNESS_MIN = 20;
 export const KDS_BRIGHTNESS_MAX = 100;
 
+/** Text size in whole percent of the app's normal size, changed in steps from the settings. */
+export const KDS_FONT_SCALE_MIN = 80;
+export const KDS_FONT_SCALE_MAX = 200;
+export const KDS_FONT_SCALE_STEP = 10;
+
 const MODE_KEY = 'flocafe:kds-screen-mode';
 const BRIGHTNESS_KEY = 'flocafe:kds-brightness';
+const FONT_SCALE_KEY = 'flocafe:kds-font-scale';
 
 /** The stored mode; a display that never chose one starts in the app's current light or dark theme. */
 export function readKdsScreenMode(): KdsScreenMode {
@@ -32,6 +38,22 @@ export function readKdsBrightness(): number {
   } catch {
     return KDS_BRIGHTNESS_MAX;
   }
+}
+
+export function readKdsFontScale(): number {
+  if (typeof window === 'undefined') return 100;
+  try {
+    const stored = Number(window.localStorage.getItem(FONT_SCALE_KEY) || 100);
+    if (!Number.isFinite(stored)) return 100;
+    return clampKdsFontScale(stored);
+  } catch {
+    return 100;
+  }
+}
+
+export function clampKdsFontScale(scale: number): number {
+  const stepped = Math.round(scale / KDS_FONT_SCALE_STEP) * KDS_FONT_SCALE_STEP;
+  return Math.min(KDS_FONT_SCALE_MAX, Math.max(KDS_FONT_SCALE_MIN, stepped));
 }
 
 function store(key: string, value: string): void {
@@ -66,6 +88,7 @@ export function holdDarkClass(wantDark: boolean): () => void {
 export function useKdsScreenMode() {
   const [mode, setMode] = useState<KdsScreenMode>(readKdsScreenMode);
   const [brightness, setBrightness] = useState<number>(readKdsBrightness);
+  const [fontScale, setFontScale] = useState<number>(readKdsFontScale);
 
   useEffect(() => {
     const html = document.documentElement;
@@ -77,6 +100,16 @@ export function useKdsScreenMode() {
     };
   }, [mode]);
 
+  // The board is sized in rem, so scaling the root font grows its text and cards together.
+  useEffect(() => {
+    const html = document.documentElement;
+    const previous = html.style.fontSize;
+    html.style.fontSize = fontScale === 100 ? previous : `${fontScale}%`;
+    return () => {
+      html.style.fontSize = previous;
+    };
+  }, [fontScale]);
+
   return {
     mode,
     setMode: (next: KdsScreenMode) => {
@@ -87,6 +120,12 @@ export function useKdsScreenMode() {
     setBrightness: (next: number) => {
       store(BRIGHTNESS_KEY, String(next));
       setBrightness(next);
+    },
+    fontScale,
+    setFontScale: (next: number) => {
+      const scale = clampKdsFontScale(next);
+      store(FONT_SCALE_KEY, String(scale));
+      setFontScale(scale);
     },
   };
 }

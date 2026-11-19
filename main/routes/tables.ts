@@ -100,6 +100,22 @@ function kitchenCounts(db: ReturnType<typeof getDatabase>, orderId: number) {
   };
 }
 
+/** Dishes the kitchen flagged out of stock that still wait to be cancelled with the guest. */
+function outOfStockItems(db: ReturnType<typeof getDatabase>, orderId: number) {
+  return db
+    .prepare(
+      `SELECT id, product_name, quantity, out_of_stock_at FROM order_items
+       WHERE order_id = ? AND out_of_stock_at IS NOT NULL AND status IN ('pending', 'preparing')
+       ORDER BY out_of_stock_at, id`,
+    )
+    .all(orderId) as {
+    id: number;
+    product_name: string;
+    quantity: number;
+    out_of_stock_at: string;
+  }[];
+}
+
 function reservationCustomerShape(
   db: ReturnType<typeof getDatabase>,
   table: { status: string; reservation_customer_id?: string | null },
@@ -135,7 +151,11 @@ function tableShape(
       ? { ...currentOrder, customer_id: null, customer: null }
       : currentOrder;
   const visibleCurrentOrder = shownOrder
-    ? { ...shownOrder, kitchen_counts: kitchenCounts(db, shownOrder.id) }
+    ? {
+        ...shownOrder,
+        kitchen_counts: kitchenCounts(db, shownOrder.id),
+        out_of_stock_items: outOfStockItems(db, shownOrder.id),
+      }
     : shownOrder;
   return {
     ...table,

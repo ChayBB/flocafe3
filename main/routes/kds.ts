@@ -35,10 +35,17 @@ import { hasPermission, requirePermission } from '../services/authorization';
 import { parseCategoryIds } from './auth';
 import { notifyKdsUpdate } from '../services/kds';
 import { kdsAlertsForStations } from '../services/kds-alerts';
+import {
+  assertNoOutOfStockStageLock,
+  readOutOfStockFlag,
+  setKdsItemOutOfStock,
+} from '../services/kds-out-of-stock';
 import { handleKdsSpeech, handleKdsSpeechEngine } from '../services/kds-speech';
 import { handleKdsDismissKot, handleKdsReprintKot } from '../services/kds-kot-actions';
 import { reconcileActiveOrderStatusFromItems } from '../services/orders';
 import { cloudSync } from '../services/cloud-sync';
+import { readKdsPriceEntry } from '../services/kds-price-entry';
+import { applyPendingPriceEntry } from './orders';
 import { ROLE_ACCESS, hasRole } from '../../shared/role-permissions';
 
 const router = Router();
@@ -490,13 +497,16 @@ router.patch(
   (req: Request, res: Response) => {
     try {
       const { status, expected_status: expectedStatus } = req.body;
+      const outOfStock = readOutOfStockFlag(req.body);
+      const priceEntry = readKdsPriceEntry(req.body);
+      const keepsStage = outOfStock !== undefined || priceEntry !== undefined;
 
-      if (!status) {
+      if (!status && !keepsStage) {
         return res.status(400).json({ error: 'Status is required' });
       }
 
       const validStatuses = ['pending', 'preparing', 'ready', 'served'];
-      if (!validStatuses.includes(status)) {
+      if (!keepsStage && !validStatuses.includes(status)) {
         return res.status(400).json({ error: `Invalid status. Use: ${validStatuses.join(', ')}` });
       }
       if (expectedStatus !== undefined && !validStatuses.includes(expectedStatus)) {
@@ -523,6 +533,7 @@ router.patch(
       let restrictedPayload = isRestrictedKdsPayload(req, userCategoryIds, userStationIds);
       let reconciledEvent: { orderId: string; status: string } | null = null;
       let autoCompletedOrderId: string | null = null;
+      let pricedOrderId: string | null = null;
 
       const updatedItem = withTxn(() => {
         const token = req.headers.authorization?.startsWith('Bearer ')
@@ -621,6 +632,27 @@ router.patch(
           }
         }
 
+        if (outOfStock !== undefined) {
+          setKdsItemOutOfStock(
+            db,
+            item,
+            String((req as Request & { user: { userId: unknown } }).user.userId),
+            outOfStock,
+          );
+          return db.prepare('SELECT * FROM order_items WHERE id = ?').get(req.params.id);
+        }
+        if (priceEntry) {
+          applyPendingPriceEntry(db, {
+            orderId: String(item.order_id),
+            itemId: String(item.id),
+            actorId: String((req as Request & { user: { userId: unknown } }).user.userId),
+            ...priceEntry,
+          });
+          pricedOrderId = String(item.order_id);
+          return db.prepare('SELECT * FROM order_items WHERE id = ?').get(req.params.id);
+        }
+        assertNoOutOfStockStageLock(item);
+
         const updatedAt = now();
         const updateResult =
           expectedStatus === undefined
@@ -669,6 +701,7 @@ router.patch(
       if (autoCompletedOrderId) {
         cloudSync.recordOrderChanged(autoCompletedOrderId, 'order.completed');
       }
+      if (pricedOrderId) cloudSync.recordOrderChanged(pricedOrderId, 'order.item_edited');
       res.json({ item: projectKdsItem(updatedItem, restrictedPayload) });
     } catch (error: any) {
       res.locals.postHogError = error;
@@ -698,8 +731,8 @@ router.patch(
       if (error.message === 'STATUS_CONFLICT') {
         return res.status(409).json({ error: 'Item status changed; refresh and try again' });
       }
-      if (error?.statusCode === 409) {
-        return res.status(409).json({ error: error.message });
+      if (error?.statusCode >= 400 && error?.statusCode < 500) {
+        return res.status(error.statusCode).json({ error: error.message });
       }
       console.error('[API] KDS item status update error:', error);
       res.status(500).json({ error: 'Could not update item status' });

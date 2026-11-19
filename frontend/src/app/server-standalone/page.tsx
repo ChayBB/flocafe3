@@ -120,6 +120,13 @@ type Order = {
   bill_payment_received_at?: string | null;
   /** The cashier tried to print the bill before every item was confirmed served. */
   serve_confirm_requested_at?: string | null;
+  /** Dishes the kitchen flagged out of stock that still wait to be cancelled with the guest. */
+  out_of_stock_items?: {
+    id: number;
+    product_name: string;
+    quantity: number;
+    out_of_stock_at: string;
+  }[];
 };
 type DraftLine = CartItem;
 type ServerAppInfo = {
@@ -425,13 +432,26 @@ export default function ServerStandalonePage() {
         `${table.id}|${(table.activeOrder || table.current_order)?.serve_confirm_requested_at}`,
     )
     .join(',');
+  // Dishes the kitchen ran out of, on this staff's tables, each waiting to be cancelled with the guest.
+  const outOfStockAlerts = user
+    ? staffTables.flatMap((table) =>
+        ((table.activeOrder || table.current_order)?.out_of_stock_items ?? []).map((item) => ({
+          table,
+          item,
+        })),
+      )
+    : [];
+  const outOfStockKeys = outOfStockAlerts
+    .map(({ table, item }) => `${table.id}|oos:${item.id}|${item.out_of_stock_at}`)
+    .join(',');
   const serveConfirmRungRef = useRef<Set<string>>(new Set());
+  const staffAlertKeys = [serveConfirmKeys, outOfStockKeys].filter(Boolean).join(',');
   useEffect(() => {
-    const keys = serveConfirmKeys ? serveConfirmKeys.split(',') : [];
+    const keys = staffAlertKeys ? staffAlertKeys.split(',') : [];
     const fresh = keys.some((key) => !serveConfirmRungRef.current.has(key));
     serveConfirmRungRef.current = new Set(keys);
     if (fresh) void playSoundFile(SERVE_CONFIRM_BELL);
-  }, [serveConfirmKeys]);
+  }, [staffAlertKeys]);
   useEffect(() => {
     window.addEventListener('pointerdown', unlockKdsAlertSound);
     window.addEventListener('keydown', unlockKdsAlertSound);
@@ -2554,11 +2574,29 @@ export default function ServerStandalonePage() {
               onClose={() => setTableQrOpen(false)}
             />
           )}
-          {serveConfirmTables.length > 0 && (
+          {(serveConfirmTables.length > 0 || outOfStockAlerts.length > 0) && (
             <div
               data-testid="serve-confirm-alerts"
               className="flex flex-wrap gap-2 md:col-span-full"
             >
+              {outOfStockAlerts.map(({ table, item }) => (
+                <button
+                  key={`oos-${item.id}`}
+                  type="button"
+                  data-testid="out-of-stock-alert"
+                  onClick={() => {
+                    selectTable(table.id);
+                    if (!isWide) setTablePickerOpen(false);
+                    setOrderedItemsOpen(true);
+                  }}
+                  className="animate-pulse rounded-lg border-2 border-red-600 bg-red-600 px-3 py-2 text-sm font-semibold text-white"
+                >
+                  {t('outOfStockAlert', {
+                    table: table.name || table.number || '',
+                    item: item.product_name,
+                  })}
+                </button>
+              ))}
               {serveConfirmTables.map((table) => (
                 <button
                   key={table.id}
@@ -2595,8 +2633,9 @@ export default function ServerStandalonePage() {
                   const order = table.activeOrder || table.current_order;
                   // Serving tables are light green, ones waiting to pay amber with a clock, cleaning
                   // ones light yellow, free ones white.
+                  const outOfStock = (order?.out_of_stock_items ?? []).length > 0;
                   const tone = order
-                    ? order.serve_confirm_requested_at
+                    ? order.serve_confirm_requested_at || outOfStock
                       ? 'confirm'
                       : awaitingPayment(order)
                         ? 'awaiting'
@@ -2627,7 +2666,7 @@ export default function ServerStandalonePage() {
                         <span className="text-xs text-gray-600">
                           {tone === 'confirm' ? (
                             <span className="font-semibold text-red-700">
-                              {t('serveConfirmNeeded')}
+                              {outOfStock ? t('outOfStockNeeded') : t('serveConfirmNeeded')}
                             </span>
                           ) : tone === 'awaiting' ? (
                             t('tableAwaitingPayment')

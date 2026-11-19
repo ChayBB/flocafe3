@@ -33,6 +33,7 @@ import { getUserAuthStatus, isTokenRevoked, isTokenStale } from '../middleware/s
 import { ROLE_ACCESS, hasRole } from '../../shared/role-permissions';
 import { hasPermission } from './authorization';
 import { kdsAlertsForStations } from './kds-alerts';
+import { outOfStockStageLock } from './kds-out-of-stock';
 import { reconcileActiveOrderStatusFromItems } from './orders';
 import { cloudSync } from './cloud-sync';
 
@@ -568,6 +569,8 @@ function handleStatusUpdate(client: KdsClient, message: any): void {
       if (client.categoryIds.length > 0 && !client.categoryIds.includes(existingItem.category_id)) {
         return { error: 'Not authorized to update this item' };
       }
+      const stageLock = outOfStockStageLock(existingItem);
+      if (stageLock) return { error: stageLock };
 
       const updatedAt = now();
       const updateResult =

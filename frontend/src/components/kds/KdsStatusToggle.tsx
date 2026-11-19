@@ -11,22 +11,26 @@ export function KdsStatusToggle({
   skipped,
   disabled,
   onAdvance,
+  labelKey = 'advanceTo',
+  testId = 'kds-status-toggle',
 }: {
   status: KitchenStatus;
   skipped?: readonly KitchenStatus[];
   disabled?: boolean;
   onAdvance: (next: KitchenStatus) => void;
+  labelKey?: 'advanceTo' | 'advanceAllTo';
+  testId?: string;
 }) {
   const t = useTranslations('kds');
   const next = nextKitchenStatus(status, skipped);
   if (!next) return null;
   const nextConfig = STATUS_CONFIG[next];
-  const label = t('advanceTo', { status: t(nextConfig.labelKey) });
+  const label = t(labelKey, { status: t(nextConfig.labelKey) });
 
   return (
     <button
       type="button"
-      data-testid="kds-status-toggle"
+      data-testid={testId}
       aria-label={label}
       title={label}
       disabled={disabled}

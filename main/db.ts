@@ -11083,6 +11083,18 @@ const LEGACY_LOCAL_MIGRATIONS: typeof MIGRATIONS = [
       insertSettingIfMissing('theme_dark_variant', '1');
     },
   },
+  {
+    version: 141,
+    name: 'add_order_item_out_of_stock',
+    up: () => {
+      // The kitchen flags a dish it cannot make; the Server App asks the table's staff to cancel it.
+      const columns = getColumns(db, 'order_items');
+      for (const column of ['out_of_stock_at', 'out_of_stock_by_name']) {
+        if (!columns.includes(column))
+          db.exec(`ALTER TABLE order_items ADD COLUMN ${column} TEXT DEFAULT NULL`);
+      }
+    },
+  },
 ];
 
 function isLegacyLocalSchema(database: Database.Database, version: number): boolean {
@@ -12608,6 +12620,12 @@ export function projectKdsItem(item: any, restricted: boolean): any {
     'service_change_at',
     'served_confirmed_at',
     'served_confirmed_by_name',
+    'out_of_stock_at',
+    'weight',
+    'weight_pending',
+    'pending_price_mode',
+    'kitchen_set_price',
+    'currency',
     'store_timezone',
     'created_at',
     'updated_at',

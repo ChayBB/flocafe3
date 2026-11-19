@@ -4,10 +4,11 @@ import { PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDraggable, type DragEndEvent } from '@dnd-kit/react';
 import { KdsScrollArea } from './KdsScrollArea';
 import { Clock } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { ElapsedTime, ticketStartedAt } from '@/components/kds/ElapsedTime';
 import { KdsColumn } from '@/components/kds/KdsColumn';
+import { KdsPriceDialog, isKdsPricedLater } from '@/components/kds/KdsPriceDialog';
 import { KdsSetPrice } from '@/components/kds/KdsSetPrice';
 import { KdsServiceNotice, noticeRowClass } from '@/components/kds/KdsServiceNotice';
 import { KdsStatusToggle } from '@/components/kds/KdsStatusToggle';
@@ -25,6 +26,7 @@ import {
   normalizeKitchenStatus,
   ORDER_TYPE_BADGE_STYLES,
   type KitchenStatus,
+  type KdsItemUpdateOptions,
   type KdsOrder,
   type KdsOrderItem,
 } from '@/hooks/useKdsConnection';
@@ -42,9 +44,14 @@ export interface KdsKanbanBoardProps {
   updateItemStatus: (
     itemId: number,
     status: KitchenStatus,
-    opts?: { silent?: boolean; expectedStatus?: KitchenStatus },
+    opts?: KdsItemUpdateOptions,
   ) => Promise<boolean>;
 }
+
+const TOUCH_DRAG_HOLD_MS = 300;
+// Only a dish not yet cooked can still be called off for a missing ingredient.
+const OUT_OF_STOCK_STAGES: readonly KitchenStatus[] = ['pending', 'preparing'];
+const TOUCH_DRAG_TOLERANCE_PX = 8;
 
 interface DropData {
   status: KitchenStatus;
@@ -67,6 +74,49 @@ export function KdsKanbanBoard({
 }: KdsKanbanBoardProps) {
   const t = useTranslations('kds');
   const { confirm, ConfirmDialog } = useConfirm();
+
+  // Tapping a waiting or cooking dish's quantity flags it out of stock for the table's staff, or undoes it.
+  const toggleOutOfStock = async (order: KdsOrder, item: KdsOrderItem) => {
+    const flagged = Boolean(item.out_of_stock_at);
+    const name = kdsItemLine(item).name;
+    const table = order.table?.name
+      ? t('tableLabel', { name: order.table.name })
+      : `#${order.order_number}`;
+    const proceed = await confirm(
+      flagged
+        ? t('outOfStockClearMessage', { item: name })
+        : t('outOfStockMessage', { item: name, table }),
+      {
+        title: flagged ? t('outOfStockClearTitle') : t('outOfStockTitle'),
+        confirmLabel: flagged ? t('outOfStockClear') : t('outOfStockConfirm'),
+        destructive: !flagged,
+      },
+    );
+    if (!proceed) return;
+    await updateItemStatus(item.id, statusOf(item), { outOfStock: !flagged });
+  };
+  // A weighed or kitchen-priced dish opens its price entry instead, as often as needed.
+  const [priceTarget, setPriceTarget] = useState<{ order: KdsOrder; item: KdsOrderItem } | null>(
+    null,
+  );
+  const tapQuantity = (order: KdsOrder, item: KdsOrderItem) => {
+    if (isKdsPricedLater(item)) setPriceTarget({ order, item });
+    else void toggleOutOfStock(order, item);
+  };
+  const tapQuantityRef = useRef(tapQuantity);
+  useEffect(() => {
+    tapQuantityRef.current = tapQuantity;
+  });
+  const onQuantityTap = useCallback(
+    (order: KdsOrder, item: KdsOrderItem) => tapQuantityRef.current(order, item),
+    [],
+  );
+  // The dialog follows live updates, so it shows the weight or price just saved.
+  const priceItem = priceTarget
+    ? ((
+        (orders.find((order) => order.id === priceTarget.order.id) ?? priceTarget.order).items || []
+      ).find((item) => item.id === priceTarget.item.id) ?? priceTarget.item)
+    : undefined;
   const cancellationClock = useKdsCancellationClock(orders);
 
   // Group by status, then by order. Default rendering matches the tabs view:
@@ -147,13 +197,23 @@ export function KdsKanbanBoard({
         sensors={(defaults) => [
           ...defaults.filter((sensor) => sensor !== PointerSensor),
           PointerSensor.configure({
-            activationConstraints: [new PointerActivationConstraints.Distance({ value: 6 })],
-            preventActivation: (event) => event.pointerType === 'touch',
+            // On a tablet a quick swipe still scrolls the board; pressing and holding a card picks it up.
+            activationConstraints: (event) =>
+              event.pointerType === 'touch'
+                ? [
+                    new PointerActivationConstraints.Delay({
+                      value: TOUCH_DRAG_HOLD_MS,
+                      tolerance: TOUCH_DRAG_TOLERANCE_PX,
+                    }),
+                  ]
+                : [new PointerActivationConstraints.Distance({ value: 6 })],
+            preventActivation: (event) =>
+              event.target instanceof Element && event.target.closest('button') !== null,
           }),
         ]}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex gap-3 px-1 overflow-x-auto flex-1 min-h-0">
+        <div className="flex gap-0.5 overflow-x-auto flex-1 min-h-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {activeStages(inactiveStatuses).map((status) => {
             const groups = groupsByStatus[status];
             return (
@@ -167,6 +227,7 @@ export function KdsKanbanBoard({
                     updating={updating}
                     inactive={inactiveStatuses}
                     updateItemStatus={updateItemStatus}
+                    onQuantityTap={onQuantityTap}
                   />
                 ))}
               </KdsColumn>
@@ -177,6 +238,21 @@ export function KdsKanbanBoard({
         </div>
       </DragDropProvider>
 
+      {priceTarget && priceItem && (
+        <KdsPriceDialog
+          item={priceItem}
+          canFlagOutOfStock={OUT_OF_STOCK_STAGES.includes(statusOf(priceTarget.item))}
+          onSave={(priceEntry) =>
+            updateItemStatus(priceTarget.item.id, statusOf(priceTarget.item), { priceEntry })
+          }
+          onOutOfStock={() => {
+            const target = priceTarget;
+            setPriceTarget(null);
+            void toggleOutOfStock(target.order, target.item);
+          }}
+          onClose={() => setPriceTarget(null)}
+        />
+      )}
       {ConfirmDialog}
     </div>
   );
@@ -189,6 +265,7 @@ type KanbanOrderCardProps = {
   updating: number | null;
   inactive: readonly KitchenStatus[];
   updateItemStatus: KdsKanbanBoardProps['updateItemStatus'];
+  onQuantityTap: (order: KdsOrder, item: KdsOrderItem) => void;
 };
 
 function kanbanOrderCardPropsEqual(
@@ -213,14 +290,25 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
   updating,
   inactive,
   updateItemStatus,
+  onQuantityTap,
 }: KanbanOrderCardProps) {
   const t = useTranslations('kds');
   const tOrders = useTranslations('orders');
   const config = STATUS_CONFIG[status];
+  // An out-of-stock dish waits where it is for the guest's cancellation, so moves leave it behind.
   const dragItems = items
-    .filter((i) => i.status !== 'cancelled')
+    .filter((i) => i.status !== 'cancelled' && !i.out_of_stock_at)
     .map((i) => ({ id: i.id, status: statusOf(i) }));
   const busy = items.some((i) => updating === i.id);
+  const advanceAll = async (nextStatus: KitchenStatus) => {
+    const results = await Promise.all(
+      dragItems.map((item) =>
+        updateItemStatus(item.id, nextStatus, { silent: true, expectedStatus: item.status }),
+      ),
+    );
+    const failed = results.filter((result) => !result).length;
+    if (failed > 0) toast.error(t('itemsUpdateFailed', { count: failed }));
+  };
   const { ref, isDragging } = useDraggable({
     id: `order-${order.id}-${status}`,
     data: { items: dragItems, fromStatus: status },
@@ -231,7 +319,7 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
     <div
       ref={ref}
       style={{ touchAction: 'auto' }}
-      className={`select-none cursor-grab active:cursor-grabbing transition ${
+      className={`select-none [-webkit-touch-callout:none] cursor-grab active:cursor-grabbing transition ${
         isDragging ? 'opacity-40' : ''
       } ${busy ? 'pointer-events-none opacity-60' : ''}`}
     >
@@ -261,13 +349,27 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
                 {t('movedFromTable', { name: order.moved_from_table })}
               </Badge>
             )}
+            <span
+              data-testid="kds-card-clock"
+              className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0"
+            >
+              <Clock size={12} />
+              <Ltr>
+                <ElapsedTime dateStr={ticketStartedAt(items, order.created_at)} />
+              </Ltr>
+            </span>
           </div>
-          <div className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0">
-            <Clock size={12} />
-            <Ltr>
-              <ElapsedTime dateStr={ticketStartedAt(items, order.created_at)} />
-            </Ltr>
-          </div>
+          {/* With several dishes done together, one tap moves the whole card on. */}
+          {dragItems.length > 1 && (
+            <KdsStatusToggle
+              status={status}
+              skipped={inactive}
+              disabled={busy}
+              labelKey="advanceAllTo"
+              testId="kds-card-toggle"
+              onAdvance={(nextStatus) => void advanceAll(nextStatus)}
+            />
+          )}
         </div>
 
         {order.special_instructions && (
@@ -282,20 +384,58 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
               key={item.id}
               data-testid="kds-item-row"
               data-served-confirmed={item.served_confirmed_at ? 'true' : undefined}
+              data-out-of-stock={item.out_of_stock_at ? 'true' : undefined}
               className={`flex items-center gap-1 pe-1 ${noticeRowClass(item)}`}
             >
               {/* Only the toggle changes status; tapping the row does nothing. */}
               <div className="flex-1 min-w-0 px-2 py-1.5">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className={`text-base font-bold w-6 shrink-0 ${config.text}`}>
-                    {item.quantity}×
-                  </span>
+                  {(OUT_OF_STOCK_STAGES.includes(status) || isKdsPricedLater(item)) &&
+                  item.status !== 'cancelled' ? (
+                    <button
+                      type="button"
+                      data-testid="kds-out-of-stock-button"
+                      data-price-entry={isKdsPricedLater(item) ? 'true' : undefined}
+                      aria-label={
+                        isKdsPricedLater(item)
+                          ? t('priceEntryButton', { item: kdsItemLine(item).name })
+                          : t('outOfStockButton', { item: kdsItemLine(item).name })
+                      }
+                      title={
+                        isKdsPricedLater(item)
+                          ? t('priceEntryButton', { item: kdsItemLine(item).name })
+                          : t('outOfStockButton', { item: kdsItemLine(item).name })
+                      }
+                      onClick={() => onQuantityTap(order, item)}
+                      className={`-my-1 min-h-9 min-w-9 shrink-0 rounded-lg border px-1 text-base font-bold ${
+                        item.out_of_stock_at
+                          ? 'border-red-600 bg-red-600 text-white'
+                          : item.weight_pending
+                            ? 'border-amber-500 bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200'
+                            : `border-border bg-muted/60 ${config.text}`
+                      }`}
+                    >
+                      {item.quantity}×
+                    </button>
+                  ) : (
+                    <span className={`text-base font-bold w-6 shrink-0 ${config.text}`}>
+                      {item.quantity}×
+                    </span>
+                  )}
                   <span
                     className={`text-lg font-medium flex-1 min-w-32 truncate ${item.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-foreground'}`}
                   >
                     {kdsItemLine(item).name}
                   </span>
                   <KdsServiceNotice item={item} />
+                  {item.out_of_stock_at && OUT_OF_STOCK_STAGES.includes(status) && (
+                    <span
+                      data-testid="kds-out-of-stock-badge"
+                      className="shrink-0 rounded-md bg-red-600 px-2 py-0.5 text-sm font-semibold text-white"
+                    >
+                      {t('outOfStockBadge')}
+                    </span>
+                  )}
                 </div>
                 <KdsSetPrice item={item} className="ms-[26px] mt-0.5" />
                 {kdsItemLine(item).instructions && (
@@ -304,7 +444,7 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
                   </p>
                 )}
               </div>
-              {item.status !== 'cancelled' && (
+              {item.status !== 'cancelled' && !item.out_of_stock_at && (
                 <KdsStatusToggle
                   status={status}
                   skipped={inactive}
@@ -339,7 +479,7 @@ function VoidedColumn({ groups }: { groups: Array<{ order: KdsOrder; items: KdsO
           {count}
         </span>
       </div>
-      <KdsScrollArea className="border border-border border-t-0 rounded-b-lg p-2 space-y-2 bg-muted/40">
+      <KdsScrollArea className="border border-border border-t-0 rounded-b-lg px-0.5 py-1 space-y-1 bg-muted/40">
         {groups.map(({ order, items }) => (
           <div
             key={order.id}

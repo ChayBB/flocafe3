@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { MessageSquare, Sun } from 'lucide-react';
+import { MessageSquare, Minus, Plus, Sun, Type } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import {
   clampKdsReadyDelay,
@@ -22,6 +22,9 @@ import { activeStages } from '@/lib/kds-stages';
 import {
   KDS_BRIGHTNESS_MAX,
   KDS_BRIGHTNESS_MIN,
+  KDS_FONT_SCALE_MAX,
+  KDS_FONT_SCALE_MIN,
+  KDS_FONT_SCALE_STEP,
   KDS_SCREEN_MODES,
   type KdsScreenMode,
 } from '@/lib/kds-screen-mode';
@@ -150,7 +153,7 @@ function ReadyDelayField({
   );
 }
 
-/** Display settings in two tabs: the screen (columns, day/night, brightness) and the sounds this display plays. */
+/** Display settings in two tabs: the screen (columns, day/night, text size, brightness) and the sounds this display plays. */
 export function KdsSettingsDialog({
   open,
   stationName,
@@ -162,6 +165,8 @@ export function KdsSettingsDialog({
   onScreenMode,
   brightness,
   onBrightness,
+  fontScale,
+  onFontScale,
   onClose,
 }: {
   open: boolean;
@@ -174,6 +179,8 @@ export function KdsSettingsDialog({
   onScreenMode: (mode: KdsScreenMode) => void;
   brightness: number;
   onBrightness: (brightness: number) => void;
+  fontScale: number;
+  onFontScale: (scale: number) => void;
   onClose: () => void;
 }) {
   const t = useTranslations('kds');
@@ -311,6 +318,45 @@ export function KdsSettingsDialog({
                     {t(SCREEN_MODE_LABELS[mode])}
                   </button>
                 ))}
+              </div>
+              <div className="flex items-center gap-3 pt-2">
+                <Type size={18} aria-hidden="true" className="shrink-0 text-muted-foreground" />
+                <span id="kds-font-scale-label" className="text-sm font-medium text-foreground">
+                  {t('fontSizeLabel')}
+                </span>
+                <div
+                  role="group"
+                  aria-labelledby="kds-font-scale-label"
+                  className="ms-auto flex items-center gap-2"
+                >
+                  <button
+                    type="button"
+                    data-testid="kds-font-smaller"
+                    aria-label={t('fontSizeSmaller')}
+                    disabled={fontScale <= KDS_FONT_SCALE_MIN}
+                    onClick={() => onFontScale(fontScale - KDS_FONT_SCALE_STEP)}
+                    className="flex size-11 items-center justify-center rounded-full border border-border bg-card text-foreground disabled:opacity-40"
+                  >
+                    <Minus size={18} aria-hidden="true" />
+                  </button>
+                  <span
+                    data-testid="kds-font-scale-value"
+                    aria-live="polite"
+                    className="w-12 text-center text-sm tabular-nums text-muted-foreground"
+                  >
+                    {fontScale}%
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="kds-font-larger"
+                    aria-label={t('fontSizeLarger')}
+                    disabled={fontScale >= KDS_FONT_SCALE_MAX}
+                    onClick={() => onFontScale(fontScale + KDS_FONT_SCALE_STEP)}
+                    className="flex size-11 items-center justify-center rounded-full border border-border bg-card text-foreground disabled:opacity-40"
+                  >
+                    <Plus size={18} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
               <div className="flex items-center gap-3 pt-2">
                 <Sun size={18} aria-hidden="true" className="shrink-0 text-muted-foreground" />

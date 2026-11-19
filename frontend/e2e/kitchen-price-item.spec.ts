@@ -92,4 +92,87 @@ test('a special-menu item waits for the kitchen price and takes it as entered', 
   await expect(price).toContainText('359');
   await expect(price).toHaveClass(/text-green-600/);
   await expect(card).not.toContainText('เมนูพิเศษครัวระบุราคา');
+
+  // The quantity on the KDS reopens the price entry, as often as the kitchen needs.
+  for (const next of ['420', '450']) {
+    await card.getByTestId('kds-out-of-stock-button').click();
+    const dialog = page.getByTestId('kds-price-dialog');
+    await expect(dialog.getByTestId('kds-price-input')).not.toHaveValue('');
+    await dialog.getByTestId('kds-price-input').fill(next);
+    await dialog.getByTestId('kds-price-save').click();
+    await expect(dialog).toBeHidden();
+    await expect(price).toContainText(next);
+  }
+  const repriced = await (
+    await page.request.get(`${BASE}/api/orders/${created.id}`, { headers })
+  ).json();
+  expect(repriced.order.total).toBe(450);
+});
+
+test('the KDS weighs a weight-priced dish from its quantity, and can weigh it again', async ({
+  page,
+}) => {
+  const headers = { Authorization: `Bearer ${getE2eToken()}` };
+  const run = Math.random().toString(36).slice(2, 7);
+  const group = await page.request.post(`${BASE}/api/addon-groups`, {
+    headers,
+    data: {
+      name: `By weight ${run}`,
+      is_required: false,
+      price_pending: true,
+      min_selection: 0,
+      max_selection: 1,
+      addons: [{ name: 'Weighed', price: 0 }],
+    },
+  });
+  expect(group.status()).toBe(201);
+  const categoryRes = await page.request.post(`${BASE}/api/categories`, {
+    headers,
+    data: { name: `Weighed ${run}` },
+  });
+  const product = await page.request.post(`${BASE}/api/products`, {
+    headers,
+    data: {
+      name: `Fish ${run}`,
+      category_id: (await categoryRes.json()).category.id,
+      price: 250,
+      tax_category_id: null,
+      tax_behavior: 'exempt',
+      addon_group_ids: [(await group.json()).addon_group.id],
+    },
+  });
+  expect(product.status()).toBe(201);
+  const order = await page.request.post(`${BASE}/api/orders`, {
+    headers,
+    data: {
+      type: 'takeaway',
+      items: [{ product_id: (await product.json()).product.id, quantity: 1 }],
+    },
+  });
+  expect(order.status()).toBe(201);
+  const created = (await order.json()).order;
+  expect(Boolean(created.items[0].weight_pending)).toBe(true);
+
+  await page.goto(`${E2E_KDS_BASE_URL}/kds-standalone`);
+  await page.getByTestId('kds-login-email').fill('manager@flo.local');
+  await page.getByTestId('kds-login-password').fill(E2E_PASSWORD);
+  await page.getByTestId('kds-login-submit').click();
+  const card = page.locator('div.select-none').filter({ hasText: `#${created.order_number}` });
+  const quantity = card.getByTestId('kds-out-of-stock-button');
+  await expect(quantity).toHaveAttribute('data-price-entry', 'true');
+  for (const [weight, total] of [
+    ['0.4', 100],
+    ['0.5', 125],
+  ] as const) {
+    await quantity.click();
+    const dialog = page.getByTestId('kds-price-dialog');
+    await dialog.getByTestId('kds-price-input').fill(weight);
+    await dialog.getByTestId('kds-price-save').click();
+    await expect(dialog).toBeHidden();
+    await expect(card.getByTestId('kds-set-price')).toContainText(`${weight} kg`);
+    const after = await (
+      await page.request.get(`${BASE}/api/orders/${created.id}`, { headers })
+    ).json();
+    expect(after.order.total).toBe(total);
+  }
 });

@@ -43,6 +43,8 @@ import {
 import { setupKdsWebSocket, notifyKdsUpdate, buildActiveOrdersSnapshot } from './services/kds';
 import { reconcileActiveOrderStatusFromItems } from './services/orders';
 import { cloudSync } from './services/cloud-sync';
+import { readKdsPriceEntry } from './services/kds-price-entry';
+import { applyPendingPriceEntry } from './routes/orders';
 import { getJWTSecret } from './security/jwt-secret';
 import { normalizeEmail, parseCategoryIds } from './routes/auth';
 import {
@@ -71,6 +73,11 @@ import { recordClockIn, recordClockOut } from './services/attendance';
 import { handleKdsSpeech, handleKdsSpeechEngine } from './services/kds-speech';
 import { handleKdsDismissKot, handleKdsReprintKot } from './services/kds-kot-actions';
 import { kdsAlertsForStations } from './services/kds-alerts';
+import {
+  outOfStockStageLock,
+  readOutOfStockFlag,
+  setKdsItemOutOfStock,
+} from './services/kds-out-of-stock';
 
 let kdsServer: http.Server | null = null;
 let kdsWss: WebSocketServer | null = null;
@@ -562,8 +569,11 @@ export function startKdsServer(): Promise<void> {
       try {
         const { status, expected_status: expectedStatus } = req.body;
         const validStatuses = ['pending', 'preparing', 'ready', 'served'];
+        const outOfStock = readOutOfStockFlag(req.body);
+        const priceEntry = readKdsPriceEntry(req.body);
+        const keepsStage = outOfStock !== undefined || priceEntry !== undefined;
 
-        if (!status || !validStatuses.includes(status)) {
+        if (!keepsStage && (!status || !validStatuses.includes(status))) {
           return res
             .status(400)
             .json({ error: `Valid status required: ${validStatuses.join(', ')}` });
@@ -593,6 +603,7 @@ export function startKdsServer(): Promise<void> {
             .status(403)
             .json({ error: 'No active kitchen station is assigned to this user' });
         let autoCompletedOrderId: string | null = null;
+        let pricedOrderId: string | null = null;
         const updateResult = db
           .transaction(() => {
             const currentUser = db
@@ -704,6 +715,23 @@ export function startKdsServer(): Promise<void> {
               return { statusCode: 403, error: 'Not authorized to update this item' };
             }
 
+            if (outOfStock !== undefined) {
+              setKdsItemOutOfStock(db, item, kdsUser.userId, outOfStock);
+              return { statusCode: 200, error: null, reconciledEvent: null };
+            }
+            if (priceEntry) {
+              applyPendingPriceEntry(db, {
+                orderId: String(item.order_id),
+                itemId: String(item.id),
+                actorId: kdsUser.userId,
+                ...priceEntry,
+              });
+              pricedOrderId = String(item.order_id);
+              return { statusCode: 200, error: null, reconciledEvent: null };
+            }
+            const stageLock = outOfStockStageLock(item);
+            if (stageLock) return { statusCode: 409, error: stageLock, reconciledEvent: null };
+
             const updatedAt = now();
             const updated =
               expectedStatus === undefined
@@ -765,10 +793,11 @@ export function startKdsServer(): Promise<void> {
         if (autoCompletedOrderId) {
           cloudSync.recordOrderChanged(autoCompletedOrderId, 'order.completed');
         }
+        if (pricedOrderId) cloudSync.recordOrderChanged(pricedOrderId, 'order.item_edited');
         res.json({ success: true });
       } catch (error: any) {
-        if (error?.statusCode === 409) {
-          return res.status(409).json({ error: error.message });
+        if (error?.statusCode >= 400 && error?.statusCode < 500) {
+          return res.status(error.statusCode).json({ error: error.message });
         }
         console.error('[KDS Server] PATCH item status error:', error);
         console.error('[API] Internal error:', error);

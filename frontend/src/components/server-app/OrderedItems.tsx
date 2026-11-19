@@ -56,10 +56,17 @@ export interface OrderedItem {
   service_change?: string | null;
   /** When service staff confirmed the served item reached the table. */
   served_confirmed_at?: string | null;
+  /** When the kitchen flagged the dish out of stock, asking staff to cancel it with the guest. */
+  out_of_stock_at?: string | null;
   /** Still waiting for a weight or the kitchen's price. */
   weight_pending?: boolean | number | null;
   /** Line total as the backend priced it. */
   total?: number | string | null;
+}
+
+/** A dish the kitchen cannot make that still waits to be cancelled with the guest. */
+export function isOutOfStock(item: OrderedItem): boolean {
+  return Boolean(item.out_of_stock_at) && ['pending', 'preparing'].includes(item.status);
 }
 
 /** A ready or served dish, or a take-away one still in the kitchen, not yet confirmed. */
@@ -78,6 +85,8 @@ export function itemChangeOptions(item: OrderedItem): {
   cancel: boolean;
   confirmServed: boolean;
 } {
+  // The kitchen cannot make it, so the only way on is to cancel it with the guest.
+  if (isOutOfStock(item)) return { takeaway: false, cancel: true, confirmServed: false };
   return {
     takeaway:
       ['pending', 'preparing', 'ready'].includes(item.status) && item.service_change !== 'takeaway',
@@ -195,7 +204,16 @@ export function OrderedItemList({
               ? formatPrice(Number(item.total))
               : null;
           return (
-            <li key={item.id} data-testid={itemTestId} className="flex items-center gap-3 py-3">
+            <li
+              key={item.id}
+              data-testid={itemTestId}
+              data-out-of-stock={isOutOfStock(item) ? 'true' : undefined}
+              className={`flex items-center gap-3 py-3 ${
+                isOutOfStock(item)
+                  ? 'rounded-lg border-s-4 border-orange-500 bg-orange-100 px-2 dark:bg-orange-950/60'
+                  : ''
+              }`}
+            >
               {imageOf && <ItemThumb item={item} src={imageOf(item)} cancelled={cancelled} />}
               <div className="min-w-0 flex-1">
                 <p
@@ -205,6 +223,14 @@ export function OrderedItemList({
                 </p>
                 <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Ltr className="tabular-nums">x {item.quantity}</Ltr>
+                  {isOutOfStock(item) && (
+                    <span
+                      data-testid="server-app-out-of-stock-tag"
+                      className="animate-pulse font-semibold text-red-600 dark:text-red-400"
+                    >
+                      {t('outOfStockNeeded')}
+                    </span>
+                  )}
                   {item.service_change === 'takeaway' && (
                     <span
                       data-testid="server-app-takeaway-tag"
