@@ -9,7 +9,7 @@ import type {
   SchemaVersionMismatchError,
 } from './db';
 
-export const FLOCAFE_RELEASES_URL = 'https://github.com/FreeOpenSourcePOS/FloCafe/releases';
+export const FLOCAFE_RELEASES_URL = 'https://github.com/ChayBB/flocafe3/releases';
 
 const BACKUP_PAGE_SIZE = 5;
 

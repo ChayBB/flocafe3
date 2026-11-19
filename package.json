@@ -12,6 +12,8 @@
     "benchmark:guest-menu": "bun scripts/benchmark-guest-menu.ts",
     "test:merge-database-histories": "node tests/run-electron-node-test.cjs tests/merge-database-histories.test.ts",
     "clean": "node kill-ports.js 3001 3002 3003",
+    "loadtest:orders": "node scripts/loadtest/order-load.cjs",
+    "loadtest:printer": "node scripts/loadtest/printer-speed.cjs",
     "predev": "",
     "dev": "npm run clean && npm run build:frontend && npm run build && electron .",
     "dev:restart": "bash scripts/dev/restart.sh",
@@ -492,8 +494,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "FreeOpenSourcePOS",
-      "repo": "FloCafe",
+      "owner": "ChayBB",
+      "repo": "flocafe3",
       "releaseType": "release",
       "channel": "latest"
     },
