@@ -739,9 +739,9 @@ sets `CONNECTED_POLLING`. Settings reports Cloud authentication separately based
 accepted or rejected credentials observed by a poll or connection test. Both transport settings
 use HTTPS polling, and WebSocket is shown as unavailable.
 
-**Pairing.** A POS that has not been set up shows only a pairing-code field. The Cloud operator
-runs `qr-saas/scripts/new-branch.ts` (or `POST /api/v1/admin/pairing-codes`) to create the branch
-and print an 8-character code. The code is valid once for 30 minutes, and issuing a new code for a
+**Pairing.** A POS that has not been set up shows only a pairing-code field. A Cloud administrator
+issues an 8-character code from the Cloud portal (`/portal`), `qr-saas/scripts/new-branch.ts`, or
+`POST /api/v1/admin/pairing-codes`. The code is valid once for 30 minutes, and issuing a new code for a
 branch cancels its unused code. `POST /api/qr-cloud/pair` (`settings.manage`) sends the code without a
 bearer token to `POST /api/v1/connectors/pair`. The Cloud allows 10 attempts per client address
 every 10 minutes and stores only a hash of the code. It returns a token with all four connector

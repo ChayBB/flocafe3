@@ -9,12 +9,13 @@ import { menuPreview, tableSessionScope } from './menu-preview';
 import { posTableQr } from './pos-table-qr';
 import { acknowledgeDelivery } from './connector-ack';
 import { kitchenStatuses, recordKitchenStatus } from './connector-kitchen-status';
-import { connectorAuthorizer, issueConnectorToken } from './connector-auth';
+import { connectorAuthorizer, issueConnectorToken, revokeInstallation } from './connector-auth';
 import { publishCatalog } from './catalog-sync';
 import { MENU_IMAGE_NAME, menuImages, postgresMenuImageStore } from './menu-images';
 import { AddonGroups, AddonSelection, resolveCatalogAddons, type AddonGroup } from './catalog-addons';
 import { enterTenant, inTenant } from './tenant-scope';
 import { attemptLimiter, createPairingCode, redeemPairingCode } from './pairing';
+import { portal } from './portal';
 const sql=postgres(process.env.DATABASE_URL!,{max:12});
 const redis=new Redis(process.env.REDIS_URL!);
 const adminSecret=process.env.ADMIN_BOOTSTRAP_TOKEN!;
@@ -42,6 +43,7 @@ async function createTableSession(scope: typeof tableSessionScope.static) {
 }
 
 const app=new Elysia({ websocket: connectorWebSocketOptions })
+.use(portal({ sql, publicOrigin: process.env.PORTAL_PUBLIC_ORIGIN ?? 'https://order.aiwittaya.com' }))
 .use(posTableQr({ sql, authorize: (request) => authorizeConnector(request, 'tables.write'), publicOrigin: process.env.QR_ORDERING_PUBLIC_ORIGIN }))
 .use(menuImages({ store: postgresMenuImageStore(sql), authorize: (request) => authorizeConnector(request, 'catalog.write') }))
 .use(menuPreview({
@@ -105,17 +107,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
 })})
 .post('/api/v1/admin/connector-installations/revoke',async({request,body})=>{
  if(!isAdmin(request))return err(401,'unauthorized');
- await sql.begin(async tx=>{
-  const [revoked]=await tx`UPDATE connector_installations SET revoked_at=coalesce(revoked_at,now())
-    WHERE id=${body.installation_id} AND tenant_id=${body.tenant_id} AND branch_id=${body.branch_id} RETURNING id`;
-  if(!revoked)return;
-  await tx`UPDATE dining_tables SET qr_ordering_until=NULL WHERE pos_installation_id=${revoked.id}
-    AND tenant_id=${body.tenant_id} AND branch_id=${body.branch_id}`;
-  await tx`UPDATE table_sessions s SET revoked_at=now() FROM dining_tables d
-    WHERE (s.tenant_id,s.branch_id,s.table_id)=(d.tenant_id,d.branch_id,d.id)
-      AND d.pos_installation_id=${revoked.id} AND d.tenant_id=${body.tenant_id} AND d.branch_id=${body.branch_id}
-      AND s.revoked_at IS NULL AND s.expires_at>now()`;
- });
+ await revokeInstallation(sql,{installationId:body.installation_id,tenantId:body.tenant_id,branchId:body.branch_id});
  return {ok:true};
 },{body:t.Object({installation_id:t.String({format:'uuid'}),tenant_id:t.String({format:'uuid'}),branch_id:t.String({format:'uuid'})})})
 .post('/api/v1/admin/tenants',async({request,body})=>{

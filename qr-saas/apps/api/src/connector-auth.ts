@@ -19,8 +19,12 @@ export function connectorAuthorizer(sql: Sql, legacy?: { tenantId: string; branc
       SELECT id, tenant_id, branch_id, scopes FROM connector_installations
       WHERE token_hash = ${sha256(secret)} AND revoked_at IS NULL
     `;
-    if (row) return row.scopes.includes(permission)
-      ? { tenantId: row.tenant_id, branchId: row.branch_id, installationId: row.id } : null;
+    if (row) {
+      void sql`UPDATE connector_installations SET last_seen_at = now()
+        WHERE id = ${row.id} AND (last_seen_at IS NULL OR last_seen_at < now() - interval '1 minute')`.catch(() => {});
+      return row.scopes.includes(permission)
+        ? { tenantId: row.tenant_id, branchId: row.branch_id, installationId: row.id } : null;
+    }
     if (!legacy || !constantEqual(secret, legacy.token) || permission === 'orders.ack' || permission === 'catalog.write') return null;
     const [registered] = await sql`
       SELECT 1 FROM connector_installations
@@ -47,4 +51,23 @@ export async function issueConnectorToken(sql: Sql, input: {
       VALUES (${input.tenant_id}, ${input.branch_id}, ${input.label}, ${hash}, ${input.scopes}) RETURNING id
     `;
   return row ? { installation_id: row.id, connector_token: secret } : null;
+}
+
+/** Revokes a POS installation and stops its table QR sessions; table stickers stay registered. */
+export async function revokeInstallation(sql: Sql, scope: { installationId?: string; tenantId: string; branchId: string }) {
+  return sql.begin(async (tx) => {
+    const [revoked] = scope.installationId
+      ? await tx`UPDATE connector_installations SET revoked_at = coalesce(revoked_at, now())
+          WHERE id = ${scope.installationId} AND tenant_id = ${scope.tenantId} AND branch_id = ${scope.branchId} RETURNING id`
+      : await tx`UPDATE connector_installations SET revoked_at = now()
+          WHERE tenant_id = ${scope.tenantId} AND branch_id = ${scope.branchId} AND revoked_at IS NULL RETURNING id`;
+    if (!revoked) return false;
+    await tx`UPDATE dining_tables SET qr_ordering_until = NULL WHERE pos_installation_id = ${revoked.id}
+      AND tenant_id = ${scope.tenantId} AND branch_id = ${scope.branchId}`;
+    await tx`UPDATE table_sessions s SET revoked_at = now() FROM dining_tables d
+      WHERE (s.tenant_id, s.branch_id, s.table_id) = (d.tenant_id, d.branch_id, d.id)
+        AND d.pos_installation_id = ${revoked.id} AND d.tenant_id = ${scope.tenantId} AND d.branch_id = ${scope.branchId}
+        AND s.revoked_at IS NULL AND s.expires_at > now()`;
+    return true;
+  });
 }
