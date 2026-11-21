@@ -672,69 +672,69 @@ export function OrderedItemsScreen({
               else await onConfirmServed(item);
             }}
           />
-        </div>
-      </div>
-
-      <footer className="border-t border-border">
-        <div className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-2 p-3">
-          {live.length > 0 && (
-            <div
-              data-testid="server-app-ordered-summary"
-              className="col-span-2 flex items-baseline justify-between px-1 pb-1"
-            >
-              <span className="text-sm text-muted-foreground">
-                {t('orderedItemsCount', { count: live.length })}
-              </span>
-              {formatPrice && total != null && (
-                <Ltr className="text-lg font-bold tabular-nums">{formatPrice(Number(total))}</Ltr>
-              )}
-            </div>
-          )}
-          {toConfirm.length > 0 && (
+          <div
+            data-testid="server-app-ordered-actions"
+            className="mb-4 mt-[70px] grid grid-cols-2 gap-2 border-t border-border pt-3"
+          >
+            {live.length > 0 && (
+              <div
+                data-testid="server-app-ordered-summary"
+                className="col-span-2 flex items-baseline justify-between px-1 pb-1"
+              >
+                <span className="text-sm text-muted-foreground">
+                  {t('orderedItemsCount', { count: live.length })}
+                </span>
+                {formatPrice && total != null && (
+                  <Ltr className="text-lg font-bold tabular-nums">{formatPrice(Number(total))}</Ltr>
+                )}
+              </div>
+            )}
+            {toConfirm.length > 0 && (
+              <button
+                type="button"
+                data-testid="server-app-confirm-served-many"
+                disabled={confirmingOne}
+                onClick={async () => {
+                  // A single dish needs no checklist: confirm it straight away.
+                  if (toConfirm.length > 1) {
+                    setConfirmingMany(true);
+                    return;
+                  }
+                  setConfirmingOne(true);
+                  try {
+                    await confirmDishes(toConfirm);
+                  } finally {
+                    setConfirmingOne(false);
+                  }
+                }}
+                className={`col-span-2 flex h-12 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 text-sm font-semibold text-white disabled:opacity-60 ${serveConfirmRequested ? 'animate-pulse ring-2 ring-red-500' : ''}`}
+              >
+                <CheckCheck size={17} />
+                {t('confirmServedMany', { count: toConfirm.length })}
+              </button>
+            )}
             <button
               type="button"
-              data-testid="server-app-confirm-served-many"
-              disabled={confirmingOne}
-              onClick={async () => {
-                // A single dish needs no checklist: confirm it straight away.
-                if (toConfirm.length > 1) {
-                  setConfirmingMany(true);
-                  return;
-                }
-                setConfirmingOne(true);
-                try {
-                  await confirmDishes(toConfirm);
-                } finally {
-                  setConfirmingOne(false);
-                }
-              }}
-              className={`col-span-2 flex h-12 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 text-sm font-semibold text-white disabled:opacity-60 ${serveConfirmRequested ? 'animate-pulse ring-2 ring-red-500' : ''}`}
+              data-testid="server-app-ordered-add"
+              onClick={onAddItems}
+              disabled={addItemsLocked}
+              className="flex h-12 items-center justify-center gap-1.5 rounded-lg border border-brand text-sm font-semibold text-brand disabled:opacity-40"
             >
-              <CheckCheck size={17} />
-              {t('confirmServedMany', { count: toConfirm.length })}
+              <Plus size={17} />
+              {t('addFoodItems')}
             </button>
-          )}
-          <button
-            type="button"
-            data-testid="server-app-ordered-add"
-            onClick={onAddItems}
-            disabled={addItemsLocked}
-            className="flex h-12 items-center justify-center gap-1.5 rounded-lg border border-brand text-sm font-semibold text-brand disabled:opacity-40"
-          >
-            <Plus size={17} />
-            {t('addFoodItems')}
-          </button>
-          <button
-            type="button"
-            data-testid="server-app-ordered-exit"
-            onClick={onBack}
-            className="flex h-12 items-center justify-center gap-1.5 rounded-lg border border-border text-sm font-semibold text-foreground"
-          >
-            <LogOut size={17} className="rtl-flip" />
-            {t('exitOrderedItems')}
-          </button>
+            <button
+              type="button"
+              data-testid="server-app-ordered-exit"
+              onClick={onBack}
+              className="flex h-12 items-center justify-center gap-1.5 rounded-lg border border-border text-sm font-semibold text-foreground"
+            >
+              <LogOut size={17} className="rtl-flip" />
+              {t('exitOrderedItems')}
+            </button>
+          </div>
         </div>
-      </footer>
+      </div>
       {confirmingMany && (
         <ConfirmServedDialog
           items={toConfirm}
