@@ -31,7 +31,7 @@ import {
   isTemplateCardSelected,
   type BillTemplateSelectionSource,
 } from '@/lib/bill-template-picker';
-import { type PaperSize, type BillTemplate, usePosSettingsStore } from '@/store/pos-settings';
+import { type PaperSize, type BillTemplate } from '@/store/pos-settings';
 import { usePrinterStore } from '@/hooks/usePrinter';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
@@ -223,35 +223,6 @@ export function PrintersSettingsTab({
   const [addingDetectedName, setAddingDetectedName] = useState<string | null>(null);
   const [installedPrintersOpen, setInstalledPrintersOpen] = useState(false);
   const [cashDrawerMethodsOpen, setCashDrawerMethodsOpen] = useState(false);
-  const [kotLayoutOpen, setKotLayoutOpen] = useState(false);
-  const [kotLayout, setKotLayout] = useState<'separate' | 'combined'>(() =>
-    usePosSettingsStore.getState().kotPrintSeparate ? 'separate' : 'combined',
-  );
-
-  useEffect(() => {
-    api
-      .get('/settings/kot_print_layout')
-      .then((res) => {
-        const layout = res.data.setting?.value === 'separate' ? 'separate' : 'combined';
-        setKotLayout(layout);
-        usePosSettingsStore.getState().setKotPrintSeparate(layout === 'separate');
-      })
-      .catch(() => {});
-  }, []);
-
-  const saveKotLayout = async (layout: 'separate' | 'combined') => {
-    const previous = kotLayout;
-    setKotLayout(layout);
-    try {
-      await api.put('/settings/kot_print_layout', { value: layout });
-      usePosSettingsStore.getState().setKotPrintSeparate(layout === 'separate');
-      toast.success(t('kotPrintLayoutSaved'));
-    } catch {
-      setKotLayout(previous);
-      toast.error(t('saveFailed'));
-    }
-  };
-
   const normalizePrinterWidthValue = (value?: string | null): string => {
     if (value === '58mm') return 'cols-32';
     if (value === '58mm-36') return 'cols-36';
@@ -1194,48 +1165,6 @@ export function PrintersSettingsTab({
                 }}
               />
             </div>
-            {kotPrintingEnabledSetting && (
-              <div className="rounded-lg border border-border overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setKotLayoutOpen((open) => !open)}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-start text-sm font-medium text-foreground hover:bg-muted"
-                >
-                  <span>{t('kotPrintLayout')}</span>
-                  <ChevronDown
-                    size={16}
-                    className={`text-muted-foreground transition-transform ${
-                      kotLayoutOpen ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
-                {kotLayoutOpen && (
-                  <div className="border-t border-border bg-muted/30 px-3 py-2 space-y-2">
-                    {(
-                      [
-                        ['separate', t('kotPrintLayoutSeparate')],
-                        ['combined', t('kotPrintLayoutCombined')],
-                      ] as const
-                    ).map(([value, label]) => (
-                      <label
-                        key={value}
-                        className="flex items-center gap-2 text-sm text-foreground"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={kotLayout === value}
-                          onChange={() => {
-                            if (kotLayout !== value) saveKotLayout(value);
-                          }}
-                          className="h-4 w-4 rounded border-border text-brand focus:ring-brand"
-                        />
-                        {label}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
             {!kdsEnabledSetting && !kotPrintingEnabledSetting && (
               <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/40 rounded-lg">
                 <AlertTriangle

@@ -101,9 +101,11 @@ function serviceChangesById(orders: UseKdsConnectionResult['orders']): Map<numbe
 
 export function KdsWorkspace({
   conn,
+  showPrintLayout = false,
 }: {
   conn: UseKdsConnectionResult;
   serverDefault?: 'tabs' | 'kanban' | null;
+  showPrintLayout?: boolean;
 }) {
   const t = useTranslations('kds');
   const screen = useKdsScreenMode();
@@ -513,6 +515,7 @@ export function KdsWorkspace({
         onBrightness={screen.setBrightness}
         fontScale={screen.fontScale}
         onFontScale={screen.setFontScale}
+        showPrintLayout={showPrintLayout}
         onClose={() => setSettingsOpen(false)}
       />
       {conn.ConfirmDialog}
