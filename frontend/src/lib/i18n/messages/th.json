@@ -666,6 +666,8 @@
     "weightEntryTitle": "น้ำหนัก {item}",
     "priceEntryTitle": "ราคา {item}",
     "weightEntryLabel": "น้ำหนัก (กก.)",
+    "weightBasePrice": "ราคาฐาน {price} ต่อ กก.",
+    "weightAmount": "{weight} กก.",
     "priceEntryLabel": "ราคาต่อที่",
     "weightEntryInvalid": "ใส่ 0.3 ถึง 100 กก. ทศนิยมไม่เกิน 3 ตำแหน่ง",
     "priceEntryInvalid": "ใส่ราคามากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง",

@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import type { KdsOrderItem } from '@/hooks/useKdsConnection';
 import { kdsItemLine } from '@/lib/item-options-note';
+import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 
 /** A line priced after the order: weighed by the kitchen, or given a price by the kitchen. */
 export function isKdsPricedLater(item: KdsOrderItem): boolean {
@@ -19,6 +20,14 @@ export function isKdsPricedLater(item: KdsOrderItem): boolean {
 
 export function kdsPriceMode(item: KdsOrderItem): 'weight' | 'price' {
   return item.pending_price_mode === 'kitchen_price' ? 'price' : 'weight';
+}
+
+/** The price per kg: the line's price while it waits, or its price over the weight once weighed. */
+export function kdsBasePricePerKg(item: KdsOrderItem): number | null {
+  const unit = Number(item.unit_price);
+  if (!Number.isFinite(unit) || unit <= 0) return null;
+  if (item.weight_pending || !item.weight) return unit;
+  return unit / Number(item.weight);
 }
 
 /** The same bounds the backend enforces, so a wrong entry is caught before it is sent. */
@@ -51,6 +60,8 @@ export function KdsPriceDialog({
   const [saving, setSaving] = useState(false);
   const value = parseEntry(mode, text);
   const name = kdsItemLine(item).name;
+  const fmt = useFormatCurrency();
+  const basePrice = mode === 'weight' ? kdsBasePricePerKg(item) : null;
 
   const save = async () => {
     if (value === null || saving) return;
@@ -88,6 +99,19 @@ export function KdsPriceDialog({
               className="h-14 text-2xl font-bold tabular-nums"
             />
           </label>
+          {basePrice !== null && (
+            <div data-testid="kds-price-formula" className="flex flex-col gap-1 tabular-nums">
+              <p className="text-sm text-muted-foreground">
+                {t('weightBasePrice', { price: fmt(basePrice) })}
+              </p>
+              {value !== null && (
+                <p className="text-base font-semibold">
+                  {t('weightAmount', { weight: value.toFixed(2) })} × {fmt(basePrice)} ={' '}
+                  {fmt(basePrice * value)}
+                </p>
+              )}
+            </div>
+          )}
           {text.trim() !== '' && value === null && (
             <p className="text-sm text-red-600">
               {mode === 'weight' ? t('weightEntryInvalid') : t('priceEntryInvalid')}

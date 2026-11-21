@@ -666,6 +666,8 @@
     "weightEntryTitle": "Weight of {item}",
     "priceEntryTitle": "Price of {item}",
     "weightEntryLabel": "Weight (kg)",
+    "weightBasePrice": "Base price {price} per kg",
+    "weightAmount": "{weight} kg",
     "priceEntryLabel": "Price per serving",
     "weightEntryInvalid": "Enter 0.3 to 100 kg, up to 3 decimals",
     "priceEntryInvalid": "Enter a price above 0, up to 2 decimals",

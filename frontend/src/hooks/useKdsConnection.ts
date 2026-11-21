@@ -134,6 +134,8 @@ export interface KdsOrderItem {
   updated_at?: string;
   /** Menu category the KDS station picker filters on. */
   station_category_id?: string | null;
+  /** The line's unit price: the price per kg while a weighed line waits for its weight. */
+  unit_price?: number | null;
   /** Price the kitchen set for a weighed or kitchen-priced line. */
   kitchen_set_price?: number | null;
   currency?: string;

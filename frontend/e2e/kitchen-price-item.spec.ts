@@ -167,9 +167,17 @@ test('the KDS weighs a weight-priced dish from its quantity, and can weigh it ag
     await quantity.click();
     const dialog = page.getByTestId('kds-price-dialog');
     await dialog.getByTestId('kds-price-input').fill(weight);
+    // The dialog works the price out like the cashier's: weight times the price per kg.
+    const formula = dialog.getByTestId('kds-price-formula');
+    await expect(formula).toContainText('Base price');
+    await expect(formula).toContainText('250');
+    await expect(formula).toContainText(`${Number(weight).toFixed(2)} kg ×`);
+    await expect(formula).toContainText(String(total));
     await dialog.getByTestId('kds-price-save').click();
     await expect(dialog).toBeHidden();
-    await expect(card.getByTestId('kds-set-price')).toContainText(`${weight} kg`);
+    await expect(card.getByTestId('kds-set-price')).toContainText(
+      `${Number(weight).toFixed(2)} kg`,
+    );
     const after = await (
       await page.request.get(`${BASE}/api/orders/${created.id}`, { headers })
     ).json();
