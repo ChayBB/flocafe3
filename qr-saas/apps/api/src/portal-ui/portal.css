@@ -9,6 +9,12 @@ body { margin: 0; font-family: system-ui, "Noto Sans Thai", "Leelawadee UI", san
 .inline { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 .inline h3 { width: 100%; margin: 0 0 4px; }
 .field { display: grid; gap: 4px; font-size: 14px; }
+.customer-login { max-width: 480px; }
+.customer-login h1 { margin: 0; font-size: 28px; }
+.customer-login p { margin: 0; }
+.login-extras { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.check { display: flex; align-items: center; gap: 6px; }
+.check input { min-width: 0; width: auto; }
 input, select { font: inherit; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; min-width: 180px; }
 button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--brand); background: var(--brand); color: #fff; cursor: pointer; }
 button.secondary { background: #fff; color: #111827; border-color: #d1d5db; }

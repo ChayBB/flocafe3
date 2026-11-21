@@ -14,10 +14,14 @@ const script = await built.outputs[0].text();
 const page = await Bun.file(`${import.meta.dir}/index.html`).text();
 const styles = await Bun.file(`${import.meta.dir}/portal.css`).text();
 
+const html = () => new Response(page, { headers: { ...HEADERS, 'content-type': 'text/html; charset=utf-8' } });
+
 /** The portal is one static page plus one bundled script, served by the API itself. */
 export function portalAssets() {
   return new Elysia()
-    .get('/portal', () => new Response(page, { headers: { ...HEADERS, 'content-type': 'text/html; charset=utf-8' } }))
+    .get('/portal', html)
+    .get('/customer', html)
+    .get('/customer/login', html)
     .get('/portal/app.js', () => new Response(script, { headers: { ...HEADERS, 'content-type': 'text/javascript; charset=utf-8' } }))
     .get('/portal/portal.css', () => new Response(styles, { headers: { ...HEADERS, 'content-type': 'text/css; charset=utf-8' } }));
 }

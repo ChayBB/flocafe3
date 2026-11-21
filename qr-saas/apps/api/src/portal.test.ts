@@ -74,6 +74,10 @@ test.skipIf(!databaseUrl || !redisUrl)(
       expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
       expect(await page.text()).toContain('/portal/app.js');
       expect((await fetch(`${base}/portal/app.js`)).status).toBe(200);
+      const customerLogin = await fetch(`${base}/customer/login`);
+      expect(customerLogin.status).toBe(200);
+      expect(customerLogin.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+      expect(await customerLogin.text()).toContain('/portal/app.js');
 
       expect((await call('/api/v1/portal/invite/accept', { body: { token: adminInvite, password: 'short' } })).body.code).toBe('password_too_short');
       expect((await call('/api/v1/portal/invite/accept', { body: { token: adminInvite, password: 'correct horse battery' }, header: false })).status).toBe(403);

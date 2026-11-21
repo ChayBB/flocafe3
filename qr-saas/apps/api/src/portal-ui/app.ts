@@ -19,6 +19,8 @@ type AuditEntry = { created_at: string; action: string; actor: string | null; sh
 
 const TEXT = {
   th: {
+    customerSignIn: 'เข้าสู่ระบบลูกค้า', customerHint: 'หากคุณมีบัญชีอยู่แล้ว สามารถเข้าสู่ระบบด้วยอีเมลของคุณ',
+    showPassword: 'แสดงรหัสผ่าน', forgotPassword: 'ลืมรหัสผ่าน?', forgotHint: 'ติดต่อผู้ดูแลระบบเพื่อขอลิงก์ตั้งรหัสผ่านใหม่',
     title: 'FloCafe Portal', email: 'อีเมล', password: 'รหัสผ่าน', signIn: 'เข้าสู่ระบบ', signOut: 'ออกจากระบบ',
     setPassword: 'ตั้งรหัสผ่าน', newPassword: 'รหัสผ่านใหม่ (อย่างน้อย 10 ตัว)', confirmPassword: 'ยืนยันรหัสผ่าน',
     passwordMismatch: 'รหัสผ่านไม่ตรงกัน', shops: 'ร้านและสาขา', users: 'บัญชีผู้ใช้', audit: 'ประวัติการใช้งาน',
@@ -52,6 +54,8 @@ const TEXT = {
     error_signed_out: 'หมดเวลาเข้าสู่ระบบ เข้าสู่ระบบใหม่', error_generic: 'ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง',
   },
   en: {
+    customerSignIn: 'Customer sign in', customerHint: 'If you already have an account, sign in with your email.',
+    showPassword: 'Show password', forgotPassword: 'Forgot password?', forgotHint: 'Ask the administrator for a new password link.',
     title: 'FloCafe Portal', email: 'Email', password: 'Password', signIn: 'Sign in', signOut: 'Sign out',
     setPassword: 'Set password', newPassword: 'New password (at least 10 characters)', confirmPassword: 'Confirm password',
     passwordMismatch: 'The passwords do not match', shops: 'Shops and branches', users: 'Accounts', audit: 'Activity',
@@ -172,11 +176,21 @@ function header() {
       } }, tr('signOut'))));
 }
 
+const customerEntry = location.pathname.replace(/\/+$/, '').startsWith('/customer');
+
 function loginView() {
-  const email = h('input', { type: 'email', required: true, autocomplete: 'username' });
-  const password = h('input', { type: 'password', required: true, autocomplete: 'current-password' });
+  const email = h('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'email@example.com' });
+  const password = h('input', { type: 'password', required: true, autocomplete: 'current-password', placeholder: tr('password') });
   const error = errorLine();
-  return h('form', { class: 'card narrow', onsubmit: async (event: Event) => {
+  const hint = h('p', { class: 'muted small', role: 'status' });
+  const reveal = h('input', { type: 'checkbox', onchange: () => { password.type = reveal.checked ? 'text' : 'password'; } });
+  const extras = h('div', { class: 'login-extras' },
+    h('label', { class: 'check' }, reveal, tr('showPassword')),
+    h('button', { type: 'button', class: 'link', onclick: () => { hint.textContent = tr('forgotHint'); } }, tr('forgotPassword')));
+  const heading = customerEntry
+    ? [h('h1', {}, tr('customerSignIn')), h('p', { class: 'muted' }, tr('customerHint'))]
+    : [h('h2', {}, tr('signIn'))];
+  return h('form', { class: customerEntry ? 'card narrow customer-login' : 'card narrow', onsubmit: async (event: Event) => {
     event.preventDefault();
     error.textContent = '';
     try {
@@ -185,7 +199,7 @@ function loginView() {
     } catch (failure) {
       showError(error, failure);
     }
-  } }, h('h2', {}, tr('signIn')), field(tr('email'), email), field(tr('password'), password), error,
+  } }, ...heading, field(`${tr('email')} *`, email), field(`${tr('password')} *`, password), extras, hint, error,
   h('button', { type: 'submit' }, tr('signIn')));
 }
 
