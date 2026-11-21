@@ -49,6 +49,7 @@ const uuid = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const DEFAULT_SCROLL_PERCENT = 87;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const money = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' });
+const plainAmount = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
 const assetUrl = (file: string) => new URL(file, import.meta.url).href;
 const lineKey = (line: Line) =>
   JSON.stringify([
@@ -105,6 +106,7 @@ async function readMenu(
         typeof item.name === 'string' &&
         Number.isSafeInteger(item.price_satang) &&
         item.price_satang >= 0 &&
+        (item.price_unit == null || item.price_unit === 'kg') &&
         (item.category == null || typeof item.category === 'string'),
     )
   )
@@ -346,9 +348,12 @@ function Ordering() {
 
   const lines = pending?.body.items ?? cart;
   const count = lines.reduce((total, line) => total + line.quantity, 0);
+  const weighed = (line: Line) => presentation.itemById.get(line.menu_item_id)?.price_unit != null;
+  const hasWeighed = lines.some(weighed);
   const total = lines.reduce((sum, line) => {
     const item = presentation.itemById.get(line.menu_item_id);
     if (!item) return NaN;
+    if (item.price_unit) return sum;
     const options = item.addon_groups?.flatMap((group) => group.options) ?? [];
     return (
       sum +
@@ -389,11 +394,17 @@ function Ordering() {
     return { product, variant, name: shown.name, note: shown.instructions };
   };
   const limitError = () => toast.error('จำนวนรายการหรือตัวเลือกเกินขีดจำกัด กรุณาลดจำนวนแล้วลองใหม่');
+  const weighedLimit = (items: Line[]) => {
+    if (!items.some((item) => weighed(item) && item.quantity > 1)) return false;
+    toast.error('เมนูตามน้ำหนักสั่งได้ครั้งละ 1 ที่ ร้านจะชั่งน้ำหนักจริงก่อนคิดราคา');
+    return true;
+  };
   const changeQty = (key: string, delta: number) => {
     const line = cart.find((item) => lineKey(item) === key);
     if (!line) return;
     const quantity = line.quantity + delta;
     if (quantity > 50 || count + delta > 100) return limitError();
+    if (weighedLimit([{ ...line, quantity }])) return;
     setCart(
       quantity < 1
         ? cart.filter((item) => lineKey(item) !== key)
@@ -457,6 +468,7 @@ function Ordering() {
       limitError();
       return;
     }
+    if (weighedLimit([{ ...line, quantity }])) return;
     setStatus('');
     setCart(
       index < 0
@@ -692,6 +704,18 @@ function Ordering() {
                                   {info.note}
                                 </p>
                               )}
+                              {weighed(line) && (
+                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                  {tPos('bahtPerUnit', {
+                                    price: plainAmount.format(
+                                      (presentation.itemById.get(line.menu_item_id)?.price_satang ??
+                                        0) / 100,
+                                    ),
+                                    unit: 'kg',
+                                  })}{' '}
+                                  · คิดตามน้ำหนักจริง
+                                </p>
+                              )}
                             </div>
                             <button
                               type="button"
@@ -815,6 +839,11 @@ function Ordering() {
                     <Ltr>{Number.isFinite(total) ? money.format(total / 100) : '-'}</Ltr>
                   </span>
                 </div>
+                {hasWeighed && (
+                  <p className="mt-1 text-end text-xs text-muted-foreground">
+                    ยังไม่รวมเมนูตามน้ำหนัก ร้านจะแจ้งราคาหลังชั่ง
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => void send()}
@@ -880,6 +909,7 @@ function Ordering() {
               limitError();
               return;
             }
+            if (weighedLimit(updated)) return;
             setCart(updated);
           }}
         />

@@ -1099,6 +1099,8 @@
     "customerRequiredBeforeOrder": "ต้องมีลูกค้าก่อนการสั่งซื้อ",
     "customerUpdateFailed": "อัปเดตลูกค้าไม่สำเร็จ",
     "customerUpdated": "อัปเดตลูกค้าแล้ว",
+    "bahtPerUnit": "{price} บาท/{unit, select, kg {กก.} g {กรัม} lb {ปอนด์} ml {มล.} cl {ซล.} l {ลิตร} oz {ออนซ์} other {{unit}}}",
+    "pricePerSaleUnit": "/{unit, select, kg {กก.} g {กรัม} lb {ปอนด์} ml {มล.} cl {ซล.} l {ลิตร} oz {ออนซ์} other {{unit}}}",
     "customisable": "กำหนดเองได้",
     "decreasePax": "ลดจำนวนคน",
     "delivery": "จัดส่ง",

@@ -5,6 +5,7 @@ export interface CloudMenuItem {
   name: string;
   category: string | null;
   price_satang: number;
+  price_unit?: 'kg' | null;
   image?: string;
   addon_groups?: {
     name: string;
@@ -104,6 +105,7 @@ export function presentCloudMenu(items: CloudMenuItem[], snapshot?: PosMenuPrese
       name,
       category_id: categoryId,
       price: base.price_satang / 100,
+      price_unit: base.price_unit ?? null,
       variants,
       addon_groups,
       tags: presentation?.tags ?? null,

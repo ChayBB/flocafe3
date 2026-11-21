@@ -89,10 +89,10 @@ test.skipIf(!databaseUrl || !redisUrl)(
         call(`/api/v1/portal/admin/branches/${branchId}/modules`, { session, body: { module, enabled } });
       const modulesOf = async (branchId: string) =>
         (await call('/api/v1/portal/owner/shop', { session: owner })).body.shop.branches.find((b: any) => b.id === branchId).modules;
-      const order = (tableToken: string, key: string) => fetch(`${base}/api/v1/orders`, {
+      const order = (tableToken: string, key: string, quantity = 1) => fetch(`${base}/api/v1/orders`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${tableToken}`, 'idempotency-key': key },
-        body: JSON.stringify({ items: [{ menu_item_id: tea.id, quantity: 1 }] }),
+        body: JSON.stringify({ items: [{ menu_item_id: tea.id, quantity }] }),
       });
       const report = { v: 1, business_date: new Date().toISOString().slice(0, 10), currency: 'THB', sales: { net: 100, bills: 1 } };
       const today = report.business_date;
@@ -116,6 +116,13 @@ test.skipIf(!databaseUrl || !redisUrl)(
       expect((await order(firstSession.body.table_token, 'order-before')).status).toBe(200);
       await setModule(north.branch_id, 'qr_ordering', true);
       expect((await order(firstSession.body.table_token, 'order-again')).status).toBe(200);
+
+      await sql`UPDATE menu_items SET price_unit = 'kg' WHERE id = ${tea.id}`;
+      const guestMenu = await fetch(`${base}/api/v1/menu`, { headers: { authorization: `Bearer ${firstSession.body.table_token}` } });
+      expect((await guestMenu.json()).items.find((item: any) => item.id === tea.id).price_unit).toBe('kg');
+      expect((await order(firstSession.body.table_token, 'weighed-two', 2)).status).toBe(400);
+      expect((await order(firstSession.body.table_token, 'weighed-one', 1)).status).toBe(200);
+      await sql`UPDATE menu_items SET price_unit = NULL WHERE id = ${tea.id}`;
 
       const menu = `/api/v1/portal/owner/branches/${north.branch_id}/menu`;
       expect((await call(`${menu}/${tea.id}/price`, { session: owner, body: { price_satang: 5000 } })).status).toBe(200);

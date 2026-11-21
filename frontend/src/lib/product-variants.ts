@@ -55,6 +55,22 @@ export function productNeedsCustomizer(product: {
   return (product.addon_groups || []).some((group) => group.is_active !== false);
 }
 
+export const WEIGHT_PRICED_GROUP_NAME = 'ราคาตามน้ำหนัก';
+
+/** The unit a product's price is quoted per, or null when it is a plain per-item price. */
+export function priceUnitOf(product: {
+  addon_groups?: AddonGroup[] | null;
+  sale_unit?: string | null;
+  price_unit?: string | null;
+}): string | null {
+  if (product.price_unit) return product.price_unit;
+  const groups = product.addon_groups || [];
+  if (groups.some((group) => group.kitchen_price)) return null;
+  if (groups.some((group) => group.name?.trim() === WEIGHT_PRICED_GROUP_NAME || group.price_pending))
+    return 'kg';
+  return product.sale_unit && product.sale_unit !== 'each' ? product.sale_unit : null;
+}
+
 /** Active variants in display order. */
 export function activeVariants(variants: ProductVariant[] | null | undefined): ProductVariant[] {
   return (variants || []).filter((variant) => variant.is_active);

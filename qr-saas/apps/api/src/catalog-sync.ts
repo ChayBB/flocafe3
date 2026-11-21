@@ -11,6 +11,7 @@ export interface CatalogItem {
   name: string;
   category: string | null;
   price_satang: number;
+  price_unit?: 'kg';
   addon_groups?: AddonGroup[];
   image?: string;
 }
@@ -41,15 +42,15 @@ export async function publishCatalog(sql: Sql, { tenantId, branchId }: Connector
     `;
     if (remapped) return 'conflict';
     await tx`
-      INSERT INTO menu_items (tenant_id, branch_id, external_id, name, price_satang, available,
+      INSERT INTO menu_items (tenant_id, branch_id, external_id, name, price_satang, price_unit, available,
         category, pos_product_id, pos_variant_id, addon_groups, image)
-      SELECT ${tenantId}, ${branchId}, item.external_id, item.name, item.price_satang, true,
+      SELECT ${tenantId}, ${branchId}, item.external_id, item.name, item.price_satang, item.price_unit, true,
         item.category, item.pos_product_id, item.pos_variant_id, coalesce(item.addon_groups, '[]'::jsonb), item.image
       FROM jsonb_to_recordset(${snapshot}::text::jsonb) AS item(
-        external_id text, name text, price_satang int, category text, pos_product_id text, pos_variant_id text, addon_groups jsonb, image text
+        external_id text, name text, price_satang int, price_unit text, category text, pos_product_id text, pos_variant_id text, addon_groups jsonb, image text
       )
       ON CONFLICT (tenant_id, branch_id, external_id) DO UPDATE
-      SET name = excluded.name, price_satang = excluded.price_satang, available = true,
+      SET name = excluded.name, price_satang = excluded.price_satang, price_unit = excluded.price_unit, available = true,
         category = excluded.category, pos_product_id = excluded.pos_product_id,
         pos_variant_id = excluded.pos_variant_id, addon_groups = excluded.addon_groups, image = excluded.image, updated_at = now()
     `;

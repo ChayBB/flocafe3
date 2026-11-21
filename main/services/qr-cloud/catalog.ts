@@ -3,6 +3,7 @@ import { getDatabase } from '../../db';
 import { getTenantCurrency } from '../refund';
 import { QrCloudClientError } from './client';
 import { CloudOrderError } from './order-acceptance';
+import { pendingPriceModeForProduct } from '../../lib/weight-pending';
 
 const MAX_IMAGE_BYTES = 96_000;
 const MAX_UPLOAD_JSON_BYTES = 200_000;
@@ -98,6 +99,11 @@ export function buildCloudCatalog() {
         name: row.variant_name ? `${row.name} – ${row.variant_name}` : row.name,
         category: row.category,
         price_satang: Math.round(row.price * 100),
+        ...(row.price > 0 &&
+        pendingPriceModeForProduct(db, { id: row.pos_product_id, category_id: row.category_id }) ===
+          'weight'
+          ? { price_unit: 'kg' as const }
+          : {}),
         ...(groups.length ? { addon_groups: groups } : {}),
         ...(image ? { image: image.name } : {}),
       },

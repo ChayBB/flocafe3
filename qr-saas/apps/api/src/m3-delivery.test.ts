@@ -69,6 +69,15 @@ test.skipIf(!testUrl)('M3 migrations, scoped credentials, catalog revisions and 
       items: [item, { ...staffPrice, price_satang: 18000 }] })).toBe('published');
     const [afterPrice] = await sql`SELECT id, price_satang FROM menu_items WHERE branch_id = ${branch.id} AND external_id = 'market-fish'`;
     expect(afterPrice).toEqual({ id: beforePrice.id, price_satang: 18000 });
+    const [{ menu_revision: priced }] = await sql`SELECT menu_revision FROM branches WHERE id = ${branch.id}`;
+    const weighed = randomUUID();
+    expect(await publishCatalog(sql, identity, { revision: weighed, base_revision: priced,
+      items: [item, { ...staffPrice, price_satang: 18000, price_unit: 'kg' as const }] })).toBe('published');
+    const unitOf = async () => (await sql`SELECT price_unit FROM menu_items WHERE branch_id = ${branch.id} AND external_id = 'market-fish'`)[0].price_unit;
+    expect(await unitOf()).toBe('kg');
+    expect(await publishCatalog(sql, identity, { revision: randomUUID(), base_revision: weighed,
+      items: [item, { ...staffPrice, price_satang: 18000 }] })).toBe('published');
+    expect(await unitOf()).toBeNull();
     const [other] = await sql`SELECT count(*)::int n FROM menu_items WHERE branch_id = ${otherBranch.id}`;
     expect(other.n).toBe(0);
 

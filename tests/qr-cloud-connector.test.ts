@@ -205,10 +205,17 @@ async function verifyOrderAcceptance() {
     callback: (response: unknown) => void,
   ) => {
     assert.equal(options.rejectUnauthorized, true);
-    outbound.push(`${options.method} ${options.path}`);
+    const ownerSync = /\/connectors\/(?:reports|menu-changes)/.test(options.path);
+    if (!ownerSync) outbound.push(`${options.method} ${options.path}`);
     const request = new EventEmitter();
     request.end = (body?: string) => {
       const response = new PassThrough();
+      if (ownerSync) {
+        response.statusCode = 200;
+        callback(response);
+        response.end(JSON.stringify({ accepted: 0, changes: [] }));
+        return;
+      }
       const ack = options.path.endsWith('/ack-receipt');
       const receipt = ack ? JSON.parse(body!) : null;
       const tableAction = options.path.endsWith('/table-qr') ? JSON.parse(body!) : null;
@@ -680,6 +687,30 @@ async function verifyOrderAcceptance() {
     assert.equal(
       db.prepare('SELECT COUNT(*) AS n FROM orders WHERE table_id = ?').get('cloud-table-b').n,
       2,
+    );
+    db.prepare(
+      "INSERT INTO products (id, name, price) VALUES ('cloud-fish', 'ปลากะพงสด', 180)",
+    ).run();
+    db.prepare("INSERT INTO addon_groups (id, name) VALUES ('cloud-weight', 'ราคาตามน้ำหนัก')").run();
+    db.prepare(
+      "INSERT INTO addon_group_product (product_id, addon_group_id) VALUES ('cloud-fish', 'cloud-weight')",
+    ).run();
+    const weighedOrder = await placeGuestOrder(undefined, {
+      tableId: 'cloud-table-b',
+      key: 'weighed-fish',
+      source: 'cloud',
+      note: null,
+      items: [{ product_id: 'cloud-fish', quantity: 1, expected_cloud_price_satang: 18000 }],
+    });
+    assert.equal(weighedOrder.kind, 'placed');
+    assert.deepEqual(
+      db
+        .prepare(
+          "SELECT weight_pending, pending_price_mode, unit_price FROM order_items WHERE product_id = 'cloud-fish'",
+        )
+        .get(),
+      { weight_pending: 1, pending_price_mode: 'weight', unit_price: 180 },
+      'a weighed Cloud dish waits for the kitchen to weigh it at its per-kg price',
     );
     console.log(
       'Served-order top-ups, concurrent friends, payment hold and closed-bill boundaries passed',

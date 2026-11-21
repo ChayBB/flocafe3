@@ -706,7 +706,10 @@ the HTTPS origin serving the customer site. The customer site's proxy must forwa
 **Cloud menu.** The catalog publisher replaces the branch's customer menu after explicit staff
 confirmation. It exports eligible POS items and variants in THB with their stable identifiers,
 linked add-on groups, selection limits, and add-on prices. Zero-priced entries direct customers to
-staff and cannot be ordered. The publish request carries its base revision. Cloud locks the branch
+staff and cannot be ordered. A priced item linked to the `ราคาตามน้ำหนัก` group (or a group
+awaiting a price) is published with `price_unit: 'kg'`. The customer page shows it as a price per
+kilogram, orders it one at a time, and leaves it out of the draft total. POS adds it as a line awaiting
+its weight for the kitchen to enter. The publish request carries its base revision. Cloud locks the branch
 during publication and rejects stale revisions. A customer order includes the menu revision and
 the selected add-on IDs and quantities. Cloud validates the selections against that revision and
 stores the resolved prices. The integrated connector passes selections through the POS order API

@@ -99,6 +99,7 @@ export interface Product {
   sku: string | null;
   barcode: string | null;
   sale_unit: 'each' | 'kg' | 'g' | 'lb' | 'ml' | 'cl' | 'l' | 'fl oz' | 'oz';
+  price_unit?: 'kg' | null;
   allow_fractional_quantity: boolean;
   weight_precision: number;
   inventory_product_id?: string | null;

@@ -171,7 +171,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
   external_id:t.String({minLength:1,maxLength:160}),pos_product_id:t.String({minLength:1,maxLength:128}),
   pos_variant_id:t.Union([t.Null(),t.String({minLength:1,maxLength:128})]),name:t.String({minLength:1,maxLength:200}),
   category:t.Union([t.Null(),t.String({maxLength:120})]),price_satang:t.Integer({minimum:0,maximum:100000000}),
-  addon_groups:t.Optional(AddonGroups),
+  price_unit:t.Optional(t.Literal('kg')),addon_groups:t.Optional(AddonGroups),
   image:t.Optional(t.String({pattern:MENU_IMAGE_NAME})),
  }),{minItems:1,maxItems:1000}),
 })})
@@ -208,7 +208,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
   if(!scope)return secret ? err(401,'invalid session') : err(404,'table not found');
   await enterTenant(tx,{tenantId:scope.tenant_id,branchId:scope.branch_id});
   const [branch]=await tx`SELECT menu_revision,guest_scroll_percent FROM branches WHERE tenant_id=${scope.tenant_id} AND id=${scope.branch_id} FOR SHARE`;
-  const items=await tx`SELECT id,name,price_satang,category,addon_groups,image FROM menu_items WHERE tenant_id=${scope.tenant_id} AND branch_id=${scope.branch_id} AND available=true ORDER BY category,name,id`;
+  const items=await tx`SELECT id,name,price_satang,price_unit,category,addon_groups,image FROM menu_items WHERE tenant_id=${scope.tenant_id} AND branch_id=${scope.branch_id} AND available=true ORDER BY category,name,id`;
   return Response.json({items,menu_revision:branch?.menu_revision??null,scroll_percent:branch?.guest_scroll_percent??null},{headers:{'Cache-Control':'no-store'}});
  });
 })
@@ -244,12 +244,13 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
    if(branch?.menu_revision && branch.menu_revision!==body.menu_revision)return err(409,'menu revision changed');
    if(body.items.reduce((sum,line)=>sum+line.quantity,0)>100)return err(400,'order exceeds quantity limit');
    const ids=[...new Set(body.items.map(x=>x.menu_item_id))];
-   const menu=await tx<{id:string;name:string;price_satang:number;addon_groups:AddonGroup[]}[]>`SELECT id,name,price_satang,addon_groups FROM menu_items WHERE tenant_id=${session.tenant_id} AND branch_id=${session.branch_id} AND available=true AND id IN ${tx(ids)}`;
+   const menu=await tx<{id:string;name:string;price_satang:number;price_unit:string|null;addon_groups:AddonGroup[]}[]>`SELECT id,name,price_satang,price_unit,addon_groups FROM menu_items WHERE tenant_id=${session.tenant_id} AND branch_id=${session.branch_id} AND available=true AND id IN ${tx(ids)}`;
    if(menu.length!==ids.length)return err(400,'invalid menu item');
    const lines=[];
    const combinations=new Set<string>();
    for(const item of body.items) {
     const product=menu.find(row=>row.id===item.menu_item_id)!;
+    if(product.price_unit&&item.quantity!==1)return err(400,'weighed items are ordered one at a time');
     const addons=resolveCatalogAddons(product.addon_groups,item.addons??[]);
     if(!addons)return err(400,'invalid menu options');
     const combination=JSON.stringify([product.id,addons.map(({id,quantity})=>[id,quantity])]);

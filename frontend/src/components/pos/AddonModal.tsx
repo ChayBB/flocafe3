@@ -9,7 +9,14 @@ import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { formatCurrencyForTenant } from '@/lib/countries';
 import { fractionalQuantityStep, roundToQuantityPrecision } from '@/lib/utils';
 import { addonStockCeiling, isAddonLowStock, isAddonSoldOut } from '@/lib/addon-inventory';
-import { activeVariants, isVariantSoldOut, selectDefaultVariant } from '@/lib/product-variants';
+import {
+  WEIGHT_PRICED_GROUP_NAME,
+  activeVariants,
+  priceUnitOf,
+  isVariantSoldOut,
+  selectDefaultVariant,
+} from '@/lib/product-variants';
+import { UnitPrice } from '@/components/pos/UnitPrice';
 import { cartVariantUnitPrice } from '@/lib/cart-price';
 import { NOTE_SEPARATOR, optionsNote, withoutOptionsNote } from '@/lib/item-options-note';
 import type { Product, Addon, AddonGroup, ProductVariant } from '@/lib/types';
@@ -35,8 +42,6 @@ interface Props {
   /** Quote the variant's online platform price, matching the order this line becomes. */
   onlinePlatformSelected?: boolean;
 }
-
-const WEIGHT_PRICED_GROUP_NAME = 'ราคาตามน้ำหนัก';
 
 function groupInitialAddons(addons: Addon[]): Record<string | number, Addon[]> {
   const grouped: Record<string | number, Addon[]> = {};
@@ -273,7 +278,18 @@ export default function AddonModal({
         <div className="flex justify-between items-center p-5 border-b border-border">
           <div>
             <h2 className="text-lg font-bold text-foreground">{product.name}</h2>
-            <p className="text-brand font-semibold">{fmt(basePrice)}</p>
+            <p className="text-brand font-semibold">
+              {priceUnitOf(product) ? (
+                <UnitPrice
+                  amount={basePrice}
+                  unit={priceUnitOf(product)!}
+                  currency={currency}
+                  format={fmt}
+                />
+              ) : (
+                fmt(basePrice)
+              )}
+            </p>
           </div>
           <button
             onClick={onClose}

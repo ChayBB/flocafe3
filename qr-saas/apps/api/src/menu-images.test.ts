@@ -120,7 +120,7 @@ test.skipIf(!testUrl)('Postgres stores photos and catalog publish keeps each ite
     )`;
     await sql`CREATE TEMP TABLE branches (tenant_id uuid, id uuid, menu_revision uuid, menu_revision_hash text)`;
     await sql`CREATE TEMP TABLE menu_items (
-      tenant_id uuid, branch_id uuid, external_id text, name text, price_satang int, available boolean,
+      tenant_id uuid, branch_id uuid, external_id text, name text, price_satang int, price_unit text, available boolean,
       category text, pos_product_id text, pos_variant_id text, addon_groups jsonb, image text,
       updated_at timestamptz, UNIQUE(tenant_id, branch_id, external_id)
     )`;

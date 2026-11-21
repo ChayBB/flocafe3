@@ -1099,6 +1099,8 @@
     "customerRequiredBeforeOrder": "A customer is required before placing an order.",
     "customerUpdateFailed": "Failed to update customer",
     "customerUpdated": "Customer updated",
+    "bahtPerUnit": "{price} THB/{unit, select, other {{unit}}}",
+    "pricePerSaleUnit": "/{unit, select, other {{unit}}}",
     "customisable": "Customisable",
     "decreasePax": "Decrease pax",
     "delivery": "Delivery",

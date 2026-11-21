@@ -119,6 +119,29 @@ function verifyCatalog() {
     !JSON.stringify(items).includes('base64'),
     'photo bytes stay out of the size-capped catalog',
   );
+  assertOrThrow(!('price_unit' in byId.get('p-plain')), 'a plain item has no price unit');
+
+  insert.run('p-fish', 'ปลากะพงสด', 180, null);
+  insert.run('p-fish-ask', 'ปลาเก๋า', 0, null);
+  insert.run('p-special', 'เมนูพิเศษ', 100, null);
+  const group = db.prepare('INSERT INTO addon_groups (id, name, kitchen_price) VALUES (?, ?, ?)');
+  group.run('g-weight', 'ราคาตามน้ำหนัก', 0);
+  group.run('g-kitchen', 'ครัวตั้งราคา', 1);
+  const link = db.prepare('INSERT INTO addon_group_product (product_id, addon_group_id) VALUES (?, ?)');
+  link.run('p-fish', 'g-weight');
+  link.run('p-fish-ask', 'g-weight');
+  link.run('p-special', 'g-weight');
+  link.run('p-special', 'g-kitchen');
+  const weighed = new Map(
+    buildCloudCatalog().items.map((item: { pos_product_id: string }) => [item.pos_product_id, item]),
+  );
+  assertEqualOrThrow(weighed.get('p-fish').price_unit, 'kg', 'a weight-priced item is priced per kg');
+  assertEqualOrThrow(weighed.get('p-fish').price_satang, 18000, 'the per-kg price is published');
+  assertOrThrow(!('addon_groups' in weighed.get('p-fish')), 'the empty weight group stays out');
+  assertOrThrow(!('price_unit' in weighed.get('p-fish-ask')), 'an ask-staff item has no unit');
+  assertOrThrow(!('price_unit' in weighed.get('p-special')), 'a kitchen-priced item has no unit');
+  db.prepare("DELETE FROM products WHERE id IN ('p-fish', 'p-fish-ask', 'p-special')").run();
+
   db.prepare("UPDATE products SET image_url = ? WHERE id = 'p-plain'").run(dataUrl(png(4)));
   assertOrThrow(
     buildCloudCatalog().fingerprint !== fingerprint,

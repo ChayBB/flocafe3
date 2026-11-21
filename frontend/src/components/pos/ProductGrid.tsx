@@ -18,7 +18,8 @@ import { useCartStore } from '@/store/cart';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import { nameToColor } from '@/lib/image-utils';
 import TagBadge from './DietaryBadge';
-import { productNeedsCustomizer } from '@/lib/product-variants';
+import { priceUnitOf, productNeedsCustomizer } from '@/lib/product-variants';
+import { UnitPrice } from '@/components/pos/UnitPrice';
 import { API_BASE_URL } from '@/lib/api-base';
 import { useTranslations } from 'use-intl';
 import { fractionalQuantityStep, parseDbTimestamp } from '@/lib/utils';
@@ -427,6 +428,7 @@ export default function ProductGrid({
   flingScale,
   categorySort = 'saved',
   itemSort = 'saved',
+  currency,
 }: Props) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const cart = useCartStore();
@@ -783,7 +785,16 @@ export default function ProductGrid({
         </h3>
         <div className="flex items-center justify-between mt-1">
           <p className={flat ? 'text-[15px] text-muted-foreground' : 'text-brand font-bold'}>
-            {fmt(Number(product.price))}
+            {priceUnitOf(product) ? (
+              <UnitPrice
+                amount={Number(product.price)}
+                unit={priceUnitOf(product)!}
+                currency={currency}
+                format={fmt}
+              />
+            ) : (
+              fmt(Number(product.price))
+            )}
           </p>
           <div className="flex items-center gap-1 shrink-0">
             {!showProductImages && product.tags && product.tags.length > 0 && (
