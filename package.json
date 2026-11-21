@@ -505,7 +505,7 @@
     "express-rate-limit": "^8.7.4",
     "jsonwebtoken": "^9.0.2",
     "libphonenumber-js": "^1.13.16",
-    "posthog-node": "^5.73.1",
+    "posthog-node": "^6.0.2",
     "qrcode": "^1.5.3",
     "ws": "^8.23.0"
   },
