@@ -82,8 +82,15 @@ export function PriceOverrideDialog({
               value={reason}
               maxLength={MAX_REASON_LENGTH}
               placeholder={t('overridePriceReasonPlaceholder')}
+              aria-required
+              aria-describedby={reason.trim() ? undefined : 'override-reason-required'}
               onChange={(event) => setReason(event.target.value)}
             />
+            {!reason.trim() && (
+              <p id="override-reason-required" className="text-xs text-amber-600">
+                {t('overridePriceReasonRequired')}
+              </p>
+            )}
           </div>
         </div>
         <DialogFooter>
