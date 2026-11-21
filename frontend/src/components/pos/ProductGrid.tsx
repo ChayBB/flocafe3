@@ -400,6 +400,8 @@ export interface QuickFilter {
   label: string;
   match: (product: Product) => boolean;
   emptyText: string;
+  /** Orders the filtered list; lower comes first. */
+  rank?: (product: Product) => number;
 }
 
 export default function ProductGrid({
@@ -505,7 +507,7 @@ export default function ProductGrid({
   // A quick filter shows one plain grid, so the category sections and their scroll tracking pause.
   const spying = scrollSpy && !quickFilter;
 
-  const filtered = sortedProducts.filter((p) => {
+  const matched = sortedProducts.filter((p) => {
     const matchCat =
       scrollSpy ||
       quickFilter ||
@@ -515,6 +517,8 @@ export default function ProductGrid({
     const matchSearch = !activeQuery || p.name.toLowerCase().includes(activeQuery.toLowerCase());
     return matchCat && matchQuick && matchSearch;
   });
+  const rankQuick = quickFilter?.rank;
+  const filtered = rankQuick ? [...matched].sort((a, b) => rankQuick(a) - rankQuick(b)) : matched;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   useDampedFlingScroll(scrollRef, flingScale);

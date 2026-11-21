@@ -18,6 +18,7 @@ import {
 } from '@/lib/cloud-menu-presentation';
 import { productNeedsCustomizer } from '@/lib/product-variants';
 import { kdsItemLine } from '@/lib/item-options-note';
+import { buildMenuQuickFilters } from '@/lib/menu-quick-filters';
 import type { Addon, Product, ProductVariant } from '@/lib/types';
 import messages from '@/lib/i18n/messages/th.json';
 
@@ -564,26 +565,24 @@ function Ordering() {
     }
   }
 
-  const quickFilters = [
-    {
-      key: 'popular',
-      label: t('menuPopular'),
-      emptyText: t('menuPopularEmpty'),
-      match: (product: Product) => Boolean(snapshot?.popular.includes(product.id)),
+  const quickFilters = buildMenuQuickFilters({
+    categories: presentation.categories,
+    products: presentation.products,
+    rankedIds: snapshot ? snapshot.popular : null,
+    hasTag: (product, tag) => Boolean(product.tags?.includes(tag)),
+    labels: {
+      food: t('menuFood'),
+      foodEmpty: t('menuFoodEmpty'),
+      drinks: t('menuDrinks'),
+      drinksEmpty: t('menuDrinksEmpty'),
+      popular: t('menuPopular'),
+      popularEmpty: t('menuPopularEmpty'),
+      recommended: t('menuRecommended'),
+      recommendedEmpty: t('menuRecommendedEmpty'),
+      promotion: t('menuPromotion'),
+      promotionEmpty: t('menuPromotionEmpty'),
     },
-    {
-      key: 'recommended',
-      label: t('menuRecommended'),
-      emptyText: t('menuRecommendedEmpty'),
-      match: (product: Product) => Boolean(product.tags?.includes('recommended')),
-    },
-    {
-      key: 'promotion',
-      label: t('menuPromotion'),
-      emptyText: t('menuPromotionEmpty'),
-      match: (product: Product) => Boolean(product.tags?.includes('promotion')),
-    },
-  ];
+  });
   const disabled = Boolean(pending) || expired || sending || billAwaitingPayment;
   return (
     <main className="mx-auto flex h-dvh max-w-5xl flex-col bg-background px-3 text-foreground">

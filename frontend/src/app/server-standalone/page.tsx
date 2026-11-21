@@ -49,9 +49,11 @@ import GuestAlerts from '@/components/tables/GuestAlerts';
 import {
   OrderedItemList,
   OrderedItemsScreen,
+  drinksLast,
   TableKitchenSummary,
   type OrderedItem,
 } from '@/components/server-app/OrderedItems';
+import { buildMenuQuickFilters } from '@/lib/menu-quick-filters';
 import { isCancelledItem } from '@/components/server-app/ItemStatus';
 import {
   TableTransferDialog,
@@ -406,6 +408,20 @@ export default function ServerStandalonePage() {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const isDrinkItem = useMemo(() => {
+    const drinkName = /เครื่องดื่ม|drink|beverage/i;
+    const categoryById = new Map(categories.map((category) => [String(category.id), category]));
+    const drinkCategory = (id: unknown): boolean => {
+      const category = categoryById.get(String(id ?? ''));
+      if (!category) return false;
+      if (drinkName.test(category.name)) return true;
+      const parent = categoryById.get(String(category.parent_id ?? ''));
+      return Boolean(parent && drinkName.test(parent.name));
+    };
+    const productById = new Map(products.map((product) => [String(product.id), product]));
+    return (item: OrderedItem): boolean =>
+      drinkCategory(productById.get(String(item.product_id ?? ''))?.category_id);
+  }, [categories, products]);
   const productImageOf = useMemo(() => {
     const byId = new Map(products.map((product) => [String(product.id), product]));
     return (item: OrderedItem): string | null => {
@@ -944,7 +960,7 @@ export default function ServerStandalonePage() {
     if (!userId || !api) return;
     let cancelled = false;
     api
-      .get('/api/products/popular')
+      .get('/api/products/popular', { params: { limit: 50 } })
       .then((res) => !cancelled && setPopularIds(res.data.product_ids || []))
       .catch(() => !cancelled && setPopularIds(null));
     return () => {
@@ -952,33 +968,28 @@ export default function ServerStandalonePage() {
     };
   }, [user, api]);
 
-  const quickFilters = useMemo<QuickFilter[]>(() => {
-    const rank = new Map((popularIds ?? []).map((id, index) => [id, index]));
-    return [
-      ...(popularIds
-        ? [
-            {
-              key: 'popular',
-              label: t('menuPopular'),
-              match: (product: Product) => rank.has(product.id),
-              emptyText: t('menuPopularEmpty'),
-            },
-          ]
-        : []),
-      {
-        key: 'recommended',
-        label: t('menuRecommended'),
-        match: (product: Product) => hasTag(product.tags, 'recommended'),
-        emptyText: t('menuRecommendedEmpty'),
-      },
-      {
-        key: 'promotion',
-        label: t('menuPromotion'),
-        match: (product: Product) => hasTag(product.tags, 'promotion'),
-        emptyText: t('menuPromotionEmpty'),
-      },
-    ];
-  }, [popularIds, t]);
+  const quickFilters = useMemo<QuickFilter[]>(
+    () =>
+      buildMenuQuickFilters({
+        categories,
+        products,
+        rankedIds: popularIds,
+        hasTag: (product, tag) => hasTag(product.tags, tag),
+        labels: {
+          food: t('menuFood'),
+          foodEmpty: t('menuFoodEmpty'),
+          drinks: t('menuDrinks'),
+          drinksEmpty: t('menuDrinksEmpty'),
+          popular: t('menuPopular'),
+          popularEmpty: t('menuPopularEmpty'),
+          recommended: t('menuRecommended'),
+          recommendedEmpty: t('menuRecommendedEmpty'),
+          promotion: t('menuPromotion'),
+          promotionEmpty: t('menuPromotionEmpty'),
+        },
+      }),
+    [categories, products, popularIds, t],
+  );
 
   useEffect(() => {
     if (!user || !api) return;
@@ -2810,7 +2821,7 @@ export default function ServerStandalonePage() {
         <OrderedItemsScreen
           tableName={activeTable.name ?? String(activeTable.number)}
           orderNumber={currentOrder?.order_number}
-          items={(currentOrder?.items ?? []) as OrderedItem[]}
+          items={drinksLast((currentOrder?.items ?? []) as OrderedItem[], isDrinkItem)}
           onBack={() => setOrderedItemsOpen(false)}
           onAddItems={() => {
             setOrderedItemsOpen(false);

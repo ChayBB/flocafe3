@@ -5,7 +5,7 @@ import { getE2eToken } from './helpers/test-auth';
 
 const TOKEN_KEY = 'flocafe:server-app-token';
 
-test('the search box shares the category row, followed by popular, recommended and promotion filters', async ({
+test('the search box shares the category row, followed by food, drinks, popular, recommended and promotion filters', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -70,9 +70,11 @@ test('the search box shares the category row, followed by popular, recommended a
 
   const chips = row.getByRole('button');
   await expect(chips.nth(0)).toHaveText('All');
-  await expect(chips.nth(1)).toHaveText('Popular');
-  await expect(chips.nth(2)).toHaveText('Recommended');
-  await expect(chips.nth(3)).toHaveText('Promotions');
+  await expect(chips.nth(1)).toHaveText('Food');
+  await expect(chips.nth(2)).toHaveText('Drinks');
+  await expect(chips.nth(3)).toHaveText('Popular');
+  await expect(chips.nth(4)).toHaveText('Recommended');
+  await expect(chips.nth(5)).toHaveText('Promotions');
 
   const card = (name: string) => grid.getByRole('button', { name: new RegExp(`${name} ${run}`) });
   await grid.getByTestId('pos-quick-filter-recommended').click();
@@ -92,10 +94,17 @@ test('the search box shares the category row, followed by popular, recommended a
   await expect(card('Sold')).toBeVisible();
   await expect(card('Deal')).toHaveCount(0);
 
+  // Food lists what sells, so the sold dish shows and the unsold ones do not.
+  await grid.getByTestId('pos-quick-filter-food').click();
+  await expect(card('Sold')).toBeVisible();
+  await expect(card('Chef')).toHaveCount(0);
+
   // The menu lists only All and the quick filters, never the categories.
   await menu.click();
   await expect(page.getByRole('menuitem')).toHaveText([
     'All',
+    'Food',
+    'Drinks',
     'Popular',
     'Recommended',
     'Promotions',
