@@ -18,7 +18,7 @@ import {
   now,
   attachEffectiveAddons,
   isKotPrintingEnabled,
-  isKotPrintSeparate,
+  kotPrintLayout,
   isServerBillPrintingEnabled,
   parseItemJson,
   getSettingValue,
@@ -1624,9 +1624,12 @@ export async function printOrderKot(
         isKotItemPending(item?.status) && (!retryIds || retryIds.has(Number(item?.id))),
     );
 
-    const separate = isKotPrintSeparate();
-    const tickets = (ticketItems: any[]) =>
-      separate ? ticketItems.map((item) => [item]) : [ticketItems];
+    const layout = kotPrintLayout();
+    const tickets = (ticketItems: any[]) => {
+      if (layout === 'combined' || ticketItems.length < 2) return [ticketItems];
+      const singles = ticketItems.map((item) => [item]);
+      return layout === 'both' ? [...singles, ticketItems] : singles;
+    };
     type StationOutcome = {
       failure: Awaited<ReturnType<typeof printKOTDetailed>> | null;
       failedIds: number[];

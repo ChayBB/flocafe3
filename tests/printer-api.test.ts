@@ -1012,6 +1012,14 @@ async function runTests() {
           tickets.some((t) => t.includes('Iced Tea') && !t.includes('Pad Thai')),
         `separate layout prints one ticket per item (got ${tickets.length})`,
       );
+      assert((await printKitchen('both')) === 200, 'both kitchen layouts print');
+      assert(
+        tickets.length === 3 &&
+          tickets.filter((t) => t.includes('Pad Thai') && t.includes('Iced Tea')).length === 1 &&
+          tickets.some((t) => t.includes('Pad Thai') && !t.includes('Iced Tea')) &&
+          tickets.some((t) => t.includes('Iced Tea') && !t.includes('Pad Thai')),
+        `both layout prints one ticket per item and one combined ticket (got ${tickets.length})`,
+      );
     } finally {
       kitchenServer.close();
     }

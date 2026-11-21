@@ -1376,11 +1376,12 @@ export default function POSPage() {
           .catch(() => {});
         api
           .get('/settings/kot_print_layout')
-          .then((res) =>
+          .then((res) => {
+            const value = res.data.setting?.value;
             usePosSettingsStore
               .getState()
-              .setKotPrintSeparate(res.data.setting?.value === 'separate'),
-          )
+              .setKotPrintLayout(value === 'separate' || value === 'both' ? value : 'combined');
+          })
           .catch(() => {});
         api
           .get('/settings/auto_print_kot')

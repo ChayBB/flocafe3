@@ -239,7 +239,11 @@ interface PrinterState {
     tenant: ReceiptTenant,
     opts?: TaxBillOptions,
   ) => Promise<PrintWarning[]>;
-  printKot: (order: Order, opts?: KotOptions & { items?: OrderItem[] }) => Promise<PrintWarning[]>;
+  /** `singleTicket` prints the given items on one ticket whatever the kitchen ticket layout. */
+  printKot: (
+    order: Order,
+    opts?: KotOptions & { items?: OrderItem[]; singleTicket?: boolean },
+  ) => Promise<PrintWarning[]>;
   printDeliverySlip: (
     order: Order,
     contact: DeliverySlipContact,
@@ -849,14 +853,20 @@ export const usePrinterStore = create<PrinterState>()(
           const hw = get().hardwarePrinter;
           const usesBackendPrinter = Boolean(hw && get().printMethod === 'escpos');
           const ticketItems = opts?.items ?? order.items ?? [];
+          const layout = usePosSettingsStore.getState().kotPrintLayout;
           if (
             !usesBackendPrinter &&
-            usePosSettingsStore.getState().kotPrintSeparate &&
+            !opts?.singleTicket &&
+            layout !== 'combined' &&
             ticketItems.length > 1
           ) {
             const warnings: PrintWarning[] = [];
-            for (const item of ticketItems) {
-              warnings.push(...(await get().printKot(order, { ...opts, items: [item] })));
+            const tickets = ticketItems.map((item) => [item]);
+            if (layout === 'both') tickets.push(ticketItems);
+            for (const items of tickets) {
+              warnings.push(
+                ...(await get().printKot(order, { ...opts, items, singleTicket: true })),
+              );
             }
             return warnings;
           }

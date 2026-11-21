@@ -2632,8 +2632,13 @@ router.put(
       if (req.params.key === 'orders_layout' && !isOrdersLayout(value)) {
         return res.status(400).json({ error: 'orders_layout must be "split" or "cards"' });
       }
-      if (req.params.key === 'kot_print_layout' && value !== 'separate' && value !== 'combined') {
-        return res.status(400).json({ error: 'kot_print_layout must be "separate" or "combined"' });
+      if (
+        req.params.key === 'kot_print_layout' &&
+        !['separate', 'combined', 'both'].includes(value)
+      ) {
+        return res
+          .status(400)
+          .json({ error: 'kot_print_layout must be "separate", "combined" or "both"' });
       }
       if (
         req.params.key === SERVER_APP_API_RATE_LIMIT_KEY &&

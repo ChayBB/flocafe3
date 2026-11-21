@@ -314,7 +314,9 @@ async function main() {
       'POST /api/printers/print-kot no longer blocked by the KOT-disabled gate once re-enabled',
     );
 
-    console.log('\n7. kot_print_layout defaults to combined and accepts only separate or combined');
+    console.log(
+      '\n7. kot_print_layout defaults to combined and accepts separate, combined or both',
+    );
     const layoutDefault = await request(app).get('/api/settings/kot_print_layout').set(ownerAuth);
     assertEqual(
       layoutDefault.body.setting?.value,
@@ -337,6 +339,11 @@ async function main() {
       'separate',
       'kot_print_layout reads back separate',
     );
+    const layoutBoth = await request(app)
+      .put('/api/settings/kot_print_layout')
+      .set(ownerAuth)
+      .send({ value: 'both' });
+    assertEqual(layoutBoth.status, 200, 'kot_print_layout saves both');
 
     // ── Summary ───────────────────────────────────────────────────────────
     console.log('\n' + '='.repeat(60));

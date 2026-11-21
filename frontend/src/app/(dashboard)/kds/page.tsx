@@ -9,7 +9,6 @@ import { KdsWorkspace } from '@/components/kds/KdsWorkspace';
 import { useKdsConnection } from '@/hooks/useKdsConnection';
 import { useSyncServerLanguage } from '@/lib/i18n';
 import { useAuthStore } from '@/store/auth';
-import { tenantCan } from '@/lib/permissions';
 import { useTranslations } from 'use-intl';
 import type { KdsViewMode } from '@/hooks/useKdsView';
 
@@ -82,7 +81,6 @@ export default function KdsPage() {
     },
   });
   const kdsDefaultView = useDashboardKdsDefault(conn.user?.id);
-  const canManageSettings = useAuthStore((s) => tenantCan(s.currentTenant, 'settings.manage'));
 
   useEffect(() => {
     if (
@@ -129,7 +127,5 @@ export default function KdsPage() {
     );
   }
   if (!conn.user) return <KdsLoginForm conn={conn} />;
-  return (
-    <KdsWorkspace conn={conn} serverDefault={kdsDefaultView} showPrintLayout={canManageSettings} />
-  );
+  return <KdsWorkspace conn={conn} serverDefault={kdsDefaultView} />;
 }

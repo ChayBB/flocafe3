@@ -353,6 +353,46 @@ test.describe('@ci-tier2 Settings > Printers', () => {
     await expect(page.getByText('USB · FUJIFILM Apeos C3070')).toBeVisible();
   });
 
+  test('the kitchen ticket print layout is one choice saved straight to the server', async ({
+    page,
+  }) => {
+    await openPrintersTab(page);
+    const token = await page.evaluate(() => localStorage.getItem('token'));
+    const headers = { Authorization: `Bearer ${token}` };
+    const layout = async () =>
+      (await (await page.request.get(`${BASE}/api/settings/kot_print_layout`, { headers })).json())
+        .setting?.value;
+    const original = await layout();
+    try {
+      await page.getByRole('button', { name: 'Print layout', exact: true }).click();
+      const separate = page.getByRole('checkbox', { name: /Print each menu item separately/ });
+      const combined = page.getByRole('checkbox', { name: /Print the round together/ });
+      const both = page.getByRole('checkbox', { name: 'Both', exact: true });
+      await separate.check();
+      await expect(separate).toBeChecked();
+      await expect(combined).not.toBeChecked();
+      await expect.poll(layout).toBe('separate');
+      await combined.check();
+      await expect(separate).not.toBeChecked();
+      await expect.poll(layout).toBe('combined');
+      await both.check();
+      await expect(combined).not.toBeChecked();
+      await expect(separate).not.toBeChecked();
+      await expect.poll(layout).toBe('both');
+      await combined.check();
+      await expect(both).not.toBeChecked();
+      await expect.poll(layout).toBe('combined');
+      // Unticking the chosen layout keeps it, since one layout always applies.
+      await combined.click();
+      await expect(combined).toBeChecked();
+    } finally {
+      await page.request.put(`${BASE}/api/settings/kot_print_layout`, {
+        headers,
+        data: { value: original ?? 'combined' },
+      });
+    }
+  });
+
   test('XP-58 printer text_size, localized Print Method guidance, and live Browser Print scaling work end-to-end', async ({
     page,
   }) => {

@@ -17,7 +17,6 @@ import {
 } from '@/lib/kds-alert-sound';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { KdsPrintLayoutSettings } from '@/components/kds/KdsPrintLayoutSettings';
 import { STATUS_CONFIG, STATUS_ORDER, type KitchenStatus } from '@/hooks/useKdsConnection';
 import { activeStages } from '@/lib/kds-stages';
 import {
@@ -154,7 +153,7 @@ function ReadyDelayField({
   );
 }
 
-/** Display settings in tabs: the screen (columns, day/night, text size, brightness), the sounds this display plays and, for settings managers, the kitchen ticket print layout. */
+/** Display settings in two tabs: the screen (columns, day/night, text size, brightness) and the sounds this display plays. */
 export function KdsSettingsDialog({
   open,
   stationName,
@@ -168,7 +167,6 @@ export function KdsSettingsDialog({
   onBrightness,
   fontScale,
   onFontScale,
-  showPrintLayout = false,
   onClose,
 }: {
   open: boolean;
@@ -183,11 +181,9 @@ export function KdsSettingsDialog({
   onBrightness: (brightness: number) => void;
   fontScale: number;
   onFontScale: (scale: number) => void;
-  showPrintLayout?: boolean;
   onClose: () => void;
 }) {
   const t = useTranslations('kds');
-  const tSettings = useTranslations('settings');
   const active = activeStages(inactiveStatuses);
   const [voices, setVoices] = useState<{ name: string; natural: boolean }[]>([]);
   const [serverVoices, setServerVoices] = useState<KdsServerVoice[]>([]);
@@ -245,11 +241,6 @@ export function KdsSettingsDialog({
             <TabsTrigger value="sound" data-testid="kds-settings-tab-sound">
               {t('settingsTabSound')}
             </TabsTrigger>
-            {showPrintLayout && (
-              <TabsTrigger value="print" data-testid="kds-settings-tab-print">
-                {tSettings('kotPrintLayout')}
-              </TabsTrigger>
-            )}
           </TabsList>
           <TabsContent value="display" className="space-y-2">
             <p className="text-sm text-muted-foreground">
@@ -504,11 +495,6 @@ export function KdsSettingsDialog({
               </p>
             </div>
           </TabsContent>
-          {showPrintLayout && (
-            <TabsContent value="print">
-              <KdsPrintLayoutSettings />
-            </TabsContent>
-          )}
         </Tabs>
       </DialogContent>
     </Dialog>

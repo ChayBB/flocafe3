@@ -2556,9 +2556,12 @@ export function isKotPrintingEnabled(): boolean {
   return getSettingValue('kot_printing_enabled') !== 'false';
 }
 
-/** Kitchen tickets print one per menu line ('separate') or all lines on one ticket ('combined'). */
-export function isKotPrintSeparate(): boolean {
-  return getSettingValue('kot_print_layout') === 'separate';
+export type KotPrintLayout = 'separate' | 'combined' | 'both';
+
+/** Kitchen tickets print one per menu line, all lines of the send on one ticket, or both. */
+export function kotPrintLayout(): KotPrintLayout {
+  const value = getSettingValue('kot_print_layout');
+  return value === 'separate' || value === 'both' ? value : 'combined';
 }
 
 /** Whether the tableside "server" role may print bills/order-slips. Defaults to disabled. */
