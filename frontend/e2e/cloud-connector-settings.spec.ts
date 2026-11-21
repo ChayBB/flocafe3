@@ -4,6 +4,65 @@ import { E2E_BASE_URL } from './helpers/urls';
 
 const connectorApi = `${E2E_BASE_URL}/api/qr-cloud`;
 
+test('a new branch connects with a one-time pairing code', async ({ page }) => {
+  await page.goto(`${E2E_BASE_URL}/auth/login`);
+  await page.getByLabel('Email').fill('owner@flo.local');
+  await page.getByLabel('Password').fill(E2E_PASSWORD);
+  await page.getByRole('button', { name: 'Sign In' }).click();
+  await page.waitForURL((url) => !url.pathname.includes('/auth/login'));
+  await setLanguage(page, 'en');
+  const baseline = await page.request.get(connectorApi, {
+    headers: { Authorization: `Bearer ${getE2eToken()}` },
+  });
+  const { config, status } = await baseline.json();
+  const fresh = {
+    ...config,
+    enabled: false,
+    mode: 'integrated',
+    cloud_url: '',
+    has_token: false,
+    cutover_pending: false,
+    paired_branch: null,
+  };
+  await page.route(connectorApi, (route) => route.fulfill({ json: { config: fresh, status } }));
+  const codes: string[] = [];
+  await page.route(`${connectorApi}/pair`, (route) => {
+    const { code } = route.request().postDataJSON();
+    codes.push(code);
+    if (codes.length === 1)
+      return route.fulfill({ status: 404, json: { code: 'pairing_code_rejected' } });
+    return route.fulfill({
+      json: {
+        tenant_name: 'Kuk Nop',
+        branch_name: 'Hat Yai',
+        test: { ok: true, code: null },
+        config: { ...fresh, enabled: true, has_token: true, paired_branch: 'Kuk Nop · Hat Yai' },
+        status,
+      },
+    });
+  });
+
+  await page.goto(`${E2E_BASE_URL}/settings?tab=orderflow`);
+  const connector = page.getByTestId('settings-qr-cloud');
+  await expect(connector.getByRole('heading', { name: 'Connect this POS to Cloud QR Ordering' })).toBeVisible();
+  await expect(connector.getByTestId('qc-url')).toHaveCount(0);
+  await expect(connector.getByRole('region', { name: 'Import settings from the legacy Connector' })).toHaveCount(0);
+  const code = connector.getByTestId('qc-pair-code');
+  const submit = connector.getByTestId('qc-pair-submit');
+  await code.fill('kn7q-4m2');
+  await expect(submit).toBeDisabled();
+  await code.fill('kn7q-4m2x');
+  await expect(code).toHaveValue('KN7Q-4M2X');
+  await submit.click();
+  await expect(connector.getByRole('alert')).toHaveText(
+    'This code is wrong, already used, or expired. Ask for a new code.',
+  );
+  await code.press('Enter');
+  await expect(connector.getByTestId('qc-paired-branch')).toHaveText('Connected to Kuk Nop · Hat Yai');
+  await expect(connector.getByTestId('qc-pair-code')).toHaveCount(0);
+  expect(codes).toEqual(['KN7Q-4M2X', 'KN7Q-4M2X']);
+});
+
 test('automatic Cloud acceptance requires an explicit confirmation', async ({ page }) => {
   await page.goto(`${E2E_BASE_URL}/auth/login`);
   await page.getByLabel('Email').fill('owner@flo.local');
@@ -193,6 +252,7 @@ test('the owner can configure polling and status refresh preserves an unsaved Cl
     await expect(connector.getByRole('heading', { name: 'Cloud QR Ordering' })).toBeVisible();
     await expect(connector.getByText('FloCafe3', { exact: true })).toBeVisible();
     await expect(connector.getByTestId('settings-qr-ordering')).toHaveCount(0);
+    await connector.getByTestId('qc-manual-setup').click();
     const url = connector.getByTestId('qc-url');
     await url.fill('https://unsaved.example.test');
     await page.waitForResponse((response) => response.url() === connectorApi && response.ok());
@@ -389,6 +449,7 @@ test('OrderFlow imports settings and trust, then tests and starts polling in one
   });
 
   await page.goto(`${E2E_BASE_URL}/settings?tab=orderflow`);
+  await page.getByTestId('qc-manual-setup').click();
   await page.getByTestId('qc-setup-start').click();
   await expect(page.getByTestId('qc-test')).toHaveCount(0);
   const panel = page.getByRole('region', { name: 'Import settings from the legacy Connector' });

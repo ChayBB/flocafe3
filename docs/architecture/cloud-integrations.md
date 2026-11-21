@@ -739,6 +739,20 @@ sets `CONNECTED_POLLING`. Settings reports Cloud authentication separately based
 accepted or rejected credentials observed by a poll or connection test. Both transport settings
 use HTTPS polling, and WebSocket is shown as unavailable.
 
+**Pairing.** A POS that has not been set up shows only a pairing-code field. The Cloud operator
+runs `qr-saas/scripts/new-branch.ts` (or `POST /api/v1/admin/pairing-codes`) to create the branch
+and print an 8-character code. The code is valid once for 30 minutes, and issuing a new code for a
+branch cancels its unused code. `POST /api/qr-cloud/pair` (`settings.manage`) sends the code without a
+bearer token to `POST /api/v1/connectors/pair`. The Cloud allows 10 attempts per client address
+every 10 minutes and stores only a hash of the code. It returns a token with all four connector
+scopes plus the shop and branch names. If the branch already has an installation, the Cloud rotates
+its token. The previous POS stops working immediately and the table stickers stay linked. The POS
+uses its saved Cloud URL, or `https://qr-ordering.accesscam.org` when the saved URL is empty or the
+staging URL. It stores the token, clears a pending legacy cutover hold, audits
+`qr_cloud_paired`, tests the connection, and starts polling when the test passes. After a failed
+test, the POS stays paired and offers a retry. **Set up manually (advanced)** opens the URL, token,
+CA, and legacy import steps below.
+
 **Credentials.** Packaged builds and the Windows checkout app encrypt the token with Electron
 `safeStorage` in the application data directory and store only a storage marker in settings. If
 protected storage is unavailable, a replacement fails. The app migrates an older plaintext token only when it can encrypt it
@@ -753,7 +767,8 @@ requires its own confirmation.
 The new encrypted file is staged before SQLite commits the settings and actor-attributed audit
 event. A failed transaction leaves the previous settings and credential active.
 
-In OrderFlow, choose the Cloud server, set up the token and CA, then test and start polling. The
+Under **Set up manually (advanced)**, choose the Cloud server, set up the token and CA, then test and
+start polling. The
 legacy import can approve the staging CA in the same action after you confirm its fingerprint
 against an independent trusted source. Before starting polling after import, verify that the
 legacy process has stopped and will stay stopped. Confirm that in OrderFlow. The final action

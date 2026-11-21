@@ -114,10 +114,11 @@ async function requestConnectorJson(
   options: FetchEventsOptions,
   endpoint: string,
   json?: string,
+  anonymous = false,
 ): Promise<unknown> {
   const { config, token, caPem, signal } = options;
   if (!config.cloudUrl) throw new QrCloudClientError('not_configured');
-  if (!token) throw new QrCloudClientError('not_configured');
+  if (!token && !anonymous) throw new QrCloudClientError('not_configured');
 
   let url: URL;
   try {
@@ -146,7 +147,7 @@ async function requestConnectorJson(
         method: json === undefined ? 'GET' : 'POST',
         agent: false,
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...(anonymous ? {} : { Authorization: `Bearer ${token}` }),
           Accept: 'application/json',
           'User-Agent': 'FloCafe-CloudConnector/1',
           ...(json === undefined
@@ -282,6 +283,19 @@ export function connectorGuestSettings(
     options,
     '/api/v1/connectors/guest-settings',
     settings && JSON.stringify(settings),
+  );
+}
+
+/** The one unauthenticated call: a one-time pairing code is exchanged for the connector token. */
+export function redeemConnectorPairingCode(
+  options: Omit<FetchEventsOptions, 'token'>,
+  code: string,
+): Promise<unknown> {
+  return requestConnectorJson(
+    { ...options, token: '' },
+    '/api/v1/connectors/pair',
+    JSON.stringify({ code }),
+    true,
   );
 }
 

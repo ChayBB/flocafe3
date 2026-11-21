@@ -9,7 +9,7 @@
 4. `docker compose run --rm api bun run scripts/migrate.ts`
 5. `docker compose up -d`; inspect `docker compose logs --tail=100`.
 6. `curl https://YOUR_DOMAIN/health/ready`.
-7. Register a branch installation at `POST /api/v1/admin/connector-installations/token` using the admin credential. Store the issued token in the integrated FloCafe connector. Enable `orders.read` and `orders.ack` for delivery, `tables.write` for Cloud stickers and `catalog.write` for menu publishing.
+7. Register a branch with `docker compose exec api bun run scripts/new-branch.ts "<shop>" "<branch>"`. It prints a one-time pairing code that expires in 30 minutes. Enter the code in FloCafe under Settings → OrderFlow → Cloud QR Ordering. The POS receives a token with all four connector scopes. `--tenant <id> "<branch>"` adds a branch to an existing shop. `--branch <id>` issues a new code for a new or replacement POS, which rotates the old POS's token. `--list` shows shops and branches. `POST /api/v1/admin/connector-installations/token` still issues a token directly for manual setup.
 
 ## Notes
 - No card data is processed or stored. PromptPay integration is a Codex P0 task, not a working payment gateway.

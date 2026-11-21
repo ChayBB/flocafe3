@@ -283,6 +283,7 @@ export function replaceQrCloudToken(token: unknown): void {
 
 export function revokeQrCloudToken(): void {
   clearConnectorToken();
+  upsertSettings({ [QR_CLOUD_SETTING_KEYS.pairedBranch]: '' });
   updateConfig({ automatic: false });
   startQrCloudConnector();
 }

@@ -14,6 +14,7 @@ import { publishCatalog } from './catalog-sync';
 import { MENU_IMAGE_NAME, menuImages, postgresMenuImageStore } from './menu-images';
 import { AddonGroups, AddonSelection, resolveCatalogAddons, type AddonGroup } from './catalog-addons';
 import { enterTenant, inTenant } from './tenant-scope';
+import { attemptLimiter, createPairingCode, redeemPairingCode } from './pairing';
 const sql=postgres(process.env.DATABASE_URL!,{max:12});
 const redis=new Redis(process.env.REDIS_URL!);
 const adminSecret=process.env.ADMIN_BOOTSTRAP_TOKEN!;
@@ -21,6 +22,7 @@ const connectorSecret=process.env.ALLOW_LEGACY_CONNECTOR_TOKEN==='true' ? proces
 if(!adminSecret||adminSecret.length<24|| (connectorSecret && connectorSecret.length<24)) throw Error('Configure strong secrets');
 const err=(status:number,message:string)=>new Response(JSON.stringify({error:message}),{status,headers:{'content-type':'application/json'}});
 const isAdmin=(r:Request)=>constantEqual(bearer(r),adminSecret);
+const pairAttempts=attemptLimiter(10,10*60_000);
 const connectorScope = {
  tenantId: process.env.CONNECTOR_TENANT_ID ?? '',
  branchId: process.env.CONNECTOR_BRANCH_ID ?? '',
@@ -124,6 +126,20 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  if(!isAdmin(request))return err(401,'unauthorized');
  const [row]=await sql`INSERT INTO branches(tenant_id,name) VALUES (${body.tenant_id},${body.name}) RETURNING *`;return row;
 },{body:t.Object({tenant_id:t.String({format:'uuid'}),name:t.String({minLength:1,maxLength:100})})})
+.post('/api/v1/admin/pairing-codes',async({request,body})=>{
+ if(!isAdmin(request))return err(401,'unauthorized');
+ const [branch]=await sql`SELECT name FROM branches WHERE tenant_id=${body.tenant_id} AND id=${body.branch_id}`;
+ if(!branch)return err(404,'branch not found');
+ const issued=await createPairingCode(sql,{tenantId:body.tenant_id,branchId:body.branch_id,label:body.label??`${branch.name} POS`});
+ return Response.json(issued,{headers:{'Cache-Control':'no-store'}});
+},{body:t.Object({tenant_id:t.String({format:'uuid'}),branch_id:t.String({format:'uuid'}),label:t.Optional(t.String({minLength:1,maxLength:80}))})})
+.post('/api/v1/connectors/pair',async({request,body,server})=>{
+ const client=request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()||server?.requestIP(request)?.address||'unknown';
+ if(!pairAttempts.allow(client))return err(429,'too many pairing attempts');
+ const paired=await redeemPairingCode(sql,body.code);
+ if(!paired)return err(404,'pairing code not found or expired');
+ return Response.json(paired,{headers:{'Cache-Control':'no-store'}});
+},{body:t.Object({code:t.String({minLength:1,maxLength:32})})})
 .post('/api/v1/admin/tables',async({request,body})=>{
  if(!isAdmin(request))return err(401,'unauthorized');
  const [row]=await sql`INSERT INTO dining_tables(tenant_id,branch_id,name) VALUES (${body.tenant_id},${body.branch_id},${body.name}) RETURNING *`;return row;

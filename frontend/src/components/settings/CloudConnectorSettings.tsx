@@ -48,6 +48,7 @@ interface ConnectorConfig {
   has_token: boolean;
   cutover_pending: boolean;
   acceptance_mode?: 'manual' | 'automatic';
+  paired_branch?: string | null;
 }
 
 interface ConnectorStatus {
@@ -116,6 +117,15 @@ const TEST_ERROR_KEYS = {
   server_error: 'qcErrorServer',
   bad_response: 'qcErrorResponse',
   blocked_target: 'qcErrorBlocked',
+} as const;
+
+const PAIR_ERROR_KEYS = {
+  ...TEST_ERROR_KEYS,
+  pairing_code_invalid: 'qcPairInvalid',
+  pairing_code_rejected: 'qcPairRejected',
+  pairing_rate_limited: 'qcPairRateLimited',
+  pairing_failed: 'qcPairFailed',
+  credential_storage_unavailable: 'qcStorageUnavailable',
 } as const;
 
 const AUTH_LABEL = {
@@ -204,6 +214,10 @@ export function CloudConnectorSettings({
   const [legacyStopped, setLegacyStopped] = useState(false);
   const [activating, setActivating] = useState(false);
   const [activationError, setActivationError] = useState('');
+  const [manualSetup, setManualSetup] = useState(false);
+  const [pairCode, setPairCode] = useState('');
+  const [pairing, setPairing] = useState(false);
+  const [pairError, setPairError] = useState('');
   const [testResult, setTestResult] = useState<{ ok: boolean; code: string | null } | null>(null);
   const [certDraft, setCertDraft] = useState<{
     pem: string;
@@ -373,6 +387,25 @@ export function CloudConnectorSettings({
     }
   };
 
+  const pair = async () => {
+    setPairing(true);
+    setPairError('');
+    try {
+      const { data } = await api.post('/qr-cloud/pair', { code: pairCode });
+      apply(data);
+      setPairCode('');
+      if (data.test?.ok) {
+        toast.success(t('qcPairDone', { branch: `${data.tenant_name} · ${data.branch_name}` }));
+      } else {
+        setPairError('pairing_failed');
+      }
+    } catch (error) {
+      setPairError(errorCode(error) || 'offline');
+    } finally {
+      setPairing(false);
+    }
+  };
+
   const openSetup = async () => {
     setStartingSetup(true);
     try {
@@ -471,6 +504,14 @@ export function CloudConnectorSettings({
     config && (setupOpen || config.cutover_pending || mode === 'legacy_relay'),
   );
   const currentState = status?.state ?? 'DISABLED';
+  const pairingFirst = Boolean(
+    config &&
+      mode === 'integrated' &&
+      !config.enabled &&
+      !config.cutover_pending &&
+      !setupOpen &&
+      !manualSetup,
+  );
 
   const inboxSummary = status?.inbox;
 
@@ -527,7 +568,90 @@ export function CloudConnectorSettings({
         ))}
       </div>
 
-      {mode === 'integrated' && config && (
+      {config?.enabled && config.paired_branch && (
+        <p data-testid="qc-paired-branch" className="text-sm text-foreground">
+          {t('qcPairedWith', { branch: config.paired_branch })}
+        </p>
+      )}
+
+      {pairingFirst && config && (
+        <section
+          aria-labelledby="qc-pair-title"
+          className="space-y-3 rounded-md border border-border p-3"
+        >
+          <h4 id="qc-pair-title" className="text-sm font-semibold">
+            {t('qcPairTitle')}
+          </h4>
+          <p className="text-xs text-muted-foreground">{t('qcPairHint')}</p>
+          {config.has_token && config.paired_branch && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-foreground">
+              <span>{t('qcPairedWith', { branch: config.paired_branch })}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                data-testid="qc-pair-retry"
+                disabled={!canManage || activating}
+                onClick={() => void activateSetup()}
+              >
+                {t(activating ? 'qcTesting' : 'qcPairRetry')}
+              </Button>
+              {activationError && (
+                <span role="alert">
+                  {t(messageFor(TEST_ERROR_KEYS, activationError, 'qcErrorResponse'))}
+                </span>
+              )}
+            </div>
+          )}
+          <form
+            className="flex flex-wrap items-end gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void pair();
+            }}
+          >
+            <label className="block">
+              <span className="block text-xs font-medium text-foreground">{t('qcPairCode')}</span>
+              <input
+                data-testid="qc-pair-code"
+                disabled={!canManage || pairing}
+                value={pairCode}
+                onChange={(e) => setPairCode(e.target.value.toUpperCase())}
+                placeholder="XXXX-XXXX"
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={12}
+                className="mt-1 w-40 rounded-md border border-border bg-background px-3 py-2 font-mono text-base tracking-widest"
+              />
+            </label>
+            <Button
+              type="submit"
+              size="sm"
+              data-testid="qc-pair-submit"
+              disabled={!canManage || pairing || pairCode.replace(/[\s-]/g, '').length !== 8}
+            >
+              {t(pairing ? 'qcTesting' : 'qcPairSubmit')}
+            </Button>
+          </form>
+          {pairError && (
+            <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+              {t(messageFor(PAIR_ERROR_KEYS, pairError, 'qcPairFailed'))}
+            </p>
+          )}
+          {canManage && (
+            <button
+              type="button"
+              data-testid="qc-manual-setup"
+              onClick={() => setManualSetup(true)}
+              className="text-xs text-muted-foreground underline"
+            >
+              {t('qcPairManual')}
+            </button>
+          )}
+        </section>
+      )}
+
+      {mode === 'integrated' && config && !pairingFirst && (
         <div className="space-y-3">
           {!config.enabled && <h4 className="text-sm font-semibold">{t('qcSetupStep1')}</h4>}
           {config.enabled ? (

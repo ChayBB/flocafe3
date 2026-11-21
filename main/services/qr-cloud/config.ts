@@ -32,6 +32,7 @@ export const QR_CLOUD_SETTING_KEYS = {
   importedAt: 'qr_cloud_inbox_imported_at',
   cutoverPending: 'qr_cloud_legacy_cutover_pending',
   automaticSince: 'qr_cloud_automatic_since',
+  pairedBranch: 'qr_cloud_paired_branch',
 } as const;
 
 /** The bearer token lives in OS-protected storage; the settings row only carries a marker. */

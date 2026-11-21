@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import * as QRCode from 'qrcode';
 import { randomUUID } from 'node:crypto';
-import { getDatabase } from '../db';
+import { getDatabase, getSettingValue } from '../db';
 import { tableAwaitingBillPayment } from '../lib/guest-order';
 import { getHttpRequestSignal } from '../shutdown';
 import { requirePermission } from '../services/authorization';
 import { rateLimit } from '../middleware/security';
 import {
+  QR_CLOUD_SETTING_KEYS,
   QrCloudConfigError,
   hasConnectorToken,
   readConfig,
@@ -47,6 +48,7 @@ import {
   LegacyImportError,
   previewLegacyImport,
 } from '../services/qr-cloud/legacy-import';
+import { PairingError, pairQrCloud } from '../services/qr-cloud/pairing';
 import {
   CaCertificateError,
   approveCaCertificate,
@@ -476,6 +478,7 @@ function sanitizedConfig() {
     cutover_pending: config.cutoverPending,
     acceptance_mode: config.automaticSince ? 'automatic' : 'manual',
     has_token: hasConnectorToken(),
+    paired_branch: getSettingValue(QR_CLOUD_SETTING_KEYS.pairedBranch) || null,
   };
 }
 
@@ -586,6 +589,23 @@ router.put(
       });
       res.json({ config: sanitizedConfig(), status: getQrCloudStatus() });
     } catch (error) {
+      fail(res, error);
+    }
+  },
+);
+
+router.post(
+  '/pair',
+  requirePermission('settings.manage'),
+  testLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const actor = (req as Request & { user: { userId: string } }).user.userId;
+      const paired = await pairQrCloud(String(actor), req.body?.code);
+      res.json({ ...paired, config: sanitizedConfig(), status: getQrCloudStatus() });
+    } catch (error) {
+      if (error instanceof PairingError)
+        return res.status(error.status).json({ error: error.code, code: error.code });
       fail(res, error);
     }
   },
