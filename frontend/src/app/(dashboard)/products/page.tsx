@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import toast from 'react-hot-toast';
 import {
   Plus,
+  Scale,
   Pencil,
   Trash2,
   X,
@@ -44,6 +45,7 @@ import dynamic from 'next/dynamic';
 import { getCurrencySymbol, getCountryByCode, getCurrencyUnitAdapter } from '@/lib/countries';
 import { roundCurrencyValue } from '@/lib/currency-input';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
+import { SoldByWeightTab } from '@/components/products/SoldByWeightTab';
 import { useAmountFormat } from '@/hooks/useAmountFormat';
 import CurrencyAmountInput from '@/components/ui/CurrencyAmountInput';
 import { useConfirm } from '@/hooks/use-confirm';
@@ -104,7 +106,7 @@ const CATEGORY_COLORS: { key: string; labelKey: ProductsKey; bg: string; text: s
 const VARIANT_CELL =
   'w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand outline-none';
 
-type TabType = 'products' | 'categories' | 'addons';
+type TabType = 'products' | 'categories' | 'addons' | 'weight';
 
 /** One editable add-on row inside the add-on group editor. */
 interface AddonEditorRow {
@@ -127,7 +129,7 @@ interface AddonEditorRow {
 }
 
 function resolveProductsTab(value: string | null | undefined): TabType {
-  return value === 'categories' || value === 'addons' ? value : 'products';
+  return value === 'categories' || value === 'addons' || value === 'weight' ? value : 'products';
 }
 
 function ProductsTabQuerySync({ onTabChange }: { onTabChange: (tab: TabType) => void }) {
@@ -1221,6 +1223,9 @@ export default function ProductsPage() {
               <Puzzle size={16} /> {t('tabAddonGroups')}
             </TabsTrigger>
           )}
+          <TabsTrigger value="weight">
+            <Scale size={16} /> {t('tabSoldByWeight')}
+          </TabsTrigger>
         </TabsList>
 
         <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-3">
@@ -1263,9 +1268,11 @@ export default function ProductsPage() {
                 {t('assignTaxCategory')}
               </Button>
             )}
-            <Button variant="outline" onClick={() => openCsvModal(activeTab)}>
-              <FileSpreadsheet size={16} className="me-1" /> CSV
-            </Button>
+            {activeTab !== 'weight' && (
+              <Button variant="outline" onClick={() => openCsvModal(activeTab)}>
+                <FileSpreadsheet size={16} className="me-1" /> CSV
+              </Button>
+            )}
             {activeTab === 'products' && (
               <>
                 {isOwnerOrManager && (
@@ -2611,6 +2618,16 @@ export default function ProductsPage() {
                 </form>
               </div>
             </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="weight" className="dashboard-scroll-pane flex min-h-0 flex-1 flex-col">
+          {activeTab === 'weight' && (
+            <SoldByWeightTab
+              search={search}
+              canEdit={isOwnerOrManager}
+              onPriceSaved={() => void fetchData()}
+            />
           )}
         </TabsContent>
 

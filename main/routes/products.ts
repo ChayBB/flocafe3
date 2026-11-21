@@ -20,6 +20,7 @@ import * as net from 'net';
 import { asyncHandler } from '../middleware/async-handler';
 import { TERMINAL_ITEM_STATUSES } from '../../shared/order-item-status';
 import { ACTIVE_CATEGORIES_CTE_CLAUSES } from './categories';
+import { pendingPriceModeForProduct } from '../lib/weight-pending';
 
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 export const MAX_IMAGE_DATA_URI_LENGTH = 50_000;
@@ -1268,6 +1269,52 @@ router.get('/', requirePermission('catalog.view'), (req: Request, res: Response)
     });
 
     res.json({ products: productsWithRelations });
+  } catch (error: any) {
+    res.locals.postHogError = error;
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+const WEIGHT_SALE_UNITS = new Set(['kg', 'g', 'lb', 'oz']);
+
+/** Menu items sold by weight: weighed after the order, or sold in a weight unit at the till. */
+router.get('/sold-by-weight', requirePermission('catalog.view'), (_req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const rows = db
+      .prepare(
+        `SELECT p.id, p.name, p.price, p.sale_unit, p.is_active, p.category_id, c.name AS category_name
+         FROM products p
+         LEFT JOIN categories c ON p.category_id = c.id AND c.deleted_at IS NULL
+         WHERE p.deleted_at IS NULL
+         ORDER BY c.sort_order, c.name, p.sort_order, p.name`,
+      )
+      .all() as Array<{
+      id: string;
+      name: string;
+      price: number;
+      sale_unit: string;
+      is_active: number;
+      category_id: string | null;
+      category_name: string | null;
+    }>;
+    const products = rows.flatMap((row) => {
+      const weighed = pendingPriceModeForProduct(db, row) === 'weight';
+      if (!weighed && !WEIGHT_SALE_UNITS.has(row.sale_unit)) return [];
+      return [
+        {
+          id: row.id,
+          name: row.name,
+          price: Number(row.price),
+          unit: weighed ? 'kg' : row.sale_unit,
+          weighed,
+          is_active: row.is_active,
+          category_name: row.category_name,
+        },
+      ];
+    });
+    res.json({ products });
   } catch (error: any) {
     res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
