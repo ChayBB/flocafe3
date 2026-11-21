@@ -36,7 +36,7 @@ import type { Language } from '@/lib/i18n/languages';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import {
   HEADER_PILL_FILLED,
-  HEADER_TEXT_ACTION,
+  HEADER_WHITE_ACTION,
   ServerAppHeader,
 } from '@/components/server-app/ServerAppHeader';
 import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/GuestOrderHistory';
@@ -2493,6 +2493,9 @@ export default function ServerStandalonePage() {
             : null
         }
         tableText={headerTableText}
+        selectedTableName={
+          activeTable ? (activeTable.name ?? String(activeTable.number)) : undefined
+        }
         customerName={(() => {
           const name = user
             ? (currentOrder?.customer?.name ?? customerName.trim())
@@ -2532,13 +2535,10 @@ export default function ServerStandalonePage() {
               aria-label={t('showQr')}
               title={tTables('guestQrButton')}
               data-testid="server-app-table-qr-button"
-              className={`${HEADER_TEXT_ACTION} max-w-[8rem] sm:max-w-[11rem]`}
+              className={`${HEADER_WHITE_ACTION} min-w-0 max-w-[8rem] shrink! sm:max-w-[11rem]`}
             >
-              <QrCode size={17} aria-hidden="true" className="shrink-0" />
-              <span
-                data-testid="server-app-qr-label"
-                className="truncate font-sans text-sm font-medium leading-5 tracking-normal"
-              >
+              <QrCode size={17} aria-hidden="true" className="shrink-0 text-brand" />
+              <span data-testid="server-app-qr-label" className="truncate">
                 {t('showQr')}
               </span>
             </button>

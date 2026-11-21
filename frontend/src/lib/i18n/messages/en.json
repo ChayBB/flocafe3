@@ -2139,6 +2139,7 @@
     "guestDeclinedHint": "Staff did not open this table. Please ask a staff member.",
     "guestAskAgain": "Ask again",
     "changeLanguage": "Change language",
+    "tablesButton": "Tables",
     "orderHistory": "Order history",
     "orderHistoryEmpty": "Nothing ordered at this table yet.",
     "orderHistoryLoading": "Loading…",

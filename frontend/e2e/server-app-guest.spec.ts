@@ -136,12 +136,11 @@ test.describe('Server App guest from a table QR', () => {
 
     // A guest may switch the page's language, and the choice outlives a reload.
     const history = page.getByTestId('server-app-history-button');
-    await expect(history).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-    await expect(history).toHaveCSS('color', 'rgb(255, 255, 255)');
-    await expect(history).toHaveCSS('box-shadow', 'none');
+    await expect(history).toHaveCSS('background-color', / 0\.85\)$|, 0\.85\)$/);
+    await expect(history).toHaveCSS('color', 'rgb(17, 17, 17)');
+    await expect(history.locator('svg')).toHaveCSS('color', 'rgb(234, 88, 12)');
     await expect(history).toHaveCSS('border-width', '0px');
     await expect(history).toHaveCSS('opacity', '1');
-    await expect(history).toHaveCSS('translate', '0px 15px');
     await history.hover();
     await expect(history).toHaveCSS('opacity', '1');
     await page.getByTestId('server-app-language-button').click();
@@ -352,7 +351,7 @@ test.describe('Server App guest from a table QR', () => {
       'Select a table',
     );
     await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
-    await expect(header.getByTestId('server-app-table-qr-button')).toHaveClass(/bg-transparent/);
+    await expect(header.getByTestId('server-app-table-qr-button')).toHaveClass(/bg-white/);
     await expect(header.getByTestId('server-app-login-button')).toHaveCount(0);
     await expect(header).toContainText(table.name);
 

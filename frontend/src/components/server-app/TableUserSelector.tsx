@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 export const TABLE_USER_STYLE =
-  'inline-flex h-[38px] min-w-0 max-w-full items-center gap-2 rounded-[10px] border border-[#E5E5E5] bg-white px-[10px] font-sans text-sm font-medium leading-5 tracking-normal text-[#111111]';
+  'inline-flex h-[38px] min-w-0 max-w-full items-center gap-2 rounded-[10px] border border-[#E5E5E5] bg-white/85 px-[10px] font-sans text-sm font-medium leading-5 tracking-normal text-[#111111]';
 
 export function TableUserLabel({
   tableName,
@@ -50,7 +50,12 @@ export function TableUserSelector({
       <ChevronDown size={16} aria-hidden="true" className="ms-auto shrink-0" />
     </>
   );
-  if (!onShowTables) return <div className={TABLE_USER_STYLE}>{content}</div>;
+  if (!onShowTables)
+    return (
+      <div data-testid="server-app-table-label" className={TABLE_USER_STYLE}>
+        <TableUserLabel tableName={tableName} userName={userName} />
+      </div>
+    );
   return (
     <button
       type="button"

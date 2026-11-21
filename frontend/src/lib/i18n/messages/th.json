@@ -2139,6 +2139,7 @@
     "guestDeclinedHint": "พนักงานยังไม่เปิดโต๊ะนี้ โปรดสอบถามพนักงาน",
     "guestAskAgain": "ขออีกครั้ง",
     "changeLanguage": "เปลี่ยนภาษา",
+    "tablesButton": "เลือกโต๊ะ",
     "orderHistory": "ประวัติการสั่ง",
     "orderHistoryEmpty": "โต๊ะนี้ยังไม่ได้สั่งอะไร",
     "orderHistoryLoading": "กำลังโหลด…",

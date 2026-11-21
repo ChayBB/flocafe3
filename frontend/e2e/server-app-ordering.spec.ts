@@ -120,7 +120,7 @@ test.describe('Server App tableside ordering', () => {
     const text = page.getByTestId('server-app-header-table').locator('> span.truncate').first();
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      const selector = page.getByTestId('server-app-table-button');
+      const selector = page.getByTestId('server-app-table-label');
       await expect(selector).toBeVisible();
       expect(await selector.evaluate(typography)).toEqual({ ...reference, weight: '500' });
       expect((await selector.boundingBox())?.height).toBe(38);
@@ -133,7 +133,7 @@ test.describe('Server App tableside ordering', () => {
       const circleBox = (await circles.boundingBox())!;
       const headerBox = (await page.getByTestId('server-app-header').boundingBox())!;
       expect(circleBox.width).toBe(130);
-      expect(circleBox.y - headerBox.y).toBe(10);
+      expect(circleBox.y - headerBox.y).toBe(7);
       expect(headerBox.x + headerBox.width - circleBox.x - circleBox.width).toBe(12);
       const staffName = page.getByTestId('server-app-staff-name');
       await expect(staffName).toHaveText('E2E server');
@@ -167,10 +167,10 @@ test.describe('Server App tableside ordering', () => {
       for (const circle of await circles.locator(':scope > span, button').all()) {
         expect((await circle.boundingBox())?.width).toBe(38);
         expect((await circle.boundingBox())?.height).toBe(38);
-        await expect(circle).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+        await expect(circle).toHaveCSS('background-color', / 0\.85\)$|, 0\.85\)$/);
       }
       await page.evaluate(() => document.documentElement.classList.add('dark'));
-      await expect(selector).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+      await expect(selector).toHaveCSS('background-color', / 0\.85\)$|, 0\.85\)$/);
       await expect(selector).toHaveCSS('color', 'rgb(17, 17, 17)');
       await page.evaluate(() => document.documentElement.classList.remove('dark'));
       for (const label of ['โต๊ะ 9', 'Table 9']) {
@@ -188,7 +188,9 @@ test.describe('Server App tableside ordering', () => {
       await page
         .getByTestId('server-app-header')
         .screenshot({ path: test.info().outputPath(`header-${width}.png`) });
-      await selector.click();
+      // The table name above is only a label; the bottom row's Select Table opens the tables.
+      expect(await selector.evaluate((element) => element.tagName)).toBe('DIV');
+      await page.getByTestId('server-app-table-button').click();
       await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
       await expect(page.getByPlaceholder('Staff name')).toHaveCount(0);
       await expect(page.getByRole('menu')).toHaveCount(0);
@@ -396,6 +398,11 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
     await page.getByRole('button', { name: new RegExp(tableName) }).click();
     await expect(page.locator('header')).toContainText(tableName);
+    // Select Table names the picked table in bold; the name at the top is only a label.
+    const pickedName = picker.getByTestId('server-app-table-button-name');
+    await expect(pickedName).toHaveText(tableName);
+    await expect(pickedName).toHaveCSS('font-weight', '700');
+    await expect(page.getByTestId('server-app-table-label')).toContainText(tableName);
     // Picking a table folds the list away.
     await expect(page.getByRole('heading', { name: 'Tables' })).toHaveCount(0);
 
@@ -414,15 +421,24 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.locator('header')).toContainText(tableName);
     await openServerAppTables(page);
     const qr = page.getByTestId('server-app-table-qr-button');
-    await expect(qr).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(qr).toHaveCSS('background-color', / 0\.85\)$|, 0\.85\)$/);
     await expect(qr).toHaveCSS('border-width', '0px');
-    await expect(qr).toHaveCSS('box-shadow', 'none');
     await expect(qr).toHaveCSS('opacity', '1');
-    await expect(qr).toHaveCSS('translate', '0px 15px');
+    // The bottom buttons sit as far from the cover's bottom edge as the round buttons from its top.
+    const cover = (await page.locator('header > div').first().boundingBox())!;
+    const flag = (await page.getByTestId('server-app-language-button').boundingBox())!;
+    for (const button of [qr, page.getByTestId('server-app-history-button')]) {
+      const box = (await button.boundingBox())!;
+      expect(cover.y + cover.height - (box.y + box.height)).toBeCloseTo(flag.y - cover.y, 0);
+    }
+    // The shop logo sits 14px below the table selector.
+    const selector = (await page.getByTestId('server-app-table-label').boundingBox())!;
+    const logo = (await page.getByTestId('server-app-header-logo-frame').boundingBox())!;
+    expect(logo.y - (selector.y + selector.height)).toBeCloseTo(14, 0);
     await qr.hover();
     await expect(qr).toHaveCSS('opacity', '1');
-    await expect(qr).toHaveCSS('color', 'rgb(255, 255, 255)');
-    await expect(qr.locator('svg')).toHaveCSS('color', 'rgb(255, 255, 255)');
+    await expect(qr).toHaveCSS('color', 'rgb(17, 17, 17)');
+    await expect(qr.locator('svg')).toHaveCSS('color', 'rgb(234, 88, 12)');
     const label = page.getByTestId('server-app-qr-label');
     const topFont = await picker.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -475,7 +491,7 @@ test.describe('Server App tableside ordering', () => {
       await page.setViewportSize({ width, height: 800 });
       await expect(page.getByTestId('pos-product-grid')).toBeVisible();
 
-      // Select Table opens the tables; beside it sit language, theme, order history and the session button.
+      // Select Table sits in the bottom row with order history and Show QR; language and theme sit on top.
       const header = page.locator('header');
       const tableButton = header.getByTestId('server-app-table-button');
       const logoutButton = header.getByTestId('server-app-table-qr-button');
@@ -490,9 +506,7 @@ test.describe('Server App tableside ordering', () => {
         const box = await button.boundingBox();
         expect(box).not.toBeNull();
         expect(box!.width).toBeGreaterThanOrEqual(button === languageButton ? 38 : 44);
-        expect(box!.height).toBeGreaterThanOrEqual(
-          button === tableButton || button === languageButton ? 38 : 44,
-        );
+        expect(box!.height).toBeGreaterThanOrEqual(button === languageButton ? 38 : 36);
       }
 
       const hasOverflow = await page.evaluate(() => {
