@@ -11,12 +11,16 @@ function isIce(name: string): boolean {
   );
 }
 
-/** Reorders bill lines only; equal groups keep their original order. */
-export function sortBillItems<T extends { product_id?: string; product_name?: string }>(
-  db: Database.Database,
-  items: T[],
-  stationId?: number | string | null,
-): T[] {
+/** Reorders bill lines only: food, then drinks from the dearest down, then ice; ties keep their order. */
+export function sortBillItems<
+  T extends {
+    product_id?: string;
+    product_name?: string;
+    unit_price?: number | string | null;
+    quantity?: number | string | null;
+    total?: number | string | null;
+  },
+>(db: Database.Database, items: T[], stationId?: number | string | null): T[] {
   if (items.length < 2) return items;
   const stations = db
     .prepare('SELECT id, name FROM kitchen_stations WHERE is_active = 1')
@@ -59,5 +63,16 @@ export function sortBillItems<T extends { product_id?: string; product_name?: st
   }
   const priority = (item: T) =>
     isIce(item.product_name ?? '') ? 2 : tableDrinks || products.get(item.product_id ?? '') ? 1 : 0;
-  return [...items].sort((a, b) => priority(a) - priority(b));
+  const unitPrice = (item: T) => {
+    const unit = item.unit_price == null ? NaN : Number(item.unit_price);
+    if (Number.isFinite(unit)) return unit;
+    const total = Number(item.total);
+    const quantity = Number(item.quantity);
+    return Number.isFinite(total) && quantity > 0 ? total / quantity : 0;
+  };
+  return [...items].sort((a, b) => {
+    const group = priority(a) - priority(b);
+    if (group !== 0 || priority(a) !== 1) return group;
+    return unitPrice(b) - unitPrice(a);
+  });
 }

@@ -99,7 +99,22 @@ try {
     billOrder.items.reduce((sum: number, item: { total: number }) => sum + item.total, 0),
     lines.reduce((sum, item) => sum + item.total, 0),
   );
-  console.log('Bill items: food first, drinks next, ice last; stable order and amounts preserved.');
+  const priced = [
+    { product_id: 'tea', product_name: 'Tea', unit_price: 25, quantity: 2, total: 50 },
+    { product_id: 'rice', product_name: 'Rice', unit_price: 60, quantity: 1, total: 60 },
+    { product_id: 'juice', product_name: 'Juice', unit_price: 90, quantity: 1, total: 90 },
+    { product_id: 'ice', product_name: 'น้ำแข็ง', unit_price: 10, quantity: 1, total: 10 },
+    { product_id: 'coffee', product_name: 'Coffee', unit_price: 55, quantity: 3, total: 165 },
+    { product_id: 'dessert', product_name: 'Dessert', unit_price: 40, quantity: 1, total: 40 },
+  ];
+  assert.deepEqual(
+    sortBillItems(db, priced).map((item: (typeof priced)[number]) => item.product_id),
+    ['rice', 'dessert', 'juice', 'coffee', 'tea', 'ice'],
+    'drinks follow the food from the dearest down, and food keeps its order',
+  );
+  console.log(
+    'Bill items: food first, drinks next from the dearest down, ice last; amounts preserved.',
+  );
 } finally {
   closeDatabase();
 }
