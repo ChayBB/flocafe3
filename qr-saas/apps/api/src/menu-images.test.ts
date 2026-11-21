@@ -125,6 +125,8 @@ test.skipIf(!testUrl)('Postgres stores photos and catalog publish keeps each ite
       updated_at timestamptz, UNIQUE(tenant_id, branch_id, external_id)
     )`;
     await sql`INSERT INTO branches (tenant_id, id) VALUES (${tenantId}, ${branchId})`;
+    await sql.unsafe(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qr_app') THEN CREATE ROLE qr_app NOLOGIN; END IF; END $$`);
+    await sql.unsafe('GRANT ALL ON menu_images, branches, menu_items TO qr_app');
     const store = postgresMenuImageStore(sql);
     const photo = png(5);
     const name = nameOf(photo);

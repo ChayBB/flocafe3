@@ -2,6 +2,7 @@ import type { Sql } from 'postgres';
 import { sha256 } from '../../../packages/shared/src/index';
 import type { ConnectorIdentity } from './connector-auth';
 import type { AddonGroup } from './catalog-addons';
+import { inTenant } from './tenant-scope';
 
 export interface CatalogItem {
   external_id: string;
@@ -21,7 +22,7 @@ export async function publishCatalog(sql: Sql, { tenantId, branchId }: Connector
       input.items.some((item) => item.external_id !== (item.pos_variant_id ? `variant:${item.pos_variant_id}` : item.pos_product_id))) return 'invalid';
   const snapshot = JSON.stringify(input.items);
   const hash = sha256(snapshot);
-  return sql.begin(async (tx) => {
+  return inTenant(sql, { tenantId, branchId }, async (tx) => {
     const [branch] = await tx`
       SELECT menu_revision, menu_revision_hash FROM branches
       WHERE tenant_id = ${tenantId} AND id = ${branchId} FOR UPDATE

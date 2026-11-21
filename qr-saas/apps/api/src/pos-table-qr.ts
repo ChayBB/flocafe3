@@ -2,6 +2,7 @@ import { Elysia, t } from 'elysia';
 import type { Sql } from 'postgres';
 import { sha256, token } from '../../../packages/shared/src/index';
 import type { ConnectorIdentity } from './connector-auth';
+import { enterTenant, inTenant } from './tenant-scope';
 
 interface Options {
   sql: Sql;
@@ -21,7 +22,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         const identity = await authorize(request);
         if (!identity) return reply(401, { error: 'unauthorized' });
         const { tenantId, branchId, installationId } = identity;
-        await sql.begin(async (tx) => {
+        await inTenant(sql, identity, async (tx) => {
           await tx`
           UPDATE dining_tables d SET name = s.name, bill_awaiting_payment = s.awaiting_payment,
             pos_active_order_numbers = coalesce(s.active_order_numbers, d.pos_active_order_numbers),
@@ -78,18 +79,19 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         if (body.action === 'payment-state') {
           if (typeof body.awaiting_payment !== 'boolean')
             return reply(400, { error: 'payment state required' });
-          const [table] = await sql`
-          UPDATE dining_tables SET bill_awaiting_payment = ${body.awaiting_payment}
+          const awaitingPayment = body.awaiting_payment;
+          const [table] = await inTenant(sql, identity, (tx) => tx`
+          UPDATE dining_tables SET bill_awaiting_payment = ${awaitingPayment}
           WHERE tenant_id = ${tenantId} AND branch_id = ${branchId} AND pos_table_id = ${body.pos_table_id}
             AND pos_installation_id IS NOT DISTINCT FROM ${installationId}::uuid
           RETURNING bill_awaiting_payment
-        `;
+        `);
           return table
             ? reply(200, { awaiting_payment: table.bill_awaiting_payment })
             : reply(404, { error: 'table not found' });
         }
         if (body.action === 'close') {
-          await sql.begin(async (tx) => {
+          await inTenant(sql, identity, async (tx) => {
             const [table] = await tx`
             UPDATE dining_tables SET qr_ordering_until = NULL
             WHERE tenant_id = ${tenantId} AND branch_id = ${branchId} AND pos_table_id = ${body.pos_table_id}
@@ -109,7 +111,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         if (!origin || origin.protocol !== 'https:' || origin.origin !== publicOrigin) {
           return reply(503, { error: 'public ordering origin unavailable' });
         }
-        const [table] = await sql<{ qr_public_id: string; qr_ordering_until: Date }[]>`
+        const [table] = await inTenant(sql, identity, (tx) => tx<{ qr_public_id: string; qr_ordering_until: Date }[]>`
         INSERT INTO dining_tables (tenant_id, branch_id, name, pos_table_id, pos_installation_id,
           qr_ordering_until, qr_session_generation, bill_awaiting_payment)
         VALUES (${tenantId}, ${branchId}, ${body.name}, ${body.pos_table_id}, ${installationId},
@@ -124,7 +126,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         WHERE dining_tables.pos_installation_id IS NULL
           OR dining_tables.pos_installation_id = excluded.pos_installation_id
         RETURNING qr_public_id, qr_ordering_until
-      `;
+      `);
         if (!table) return reply(409, { error: 'table is linked to another installation' });
         const url = new URL(origin);
         url.hash = new URLSearchParams({ table: table.qr_public_id }).toString();
@@ -154,6 +156,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
           FOR UPDATE
         `;
           if (!table) return reply(409, { error: 'table closed' });
+          await enterTenant(tx, { tenantId: table.tenant_id, branchId: table.branch_id });
           const [active] = await tx`
           SELECT COUNT(*)::int AS count FROM table_sessions
           WHERE table_id = ${table.id} AND revoked_at IS NULL AND expires_at > now()

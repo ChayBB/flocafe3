@@ -1,4 +1,5 @@
 import type { Sql } from 'postgres';
+import { inTenant } from './tenant-scope';
 
 export interface ConnectorReceipt {
   event_id: string;
@@ -13,7 +14,7 @@ export async function acknowledgeDelivery(
   receipt: ConnectorReceipt,
 ): Promise<'accepted' | 'missing' | 'conflict'> {
   try {
-    return await sql.begin(async (tx) => {
+    return await inTenant(sql, { tenantId, branchId }, async (tx) => {
       const [row] = await tx`
         SELECT d.status, d.pos_receipt_id, d.pos_order_number, o.status AS order_status
         FROM connector_deliveries d

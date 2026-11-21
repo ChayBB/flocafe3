@@ -30,6 +30,8 @@ test.skipIf(!testUrl)(
       expires_at timestamptz, revoked_at timestamptz, qr_generation uuid
     )`;
       await sql`CREATE TEMP TABLE connector_installations (id uuid, tenant_id uuid, branch_id uuid, revoked_at timestamptz)`;
+      await sql.unsafe(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qr_app') THEN CREATE ROLE qr_app NOLOGIN; END IF; END $$`);
+      await sql.unsafe('GRANT ALL ON dining_tables, table_sessions, connector_installations TO qr_app');
       const app = posTableQr({
         sql,
         publicOrigin: 'https://ordering.example',

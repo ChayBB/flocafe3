@@ -13,6 +13,7 @@ import { connectorAuthorizer, issueConnectorToken } from './connector-auth';
 import { publishCatalog } from './catalog-sync';
 import { MENU_IMAGE_NAME, menuImages, postgresMenuImageStore } from './menu-images';
 import { AddonGroups, AddonSelection, resolveCatalogAddons, type AddonGroup } from './catalog-addons';
+import { enterTenant, inTenant } from './tenant-scope';
 const sql=postgres(process.env.DATABASE_URL!,{max:12});
 const redis=new Redis(process.env.REDIS_URL!);
 const adminSecret=process.env.ADMIN_BOOTSTRAP_TOKEN!;
@@ -45,8 +46,11 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
   secret: adminSecret,
   isAdmin,
   createSession: createTableSession,
-  async readMenu(sessionId) {
-    const [row] = await sql<{ table_name: string; items: { name: string; price_satang: number }[] }[]>`
+  readMenu: (sessionId) => sql.begin(async (tx) => {
+    const [session] = await tx`SELECT tenant_id, branch_id FROM table_sessions WHERE id = ${sessionId}`;
+    if (!session) return null;
+    await enterTenant(tx, { tenantId: session.tenant_id, branchId: session.branch_id });
+    const [row] = await tx<{ table_name: string; items: { name: string; price_satang: number }[] }[]>`
       SELECT d.name AS table_name, COALESCE((
         SELECT jsonb_agg(jsonb_build_object('name', m.name, 'price_satang', m.price_satang)
                          ORDER BY m.name, m.id)
@@ -58,7 +62,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
       WHERE s.id = ${sessionId} AND s.expires_at > now() AND s.revoked_at IS NULL
     `;
     return row ?? null;
-  },
+  }),
 }))
 .use(connectorNotifications({
  scope: connectorScope,
@@ -67,7 +71,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
   const identity = await authorizeConnector(request, 'orders.read');
   return !!identity && identity.installationId === null;
  },
- readPending: (scope, limit) => readPendingConnectorOrders(sql, scope, limit),
+ readPending: (scope, limit) => inTenant(sql, scope, (tx) => readPendingConnectorOrders(tx, scope, limit)),
  subscribe(wake) {
   const channel = 'qr:outbox';
   const subscriber = redis.duplicate({ autoResubscribe: false, maxRetriesPerRequest: 1 });
@@ -137,7 +141,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
 .get('/api/v1/connectors/catalog',async({request})=>{
  const scope=await authorizeConnector(request,'catalog.write');
  if(!scope)return err(401,'unauthorized');
- const [row]=await sql`SELECT menu_revision AS revision FROM branches WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId}`;
+ const [row]=await inTenant(sql,scope,tx=>tx`SELECT menu_revision AS revision FROM branches WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId}`);
  return row ?? err(404,'branch not found');
 })
 .post('/api/v1/connectors/catalog',async({request,body})=>{
@@ -161,13 +165,13 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
 .get('/api/v1/connectors/guest-settings',async({request})=>{
  const scope=await authorizeConnector(request,'catalog.write');
  if(!scope)return err(401,'unauthorized');
- const [row]=await sql`SELECT guest_scroll_percent AS scroll_percent FROM branches WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId}`;
+ const [row]=await inTenant(sql,scope,tx=>tx`SELECT guest_scroll_percent AS scroll_percent FROM branches WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId}`);
  return row ?? err(404,'branch not found');
 })
 .post('/api/v1/connectors/guest-settings',async({request,body})=>{
  const scope=await authorizeConnector(request,'catalog.write');
  if(!scope)return err(401,'unauthorized');
- const [row]=await sql`UPDATE branches SET guest_scroll_percent=${body.scroll_percent} WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId} RETURNING guest_scroll_percent AS scroll_percent`;
+ const [row]=await inTenant(sql,scope,tx=>tx`UPDATE branches SET guest_scroll_percent=${body.scroll_percent} WHERE tenant_id=${scope.tenantId} AND id=${scope.branchId} RETURNING guest_scroll_percent AS scroll_percent`);
  return row ?? err(404,'branch not found');
 },{body:t.Object({scroll_percent:t.Integer({minimum:50,maximum:100})})})
 .post('/api/v1/admin/table-sessions',async({request,body})=>{
@@ -189,6 +193,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
              AND c.tenant_id=d.tenant_id AND c.branch_id=d.branch_id AND c.revoked_at IS NULL
          ))`;
   if(!scope)return secret ? err(401,'invalid session') : err(404,'table not found');
+  await enterTenant(tx,{tenantId:scope.tenant_id,branchId:scope.branch_id});
   const [branch]=await tx`SELECT menu_revision,guest_scroll_percent FROM branches WHERE tenant_id=${scope.tenant_id} AND id=${scope.branch_id} FOR SHARE`;
   const items=await tx`SELECT id,name,price_satang,category,addon_groups,image FROM menu_items WHERE tenant_id=${scope.tenant_id} AND branch_id=${scope.branch_id} AND available=true ORDER BY category,name,id`;
   return Response.json({items,menu_revision:branch?.menu_revision??null,scroll_percent:branch?.guest_scroll_percent??null},{headers:{'Cache-Control':'no-store'}});
@@ -202,6 +207,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  const hash=sha256(JSON.stringify(body));
  try {
  return await sql.begin(async tx=>{
+   await enterTenant(tx,{tenantId:session.tenant_id,branchId:session.branch_id});
    // Serialize the branch idempotency key even when the buyer changes table sessions.
    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([session.tenant_id,session.branch_id,key])}, 0))`;
    const [table]=await tx`SELECT bill_awaiting_payment FROM dining_tables
@@ -252,7 +258,8 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  const secret=bearer(request);if(!secret)return err(401,'missing session');
  const [session]=await sql`SELECT tenant_id,branch_id,table_id,qr_generation,id FROM table_sessions WHERE token_hash=${sha256(secret)} AND expires_at>now() AND revoked_at IS NULL`;
  if(!session)return err(401,'invalid session');
- const orders=await sql`SELECT o.id,o.status,o.total_satang,o.note,o.created_at,
+ return inTenant(sql,{tenantId:session.tenant_id,branchId:session.branch_id},async tx=>{
+ const orders=await tx`SELECT o.id,o.status,o.total_satang,o.note,o.created_at,
    (SELECT cd.pos_order_number FROM outbox_events e JOIN connector_deliveries cd ON cd.event_id=e.id
      WHERE e.tenant_id=o.tenant_id AND e.branch_id=o.branch_id AND e.kind='order.created' AND e.payload->>'order_id'=o.id::text LIMIT 1) AS pos_order_number,
    coalesce((SELECT jsonb_agg(jsonb_build_object('name',i.name_snapshot,'quantity',i.quantity,'note',i.note,'status',i.kitchen_status,
@@ -270,19 +277,22 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
          AND NOT (d.pos_active_order_numbers ? cd.pos_order_number)
      ))
    ORDER BY o.created_at DESC LIMIT 20`;
- const [table]=await sql`SELECT bill_awaiting_payment FROM dining_tables
+ const [table]=await tx`SELECT bill_awaiting_payment FROM dining_tables
    WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id}`;
  return Response.json({orders,bill_awaiting_payment:table?.bill_awaiting_payment===true},{headers:{'Cache-Control':'no-store'}});
+ });
 })
 .get('/api/v1/orders/:id',async({request,params})=>{
  const secret=bearer(request);if(!secret)return err(401,'missing session');
- const [row]=await sql`SELECT o.id,o.status,o.total_satang,o.created_at FROM orders o JOIN table_sessions s ON s.id=o.table_session_id WHERE o.id=${params.id} AND s.token_hash=${sha256(secret)} AND s.expires_at>now() AND s.revoked_at IS NULL`;
+ const [session]=await sql`SELECT id,tenant_id,branch_id FROM table_sessions WHERE token_hash=${sha256(secret)} AND expires_at>now() AND revoked_at IS NULL`;
+ if(!session)return err(404,'not found');
+ const [row]=await inTenant(sql,{tenantId:session.tenant_id,branchId:session.branch_id},tx=>tx`SELECT id,status,total_satang,created_at FROM orders WHERE id=${params.id} AND table_session_id=${session.id}`);
  return row??err(404,'not found');
 })
 .get('/api/v1/connectors/events',async({request,query})=>{
  const scope=await authorizeConnector(request,'orders.read');
  if(!scope)return err(401,'unauthorized');
- const page=await readConnectorEventPage(sql, scope, query.after ?? null);
+ const page=await inTenant(sql, scope, (tx) => readConnectorEventPage(tx, scope, query.after ?? null));
  return {...page,scope:{tenant_id:scope.tenantId,branch_id:scope.branchId}};
 },{query:t.Object({after:t.Optional(t.String({format:'uuid'}))})})
 .get('/api/v1/connectors/capabilities',async({request})=>{
@@ -294,7 +304,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
 .get('/api/v1/connectors/events/:id/order', async ({ request, params, query }) => {
  const scope = await authorizeConnector(request, 'orders.read');
  if (!scope) return err(401, 'unauthorized');
- const order = await readConnectorOrder(sql, scope, params.id);
+ const order = await inTenant(sql, scope, (tx) => readConnectorOrder(tx, scope, params.id));
  if (query.addons !== '1' && order?.items?.some((item) => item.addons?.length)) {
   return err(409, 'connector upgrade required for menu options');
  }
@@ -319,14 +329,5 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  if(outcome==='conflict')return err(409,'order not acknowledged');
  return {ok:true};
 },{body:t.Object({order_id:t.String({format:'uuid'}),statuses:t.Array(t.Union(kitchenStatuses.map(status=>t.Literal(status))),{minItems:1,maxItems:30})})})
-.post('/api/v1/admin/payments/cash-confirm',async({request,body})=>{
- if(!isAdmin(request))return err(401,'unauthorized');
- // Bootstrap-only: replace with branch-scoped staff RBAC before production.
- const [o]=await sql`SELECT id,tenant_id,branch_id,total_satang FROM orders WHERE id=${body.order_id}`;
- if(!o)return err(404,'order not found');
- const [p]=await sql`INSERT INTO payments(tenant_id,branch_id,order_id,method,status,amount_satang,confirmed_at) VALUES (${o.tenant_id},${o.branch_id},${o.id},'cash','confirmed',${o.total_satang},now()) RETURNING id,status`;
- await sql`INSERT INTO audit_logs(tenant_id,branch_id,actor,action,resource_id) VALUES (${o.tenant_id},${o.branch_id},'bootstrap-admin','cash.confirmed',${p.id})`;
- return p;
-},{body:t.Object({order_id:t.String({format:'uuid'})})})
 .listen({hostname:'0.0.0.0',port:Number(process.env.PORT??3000)});
 console.log('QR API listening',app.server?.port);

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Elysia, t } from 'elysia';
 import type { Sql } from 'postgres';
 import type { ConnectorIdentity } from './connector-auth';
+import { inTenant } from './tenant-scope';
 
 export const MENU_IMAGE_NAME = '^[a-f0-9]{64}\\.(webp|png|jpeg|gif)$';
 const NAME = new RegExp(MENU_IMAGE_NAME);
@@ -22,17 +23,19 @@ export interface MenuImageStore {
 export function postgresMenuImageStore(sql: Sql): MenuImageStore {
   return {
     async save(tenantId, images) {
-      for (const image of images) {
-        await sql`
-          INSERT INTO menu_images (tenant_id, name, bytes) VALUES (${tenantId}, ${image.name}, ${image.bytes})
-          ON CONFLICT (tenant_id, name) DO NOTHING
-        `;
-      }
+      await inTenant(sql, { tenantId }, async (tx) => {
+        for (const image of images) {
+          await tx`
+            INSERT INTO menu_images (tenant_id, name, bytes) VALUES (${tenantId}, ${image.name}, ${image.bytes})
+            ON CONFLICT (tenant_id, name) DO NOTHING
+          `;
+        }
+      });
     },
     async present(tenantId, names) {
-      const rows = await sql<{ name: string }[]>`
+      const rows = await inTenant(sql, { tenantId }, (tx) => tx<{ name: string }[]>`
         SELECT name FROM menu_images WHERE tenant_id = ${tenantId} AND name = ANY(${names}::text[])
-      `;
+      `);
       return rows.map((row) => row.name);
     },
     async read(name) {

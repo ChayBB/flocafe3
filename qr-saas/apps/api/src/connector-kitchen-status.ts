@@ -1,4 +1,5 @@
 import type { Sql } from 'postgres';
+import { inTenant } from './tenant-scope';
 
 export const kitchenStatuses = ['pending', 'preparing', 'ready', 'served', 'cancelled'] as const;
 export type KitchenStatus = typeof kitchenStatuses[number];
@@ -23,7 +24,7 @@ export async function recordKitchenStatus(
   { tenantId, branchId, installationId }: { tenantId: string; branchId: string; installationId: string | null },
   input: { order_id: string; statuses: KitchenStatus[] },
 ): Promise<'updated' | 'missing' | 'conflict'> {
-  return sql.begin(async (tx) => {
+  return inTenant(sql, { tenantId, branchId }, async (tx) => {
     const [order] = await tx`
       SELECT o.id, o.status FROM orders o
       JOIN table_sessions s ON (s.id, s.tenant_id, s.branch_id) = (o.table_session_id, o.tenant_id, o.branch_id)

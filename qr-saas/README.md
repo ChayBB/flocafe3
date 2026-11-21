@@ -1,6 +1,6 @@
 # QR SaaS — Debian 13 / Elysia / Bun / Caddy / PostgreSQL / Redis
 
-**Status: staging integration.** The core API, PostgreSQL outbox, scoped connector credentials and integrated FloCafe order delivery support testing. Real PromptPay verification, tenant-scoped staff RBAC and PostgreSQL RLS still need implementation before a production rollout. See `docs/CODEX_TASKS.md`.
+**Status: staging integration.** The core API, PostgreSQL outbox, scoped connector credentials and integrated FloCafe order delivery support testing. Real PromptPay verification and tenant-scoped staff RBAC still need implementation before a production rollout. See `docs/CODEX_TASKS.md`.
 
 ## Quick start
 1. Install Docker Compose on Debian 13: `sudo bash scripts/deploy-debian13.sh` (review firewall/SSH first).
@@ -13,7 +13,8 @@
 
 ## Notes
 - No card data is processed or stored. PromptPay integration is a Codex P0 task, not a working payment gateway.
-- Cash confirmation route is a bootstrap example only; replace with authenticated branch-scoped staff permissions before launch.
+- Payments are recorded on the POS. The Cloud has no payment confirmation route.
+- Row-level security keeps each branch's rows apart. Connector and guest requests run inside a transaction that sets `app.tenant_id` and `app.branch_id` and switches to the `qr_app` role (`apps/api/src/tenant-scope.ts`). Token lookups, admin routes and the outbox worker run as the database owner. Every new table needs a policy in its migration, and `tenant-isolation.test.ts` checks the two-shop case.
 - Cloud stickers use a public table ID. The guest session endpoint issues short-lived tokens for active POS tables without a manual opening step. POS synchronization repairs previously closed stickers. Ordering pauses only while a printed bill awaits cashier receipt confirmation.
 - `outbox_events` are durably handed off to `connector_deliveries`; Redis Pub/Sub is only an optimization.
 - Never expose PostgreSQL or Redis ports to the Internet.
