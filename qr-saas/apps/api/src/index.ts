@@ -18,6 +18,7 @@ import { attemptLimiter, createPairingCode, redeemPairingCode } from './pairing'
 import { portal } from './portal';
 import { connectorMenuChanges } from './menu-changes';
 import { connectorReports } from './reports';
+import { moduleEnabled } from './modules';
 const sql=postgres(process.env.DATABASE_URL!,{max:12});
 const redis=new Redis(process.env.REDIS_URL!);
 const adminSecret=process.env.ADMIN_BOOTSTRAP_TOKEN!;
@@ -235,6 +236,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
     if(prior.request_hash!==hash||prior.table_id!==session.table_id||!sameCycle)return err(409,'idempotency key reused with different table or payload');
     return {order_id:prior.order_id,replayed:true};
    }
+   if(!(await moduleEnabled(tx,session.tenant_id,session.branch_id,'qr_ordering')))return Response.json({error:'qr_ordering_disabled',code:'qr_ordering_disabled'},{status:403,headers:{'Cache-Control':'no-store'}});
    if(!table)return err(409,'table closed');
    if(table.bill_awaiting_payment)return Response.json({error:'bill_awaiting_payment',code:'bill_awaiting_payment'},
      {status:409,headers:{'Cache-Control':'no-store'}});

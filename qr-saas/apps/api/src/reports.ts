@@ -2,6 +2,7 @@ import { Elysia, t } from 'elysia';
 import type { Sql } from 'postgres';
 import type { ConnectorIdentity } from './connector-auth';
 import { inTenant } from './tenant-scope';
+import { branchesWithModule, moduleEnabled } from './modules';
 
 export const MAX_REPORT_DAYS = 370;
 const MAX_REPORT_BYTES = 128_000;
@@ -31,15 +32,15 @@ const dateMs = (date: string) => Date.parse(`${date}T00:00:00Z`);
 
 function totals(rows: DailyReport[]) {
   const sum = (pick: (row: DailyReport) => Num) => rows.reduce((acc, row) => acc + n(pick(row)), 0);
-  const net = sum((r) => r.sales.net);
-  const knownCostSales = sum((r) => r.cost.known_cost_sales);
-  const ingredient = sum((r) => r.cost.ingredient);
+  const net = sum((r) => r.sales?.net);
+  const knownCostSales = sum((r) => r.cost?.known_cost_sales);
+  const ingredient = sum((r) => r.cost?.ingredient);
   const foodCost = knownCostSales > 0 ? (ingredient / knownCostSales) * net : null;
-  const labor = sum((r) => r.cost.labor);
-  const expenses = sum((r) => r.cost.expenses?.reduce((acc, e) => acc + n(e.amount), 0));
-  const bills = sum((r) => r.sales.bills);
-  const orders = sum((r) => r.sales.orders);
-  const cancelled = sum((r) => r.sales.cancelled_orders);
+  const labor = sum((r) => r.cost?.labor);
+  const expenses = sum((r) => r.cost?.expenses?.reduce((acc, e) => acc + n(e.amount), 0));
+  const bills = sum((r) => r.sales?.bills);
+  const orders = sum((r) => r.sales?.orders);
+  const cancelled = sum((r) => r.sales?.cancelled_orders);
   let occupied = 0;
   let capacity = 0;
   for (const row of rows) {
@@ -49,39 +50,39 @@ function totals(rows: DailyReport[]) {
       capacity += row.tables.count * 60;
     });
   }
-  const timed = sum((r) => r.kitchen.timed);
-  const visits = sum((r) => r.customers.member_visits);
-  const staffDays = sum((r) => r.staff.on_duty);
+  const timed = sum((r) => r.kitchen?.timed);
+  const visits = sum((r) => r.customers?.member_visits);
+  const staffDays = sum((r) => r.staff?.on_duty);
   const profit = foodCost === null ? null : net - foodCost - labor - expenses;
   return {
     net: round(net),
-    gross: round(sum((r) => r.sales.gross)),
-    refunds: round(sum((r) => r.sales.refunds)),
-    discounts: round(sum((r) => r.sales.discounts)),
+    gross: round(sum((r) => r.sales?.gross)),
+    refunds: round(sum((r) => r.sales?.refunds)),
+    discounts: round(sum((r) => r.sales?.discounts)),
     bills,
     orders,
     cancelled_orders: cancelled,
-    guests: sum((r) => r.sales.guests),
-    guests_estimated: rows.some((r) => r.sales.guests_estimated),
+    guests: sum((r) => r.sales?.guests),
+    guests_estimated: rows.some((r) => r.sales?.guests_estimated),
     aov: bills ? round(net / bills) : 0,
     table_utilization: capacity ? round(occupied / capacity, 4) : null,
     food_cost: foodCost === null ? null : round(foodCost),
     food_cost_coverage: knownCostSales > 0 && net > 0 ? round(knownCostSales / net, 4) : 0,
     labor: round(labor),
-    labor_complete: rows.every((r) => r.cost.labor_complete !== false),
+    labor_complete: rows.every((r) => r.cost?.labor_complete !== false),
     expenses: round(expenses),
     profit: profit === null ? null : round(profit),
     margin: profit === null || !net ? null : round(profit / net, 4),
     kitchen_timed: timed,
-    avg_wait_minutes: timed ? round(sum((r) => r.kitchen.wait_minutes) / timed, 1) : null,
-    avg_prep_minutes: timed ? round(sum((r) => r.kitchen.prep_minutes) / timed, 1) : null,
-    on_time_rate: timed ? round(sum((r) => r.kitchen.on_time) / timed, 4) : null,
-    on_time_minutes: rows.find((r) => r.kitchen?.on_time_minutes)?.kitchen.on_time_minutes ?? 20,
+    avg_wait_minutes: timed ? round(sum((r) => r.kitchen?.wait_minutes) / timed, 1) : null,
+    avg_prep_minutes: timed ? round(sum((r) => r.kitchen?.prep_minutes) / timed, 1) : null,
+    on_time_rate: timed ? round(sum((r) => r.kitchen?.on_time) / timed, 4) : null,
+    on_time_minutes: rows.find((r) => r.kitchen?.on_time_minutes)?.kitchen?.on_time_minutes ?? 20,
     cancel_rate: orders + cancelled ? round(cancelled / (orders + cancelled), 4) : 0,
-    new_members: sum((r) => r.customers.new_members),
+    new_members: sum((r) => r.customers?.new_members),
     member_visits: visits,
-    repeat_members: sum((r) => r.customers.repeat_members),
-    promo_rate: orders ? round(sum((r) => r.customers.promo_orders) / orders, 4) : 0,
+    repeat_members: sum((r) => r.customers?.repeat_members),
+    promo_rate: orders ? round(sum((r) => r.customers?.promo_orders) / orders, 4) : 0,
     staff_days: staffDays,
     sales_per_staff_day: staffDays ? round(net / staffDays) : null,
     bills_per_staff_day: staffDays ? round(bills / staffDays, 1) : null,
@@ -96,16 +97,17 @@ function merge<T>(rows: DailyReport[], pick: (row: DailyReport) => T[] | undefin
 
 /** The owner dashboard for a date range, compared with the same number of days just before it. */
 export async function ownerDashboard(sql: Sql, tenantId: string, input: { from: string; to: string; branchId: string | null }) {
+  const allowed = input.branchId ? [input.branchId] : await branchesWithModule(sql, tenantId, 'reports');
   const days = Math.round((dateMs(input.to) - dateMs(input.from)) / DAY_MS) + 1;
   const prevTo = isoDate(dateMs(input.from) - DAY_MS);
   const prevFrom = isoDate(dateMs(input.from) - days * DAY_MS);
   const branches = await sql<{ id: string; name: string }[]>`
-    SELECT id, name FROM branches WHERE tenant_id = ${tenantId} ORDER BY created_at, name`;
+    SELECT id, name FROM branches WHERE tenant_id = ${tenantId} AND id = ANY(${allowed}::uuid[]) ORDER BY created_at, name`;
   const rows = await sql<{ branch_id: string; business_date: string; report: DailyReport; updated_at: Date }[]>`
     SELECT branch_id, to_char(business_date, 'YYYY-MM-DD') AS business_date, report, updated_at
     FROM branch_daily_reports
     WHERE tenant_id = ${tenantId} AND business_date BETWEEN ${prevFrom} AND ${input.to}
-      AND (${input.branchId}::uuid IS NULL OR branch_id = ${input.branchId})`;
+      AND branch_id = ANY(${allowed}::uuid[])`;
   const current = [...rows].filter((r) => r.business_date >= input.from);
   const previous = rows.filter((r) => r.business_date < input.from);
   const reports = current.map((r) => r.report);
@@ -135,14 +137,14 @@ export async function ownerDashboard(sql: Sql, tenantId: string, input: { from: 
   const [target] = month
     ? await sql<{ target: string | null }[]>`
         SELECT sum(target)::text AS target FROM branch_sales_targets
-        WHERE tenant_id = ${tenantId} AND month = ${month} AND (${input.branchId}::uuid IS NULL OR branch_id = ${input.branchId})`
+        WHERE tenant_id = ${tenantId} AND month = ${month} AND branch_id = ANY(${allowed}::uuid[])`
     : [];
   let monthNet: number | null = null;
   if (month) {
     const [row] = await sql<{ net: string | null }[]>`
       SELECT sum((report->'sales'->>'net')::numeric)::text AS net FROM branch_daily_reports
       WHERE tenant_id = ${tenantId} AND date_trunc('month', business_date) = ${month}::date
-        AND (${input.branchId}::uuid IS NULL OR branch_id = ${input.branchId})`;
+        AND branch_id = ANY(${allowed}::uuid[])`;
     monthNet = row?.net ? round(Number(row.net)) : 0;
   }
 
@@ -189,6 +191,8 @@ export function connectorReports({ sql, authorize }: { sql: Sql; authorize(reque
   return new Elysia().post('/api/v1/connectors/reports', async ({ request, body }) => {
     const scope = await authorize(request);
     if (!scope) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+    if (!(await moduleEnabled(sql, scope.tenantId, scope.branchId, 'reports')))
+      return new Response(JSON.stringify({ error: 'module_disabled', code: 'module_disabled' }), { status: 403 });
     const today = Date.now();
     const accepted = body.reports.filter((report) => {
       const at = dateMs(report.business_date);

@@ -1,3 +1,4 @@
+import { moduleEnabled } from './modules';
 import { Elysia, t } from 'elysia';
 import type { Sql } from 'postgres';
 import { sha256, token } from '../../../packages/shared/src/index';
@@ -157,6 +158,8 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         `;
           if (!table) return reply(409, { error: 'table closed' });
           await enterTenant(tx, { tenantId: table.tenant_id, branchId: table.branch_id });
+          if (!(await moduleEnabled(tx, table.tenant_id, table.branch_id, 'qr_ordering')))
+            return reply(403, { error: 'qr_ordering_disabled', code: 'qr_ordering_disabled' });
           const [active] = await tx`
           SELECT COUNT(*)::int AS count FROM table_sessions
           WHERE table_id = ${table.id} AND revoked_at IS NULL AND expires_at > now()

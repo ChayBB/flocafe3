@@ -779,6 +779,15 @@ without names, phone numbers, or user IDs. The delivery loop sends today and yes
 previous 62 days, a week every 30 seconds. The Cloud keeps the latest copy of each day per branch, and
 an older Cloud that returns 404 is retried hourly.
 
+**Branch modules.** A portal administrator turns three Cloud modules on or off per branch:
+`qr_ordering`, `menu_editing`, and `reports` (`branch_modules`; a branch without a row has every
+module on). With QR ordering off, new table sessions and new guest orders return 403
+`qr_ordering_disabled`, while replays of an order already accepted still succeed. With menu editing
+off, the owner's menu routes return 403 `module_disabled` and the connector receives no pending
+changes. With reports off, the Cloud rejects that branch's reports and leaves it out of the owner
+dashboard and sales targets. The POS needs no change, and each toggle is audited as
+`module_enabled` or `module_disabled`.
+
 **Credentials.** Packaged builds and the Windows checkout app encrypt the token with Electron
 `safeStorage` in the application data directory and store only a storage marker in settings. If
 protected storage is unavailable, a replacement fails. The app migrates an older plaintext token only when it can encrypt it

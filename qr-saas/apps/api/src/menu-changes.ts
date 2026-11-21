@@ -3,6 +3,7 @@ import { Elysia, t } from 'elysia';
 import type { Sql } from 'postgres';
 import type { ConnectorIdentity } from './connector-auth';
 import { inTenant } from './tenant-scope';
+import { moduleEnabled } from './modules';
 
 /** The POS refuses larger photos, so owner uploads share its limit. */
 export const OWNER_IMAGE_MAX_BYTES = 96_000;
@@ -112,6 +113,7 @@ export function connectorMenuChanges({ sql, authorize }: Options) {
     .get('/api/v1/connectors/menu-changes', async ({ request }) => {
       const scope = await authorize(request);
       if (!scope) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+      if (!(await moduleEnabled(sql, scope.tenantId, scope.branchId, 'menu_editing'))) return { changes: [] };
       const changes = await inTenant(sql, scope, (tx) => tx`
         SELECT c.id, c.pos_product_id, c.pos_variant_id, c.field, c.base_value, c.new_value, c.force,
                CASE WHEN c.field = 'image' THEN translate(encode(i.bytes, 'base64'), E'

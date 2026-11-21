@@ -154,3 +154,6 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
   .seg { position: static; margin-bottom: 8px; }
   .top-items { margin-top: 0; }
 }
+.modules { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 13px; }
+.module-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.module-toggle input { min-width: 0; width: 16px; height: 16px; accent-color: var(--brand); }

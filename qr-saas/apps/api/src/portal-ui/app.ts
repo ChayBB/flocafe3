@@ -6,7 +6,10 @@ type Branch = {
   name: string;
   pos: { label: string; paired_at: string; last_seen_at: string | null } | null;
   code_expires_at: string | null;
+  modules: Record<ModuleKey, boolean>;
 };
+type ModuleKey = 'qr_ordering' | 'menu_editing' | 'reports';
+const MODULE_KEYS: ModuleKey[] = ['qr_ordering', 'menu_editing', 'reports'];
 type Shop = { id: string; name: string; created_at: string; branches: Branch[] };
 type PortalAccount = {
   id: string; email: string; display_name: string; role: 'admin' | 'owner'; shop: string | null;
@@ -30,6 +33,8 @@ const TEXT = {
     inviteHint: 'ส่งลิงก์นี้ให้เจ้าของบัญชีทางช่องทางส่วนตัว ใช้ได้ครั้งเดียวภายใน 7 วัน', resendInvite: 'สร้างลิงก์ใหม่',
     disable: 'ปิดใช้งาน', enable: 'เปิดใช้งาน', statusActive: 'ใช้งานอยู่', statusInvited: 'รอตั้งรหัสผ่าน', statusDisabled: 'ปิดใช้งาน',
     when: 'เวลา', actor: 'ผู้ทำ', action: 'การกระทำ', branches: 'สาขา', yourShop: 'ร้านของคุณ', noShops: 'ยังไม่มีร้าน',
+    module_qr_ordering: 'สั่งอาหารผ่าน QR', module_menu_editing: 'แก้เมนูจากเว็บ', module_reports: 'รายงานเจ้าของร้าน',
+    modules: 'โมดูล', moduleOff: 'ปิด', moduleConfirmOff: 'ปิด "{module}" ของ {branch}?', noReportBranches: 'ยังไม่มีสาขาที่เปิดโมดูลรายงาน ติดต่อผู้ดูแลระบบ', error_module_disabled: 'สาขานี้ปิดโมดูลนี้อยู่',
     manageMenu: 'จัดการเมนู', dashboard: 'สรุปผู้บริหาร', myShop: 'ร้านและเมนู', back: 'กลับ',
     menuHint: 'แก้ราคาหรือรูปแล้ว POS ของสาขาจะรับไปใช้เองเมื่อออนไลน์ (ภายในประมาณ 1 นาที) ลูกค้า QR เห็นค่าใหม่หลัง POS รับแล้ว',
     menuEmpty: 'สาขานี้ยังไม่ได้เผยแพร่เมนูจาก POS', price: 'ราคา (บาท)', save: 'บันทึก', changePhoto: 'เปลี่ยนรูป', noPhoto: 'ไม่มีรูป',
@@ -61,6 +66,8 @@ const TEXT = {
     inviteHint: 'Send this link privately to the account holder. It works once within 7 days.', resendInvite: 'New link',
     disable: 'Disable', enable: 'Enable', statusActive: 'Active', statusInvited: 'Invited', statusDisabled: 'Disabled',
     when: 'Time', actor: 'By', action: 'Action', branches: 'Branches', yourShop: 'Your shop', noShops: 'No shops yet',
+    module_qr_ordering: 'QR ordering', module_menu_editing: 'Web menu editing', module_reports: 'Owner reports',
+    modules: 'Modules', moduleOff: 'off', moduleConfirmOff: 'Turn off "{module}" for {branch}?', noReportBranches: 'No branch has the reports module on. Contact your administrator.', error_module_disabled: 'This module is turned off for this branch',
     manageMenu: 'Manage menu', dashboard: 'Executive summary', myShop: 'Shop and menu', back: 'Back',
     menuHint: 'Change a price or photo and the branch POS applies it when online (about a minute). QR guests see the new value after the POS applies it.',
     menuEmpty: 'This branch has not published its menu from the POS yet', price: 'Price (THB)', save: 'Save', changePhoto: 'Change photo', noPhoto: 'No photo',
@@ -232,9 +239,32 @@ function branchRow(shop: Shop, branch: Branch, admin: boolean, refresh: () => vo
       showError(error, failure);
     }
   };
+  const moduleLabel = (key: ModuleKey) => tr(`module_${key}` as Key);
+  const toggle = (key: ModuleKey) => {
+    const box = h('input', { type: 'checkbox', checked: branch.modules?.[key] !== false });
+    box.addEventListener('change', async () => {
+      if (!box.checked && !confirm(tr('moduleConfirmOff', { module: moduleLabel(key), branch: `${shop.name} · ${branch.name}` }))) {
+        box.checked = true;
+        return;
+      }
+      try {
+        await api(`/admin/branches/${branch.id}/modules`, { module: key, enabled: box.checked });
+        refresh();
+      } catch (failure) {
+        box.checked = !box.checked;
+        showError(error, failure);
+      }
+    });
+    return h('label', { class: 'module-toggle' }, box, h('span', {}, moduleLabel(key)));
+  };
+  const modules = h('div', { class: 'modules', 'aria-label': tr('modules') }, ...MODULE_KEYS.map((key) => admin
+    ? toggle(key)
+    : h('span', { class: branch.modules?.[key] === false ? 'badge' : 'badge ok' },
+        moduleLabel(key), branch.modules?.[key] === false ? ` · ${tr('moduleOff')}` : '')));
   return h('li', { class: 'branch' },
     h('div', {}, h('strong', {}, branch.name), ' ', posStatus(branch),
-      branch.code_expires_at && h('span', { class: 'muted small' }, ' ', tr('codePending', { time: when(branch.code_expires_at) }))),
+      branch.code_expires_at && h('span', { class: 'muted small' }, ' ', tr('codePending', { time: when(branch.code_expires_at) })),
+      modules),
     admin && h('div', { class: 'actions' },
       h('button', { type: 'button', onclick: issue }, branch.pos ? tr('newCode') : tr('issueCode')),
       branch.pos && h('button', { type: 'button', class: 'danger', onclick: revoke }, tr('revokePos'))),
@@ -352,14 +382,20 @@ async function ownerView(container: HTMLElement) {
     h('p', { class: 'muted' }, tr('yourShop')), h('h2', {}, shop.name), h('h3', {}, tr('branches')),
     h('ul', { class: 'branches' }, ...shop.branches.map((branch) => {
       const row = branchRow(shop, branch, false, () => void ownerView(container));
-      row.append(h('button', { type: 'button', class: 'secondary', onclick: () => void menuView(container, shop, branch) }, tr('manageMenu')));
+      if (branch.modules?.menu_editing !== false)
+        row.append(h('button', { type: 'button', class: 'secondary', onclick: () => void menuView(container, shop, branch) }, tr('manageMenu')));
       return row;
     }))));
 }
 
 async function ownerDashboard(container: HTMLElement) {
   const { shop } = await api<{ shop: Shop }>('/owner/shop');
-  await dashboardView(container, { h, api, lang, branches: shop.branches });
+  const branches = shop.branches.filter((branch) => branch.modules?.reports !== false);
+  if (!branches.length) {
+    container.replaceChildren(h('section', { class: 'card' }, h('p', {}, tr('noReportBranches'))));
+    return;
+  }
+  await dashboardView(container, { h, api, lang, branches });
 }
 
 type MenuItem = { id: string; name: string; category: string | null; price_satang: number; image: string | null };

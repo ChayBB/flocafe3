@@ -1,3 +1,4 @@
+import { MODULES, moduleEnabled, modulesJson, setModule } from './modules';
 import { MAX_REPORT_DAYS, ownerDashboard, setSalesTarget } from './reports';
 import { Elysia, t } from 'elysia';
 import type { Sql } from 'postgres';
@@ -45,7 +46,8 @@ async function listShops(sql: Sql, tenantId: string | null) {
                   FROM connector_installations c
                   WHERE c.tenant_id = b.tenant_id AND c.branch_id = b.id AND c.revoked_at IS NULL),
           'code_expires_at', (SELECT max(p.expires_at) FROM connector_pairing_codes p
-                  WHERE p.tenant_id = b.tenant_id AND p.branch_id = b.id AND p.used_at IS NULL AND p.expires_at > now())
+                  WHERE p.tenant_id = b.tenant_id AND p.branch_id = b.id AND p.used_at IS NULL AND p.expires_at > now()),
+          'modules', ${modulesJson(sql)}
         ) ORDER BY b.created_at)
         FROM branches b WHERE b.tenant_id = t.id
       ), '[]'::jsonb) AS branches
@@ -219,6 +221,18 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       return json({ entries });
     })
 
+    .post('/api/v1/portal/admin/branches/:branchId/modules', async ({ request, params, body }) => {
+      const user = await guard(request, 'admin');
+      if (user instanceof Response) return user;
+      const branch = await branchOf(params.branchId);
+      if (!branch) return fail(404, 'branch_not_found');
+      await setModule(sql, branch.tenant_id, branch.id, body.module, body.enabled);
+      await audit(sql, { userId: user.id, action: body.enabled ? 'module_enabled' : 'module_disabled', tenantId: branch.tenant_id, branchId: branch.id, detail: { module: body.module } });
+      return json({ ok: true });
+    }, {
+      params: t.Object({ branchId: Uuid }),
+      body: t.Object({ module: t.Union(MODULES.map((m) => t.Literal(m))), enabled: t.Boolean() }),
+    })
     .get('/api/v1/portal/owner/shop', async ({ request }) => {
       const user = await guard(request, 'owner');
       if (user instanceof Response) return user;
@@ -233,6 +247,7 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       if (query.branch) {
         const branch = await branchOf(query.branch);
         if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+        if (!(await moduleEnabled(sql, branch.tenant_id, branch.id, 'reports'))) return fail(403, 'module_disabled');
       }
       return json(await ownerDashboard(sql, user.tenant_id!, { from: query.from, to: query.to, branchId: query.branch ?? null }));
     }, { query: t.Object({ from: ReportDate, to: ReportDate, branch: t.Optional(Uuid) }) })
@@ -241,6 +256,7 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       if (user instanceof Response) return user;
       const branch = await branchOf(params.branchId);
       if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      if (!(await moduleEnabled(sql, branch.tenant_id, branch.id, 'reports'))) return fail(403, 'module_disabled');
       await setSalesTarget(sql, branch.tenant_id, branch.id, body.month, body.target);
       await audit(sql, { userId: user.id, action: 'sales_target_set', tenantId: branch.tenant_id, branchId: branch.id, detail: { month: body.month, target: body.target } });
       return json({ ok: true });
@@ -253,6 +269,7 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       if (user instanceof Response) return user;
       const branch = await branchOf(params.branchId);
       if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      if (!(await moduleEnabled(sql, branch.tenant_id, branch.id, 'menu_editing'))) return fail(403, 'module_disabled');
       return json(await branchMenu(sql, branch.tenant_id, branch.id));
     }, { params: t.Object({ branchId: Uuid }) })
     .post('/api/v1/portal/owner/branches/:branchId/menu/:itemId/price', async ({ request, params, body }) => {
@@ -260,6 +277,7 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       if (user instanceof Response) return user;
       const branch = await branchOf(params.branchId);
       if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      if (!(await moduleEnabled(sql, branch.tenant_id, branch.id, 'menu_editing'))) return fail(403, 'module_disabled');
       const result = await requestMenuChange(sql, { tenantId: branch.tenant_id, branchId: branch.id, userId: user.id },
         params.itemId, { field: 'price', value: String(body.price_satang) });
       if (!result) return fail(404, 'item_not_found');
@@ -271,6 +289,7 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       if (user instanceof Response) return user;
       const branch = await branchOf(params.branchId);
       if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      if (!(await moduleEnabled(sql, branch.tenant_id, branch.id, 'menu_editing'))) return fail(403, 'module_disabled');
       const image = ownerImage(body.data);
       if (!image) return fail(400, 'image_invalid');
       const result = await requestMenuChange(sql, { tenantId: branch.tenant_id, branchId: branch.id, userId: user.id },
