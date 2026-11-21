@@ -5,6 +5,7 @@ export interface CloudMenuItem {
   name: string;
   category: string | null;
   price_satang: number;
+  image?: string;
   addon_groups?: {
     name: string;
     min: number;
@@ -94,7 +95,9 @@ export function presentCloudMenu(items: CloudMenuItem[], snapshot?: PosMenuPrese
         })),
       };
     });
-    if (presentation?.image) images.set(id, presentation.image);
+    const cloudImage = lines.find((item) => item.image)?.image;
+    const image = cloudImage ? `/api/v1/menu-images/${cloudImage}` : presentation?.image;
+    if (image) images.set(id, image);
     orderItemIds.set(id, base.id);
     products.push({
       id,
@@ -104,7 +107,7 @@ export function presentCloudMenu(items: CloudMenuItem[], snapshot?: PosMenuPrese
       variants,
       addon_groups,
       tags: presentation?.tags ?? null,
-      has_image: Boolean(presentation?.image),
+      has_image: Boolean(image),
       is_active: true,
       sale_unit: 'each',
       allow_fractional_quantity: false,

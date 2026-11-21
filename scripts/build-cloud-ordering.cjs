@@ -30,7 +30,10 @@ function configuredStaffUrl() {
 }
 
 function exportPresentation() {
-  const db = new DatabaseSync(path.join(root, 'flo.db'), { readOnly: true });
+  const dbPath = process.env.FLO_E2E_DB_PATH
+    ? path.resolve(process.env.FLO_E2E_DB_PATH)
+    : path.join(root, 'flo.db');
+  const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const categories = db
       .prepare(`

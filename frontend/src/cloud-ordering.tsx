@@ -606,7 +606,10 @@ function Ordering() {
             showImages
             imageOf={(product) => {
               const file = presentation.images.get(product.id);
-              return file && /^menu-images\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/.test(file)
+              return file &&
+                /^(?:menu-images|\/api\/v1\/menu-images)\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/.test(
+                  file,
+                )
                 ? assetUrl(file)
                 : undefined;
             }}

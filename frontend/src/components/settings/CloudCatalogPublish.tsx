@@ -11,12 +11,14 @@ export function CloudCatalogPublish() {
   const { confirm, ConfirmDialog } = useConfirm();
   const [busy, setBusy] = useState(false);
   const [published, setPublished] = useState<number | null>(null);
+  const [imagesSkipped, setImagesSkipped] = useState(false);
   const [error, setError] = useState('');
 
   async function publish() {
     setBusy(true);
     setError('');
     setPublished(null);
+    setImagesSkipped(false);
     try {
       const { data } = await api.get('/qr-cloud/catalog');
       if (
@@ -30,6 +32,7 @@ export function CloudCatalogPublish() {
         fingerprint: data.fingerprint,
       });
       setPublished(result.count);
+      setImagesSkipped(result.images === null);
     } catch (failure) {
       const response = (failure as { response?: { data?: { code?: string } } })?.response;
       setError(response?.data?.code ?? 'unknown');
@@ -52,6 +55,7 @@ export function CloudCatalogPublish() {
         {t('qcCatalogPreview')}
       </Button>
       {published !== null && <p role="status">{t('qcCatalogPublished', { count: published })}</p>}
+      {imagesSkipped && <p className="text-muted-foreground">{t('qcCatalogImagesSkipped')}</p>}
       {error && (
         <p role="alert" className="text-destructive">
           {t('qcInboxActionError', { code: error })}

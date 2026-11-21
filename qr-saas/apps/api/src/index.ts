@@ -11,6 +11,7 @@ import { acknowledgeDelivery } from './connector-ack';
 import { kitchenStatuses, recordKitchenStatus } from './connector-kitchen-status';
 import { connectorAuthorizer, issueConnectorToken } from './connector-auth';
 import { publishCatalog } from './catalog-sync';
+import { MENU_IMAGE_NAME, menuImages, postgresMenuImageStore } from './menu-images';
 import { AddonGroups, AddonSelection, resolveCatalogAddons, type AddonGroup } from './catalog-addons';
 const sql=postgres(process.env.DATABASE_URL!,{max:12});
 const redis=new Redis(process.env.REDIS_URL!);
@@ -29,7 +30,7 @@ async function createTableSession(scope: typeof tableSessionScope.static) {
   const secret = token();
   const [row] = await sql<{ id: string; expires_at: Date }[]>`
     INSERT INTO table_sessions(tenant_id, branch_id, table_id, token_hash, expires_at)
-    SELECT tenant_id, branch_id, id, ${sha256(secret)}, now() + interval '365 days'
+    SELECT tenant_id, branch_id, id, ${sha256(secret)}, (date_trunc('day', now() AT TIME ZONE 'Asia/Bangkok') + CASE WHEN (now() AT TIME ZONE 'Asia/Bangkok')::time < time '07:00' THEN interval '7 hours' ELSE interval '1 day 7 hours' END) AT TIME ZONE 'Asia/Bangkok'
     FROM dining_tables
     WHERE id = ${scope.table_id} AND tenant_id = ${scope.tenant_id} AND branch_id = ${scope.branch_id}
     RETURNING id, expires_at
@@ -39,6 +40,7 @@ async function createTableSession(scope: typeof tableSessionScope.static) {
 
 const app=new Elysia({ websocket: connectorWebSocketOptions })
 .use(posTableQr({ sql, authorize: (request) => authorizeConnector(request, 'tables.write'), publicOrigin: process.env.QR_ORDERING_PUBLIC_ORIGIN }))
+.use(menuImages({ store: postgresMenuImageStore(sql), authorize: (request) => authorizeConnector(request, 'catalog.write') }))
 .use(menuPreview({
   secret: adminSecret,
   isAdmin,
@@ -153,6 +155,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
   pos_variant_id:t.Union([t.Null(),t.String({minLength:1,maxLength:128})]),name:t.String({minLength:1,maxLength:200}),
   category:t.Union([t.Null(),t.String({maxLength:120})]),price_satang:t.Integer({minimum:0,maximum:100000000}),
   addon_groups:t.Optional(AddonGroups),
+  image:t.Optional(t.String({pattern:MENU_IMAGE_NAME})),
  }),{minItems:1,maxItems:1000}),
 })})
 .get('/api/v1/connectors/guest-settings',async({request})=>{
@@ -187,7 +190,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
          ))`;
   if(!scope)return secret ? err(401,'invalid session') : err(404,'table not found');
   const [branch]=await tx`SELECT menu_revision,guest_scroll_percent FROM branches WHERE tenant_id=${scope.tenant_id} AND id=${scope.branch_id} FOR SHARE`;
-  const items=await tx`SELECT id,name,price_satang,category,addon_groups FROM menu_items WHERE tenant_id=${scope.tenant_id} AND branch_id=${scope.branch_id} AND available=true ORDER BY category,name,id`;
+  const items=await tx`SELECT id,name,price_satang,category,addon_groups,image FROM menu_items WHERE tenant_id=${scope.tenant_id} AND branch_id=${scope.branch_id} AND available=true ORDER BY category,name,id`;
   return Response.json({items,menu_revision:branch?.menu_revision??null,scroll_percent:branch?.guest_scroll_percent??null},{headers:{'Cache-Control':'no-store'}});
  });
 })

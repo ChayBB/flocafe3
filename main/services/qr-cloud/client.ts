@@ -289,6 +289,13 @@ export function readConnectorCapabilities(options: FetchEventsOptions): Promise<
   return requestConnectorJson(options, '/api/v1/connectors/capabilities');
 }
 
+export function connectorMenuImages(
+  options: FetchEventsOptions,
+  body: { names: string[]; images?: { name: string; data: string }[] },
+): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/menu-images', JSON.stringify(body));
+}
+
 export function connectorCatalog(
   options: FetchEventsOptions,
   catalog?: {

@@ -1,7 +1,31 @@
 import { createHash } from 'node:crypto';
 import { getDatabase } from '../../db';
 import { getTenantCurrency } from '../refund';
+import { QrCloudClientError } from './client';
 import { CloudOrderError } from './order-acceptance';
+
+const MAX_IMAGE_BYTES = 96_000;
+const MAX_UPLOAD_JSON_BYTES = 200_000;
+const IMAGE_DATA_URL = /^data:image\/(webp|png|jpeg|jpg|gif);base64,([A-Za-z0-9+/]+={0,2})$/;
+const SIGNATURES: Record<string, (bytes: Buffer) => boolean> = {
+  png: (b) =>
+    b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  jpeg: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  gif: (b) => /^GIF8[79]a$/.test(b.subarray(0, 6).toString('latin1')),
+  webp: (b) =>
+    b.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    b.subarray(8, 12).toString('latin1') === 'WEBP',
+};
+
+/** Content-addressed name and bytes of a product photo, or null when it cannot be published. */
+export function catalogImageOf(imageUrl: string | null | undefined) {
+  const match = IMAGE_DATA_URL.exec(imageUrl ?? '');
+  if (!match) return null;
+  const ext = match[1] === 'jpg' ? 'jpeg' : match[1];
+  const bytes = Buffer.from(match[2], 'base64');
+  if (!bytes.length || bytes.length > MAX_IMAGE_BYTES || !SIGNATURES[ext](bytes)) return null;
+  return { name: `${createHash('sha256').update(bytes).digest('hex')}.${ext}`, bytes };
+}
 
 export function buildCloudCatalog() {
   const db = getDatabase();
@@ -9,7 +33,7 @@ export function buildCloudCatalog() {
   const rows = db
     .prepare(`
     SELECT p.id AS pos_product_id, v.id AS pos_variant_id, p.name, v.name AS variant_name,
-      c.name AS category, p.category_id, coalesce(v.price, p.price) AS price
+      c.name AS category, p.category_id, coalesce(v.price, p.price) AS price, p.image_url
     FROM products p
     LEFT JOIN categories c ON c.id = p.category_id
     LEFT JOIN product_variants v ON v.product_id = p.id AND v.is_active = 1
@@ -26,6 +50,7 @@ export function buildCloudCatalog() {
     category: string | null;
     category_id: string | null;
     price: number;
+    image_url: string | null;
   }[];
   const groupQuery = db.prepare(`
     SELECT id, name, is_required, min_selection, max_selection, allow_multiple_quantities
@@ -38,6 +63,7 @@ export function buildCloudCatalog() {
     SELECT id, name, ROUND(price * 100) AS price_satang FROM addons
     WHERE addon_group_id = ? AND is_active = 1 ORDER BY sort_order, id
   `);
+  const images = new Map<string, Buffer>();
   const items = rows.flatMap((row) => {
     const addonGroups =
       row.price === 0
@@ -62,6 +88,8 @@ export function buildCloudCatalog() {
           }));
     if (addonGroups.some((group) => group.min > 0 && group.options.length === 0)) return [];
     const groups = addonGroups.filter((group) => group.options.length > 0);
+    const image = catalogImageOf(row.image_url);
+    if (image) images.set(image.name, image.bytes);
     return [
       {
         external_id: row.pos_variant_id ? `variant:${row.pos_variant_id}` : row.pos_product_id,
@@ -71,6 +99,7 @@ export function buildCloudCatalog() {
         category: row.category,
         price_satang: Math.round(row.price * 100),
         ...(groups.length ? { addon_groups: groups } : {}),
+        ...(image ? { image: image.name } : {}),
       },
     ];
   });
@@ -91,5 +120,57 @@ export function buildCloudCatalog() {
   ) {
     throw new CloudOrderError('catalog_invalid');
   }
-  return { items, fingerprint: createHash('sha256').update(json).digest('hex') };
+  return { items, images, fingerprint: createHash('sha256').update(json).digest('hex') };
+}
+
+export interface CatalogImageRequest {
+  names: string[];
+  images?: { name: string; data: string }[];
+}
+
+function missingOf(response: unknown, names: string[]) {
+  const missing = (response as { missing?: unknown } | null)?.missing;
+  if (
+    !Array.isArray(missing) ||
+    missing.some((name) => typeof name !== 'string' || !names.includes(name))
+  )
+    throw new QrCloudClientError('bad_response', 'invalid_menu_images');
+  return missing as string[];
+}
+
+/**
+ * Uploads the photos the Cloud does not hold yet, before the catalog that names them.
+ * Returns false when the Cloud predates menu photos, so the catalog goes out without them.
+ */
+export async function uploadCatalogImages(
+  send: (body: CatalogImageRequest) => Promise<unknown>,
+  images: Map<string, Buffer>,
+): Promise<boolean> {
+  const names = [...images.keys()];
+  if (!names.length) return true;
+  let missing: string[];
+  try {
+    missing = missingOf(await send({ names }), names);
+  } catch (error) {
+    if (error instanceof QrCloudClientError && error.detail === 'HTTP 404') return false;
+    throw error;
+  }
+  let batch: { name: string; data: string }[] = [];
+  let size = 0;
+  const flush = async () => {
+    if (!batch.length) return;
+    const sent = batch.map((image) => image.name);
+    if (missingOf(await send({ names: sent, images: batch }), sent).length)
+      throw new QrCloudClientError('bad_response', 'menu_image_rejected');
+    batch = [];
+    size = 0;
+  };
+  for (const name of new Set(missing)) {
+    const data = images.get(name)!.toString('base64');
+    if (size + data.length + 100 > MAX_UPLOAD_JSON_BYTES) await flush();
+    batch.push({ name, data });
+    size += data.length + 100;
+  }
+  await flush();
+  return true;
 }

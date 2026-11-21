@@ -57,12 +57,13 @@ order.aiwittaya.com {
     # Each deploy publishes into a new /menu-ui/<release>/ folder, so its files never change in place.
     @versionedAssets path /menu-ui/*
     header @versionedAssets >Cache-Control "public, max-age=31536000, immutable"
-    @unversioned not path /menu-ui/*
+    # Menu photos are content-addressed by sha256, so the API marks them immutable itself.
+    @unversioned not path /menu-ui/* /api/v1/menu-images/*
     header @unversioned >Cache-Control "no-store"
 
     @customerMenu {
         method GET
-        path /api/v1/menu /api/v1/table-session/orders
+        path /api/v1/menu /api/v1/table-session/orders /api/v1/menu-images/*
     }
     @customerOrder {
         method POST

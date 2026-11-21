@@ -27,11 +27,12 @@ import {
   CONNECTOR_EVENT_ID,
   connectorCatalog,
   connectorGuestSettings,
+  connectorMenuImages,
   manageConnectorTableQr,
   QrCloudClientError,
   readConnectorCapabilities,
 } from '../services/qr-cloud/client';
-import { buildCloudCatalog } from '../services/qr-cloud/catalog';
+import { buildCloudCatalog, uploadCatalogImages } from '../services/qr-cloud/catalog';
 import {
   acceptCloudOrder,
   CloudOrderError,
@@ -185,7 +186,7 @@ router.post(
     try {
       if (req.body?.confirmed !== true)
         return res.status(400).json({ code: 'confirmation_required' });
-      const { items, fingerprint } = buildCloudCatalog();
+      const { items, images, fingerprint } = buildCloudCatalog();
       if (req.body.fingerprint !== fingerprint)
         return res.status(409).json({ code: 'catalog_changed' });
       const config = readConfig();
@@ -217,16 +218,28 @@ router.post(
       ) {
         return res.status(409).json({ code: 'connector_changed' });
       }
+      const withImages = await uploadCatalogImages(
+        (body) =>
+          connectorMenuImages({ ...options, signal: AbortSignal.timeout(config.timeoutMs) }, body),
+        images,
+      );
       const revision = randomUUID();
-      const published = (await connectorCatalog(options, {
-        revision,
-        base_revision: current.revision,
-        items,
-      })) as { revision?: string; count?: number } | null;
+      const published = (await connectorCatalog(
+        { ...options, signal: AbortSignal.timeout(config.timeoutMs) },
+        {
+          revision,
+          base_revision: current.revision,
+          items: withImages ? items : items.map(({ image: _image, ...item }) => item),
+        },
+      )) as { revision?: string; count?: number } | null;
       if (published?.revision !== revision || published.count !== items.length) {
         return res.status(502).json({ code: 'invalid_catalog_revision' });
       }
-      return res.json(published);
+      return res.json({
+        revision: published.revision,
+        count: published.count,
+        images: withImages ? images.size : null,
+      });
     } catch (error) {
       return inboxOrderFailure(res, error);
     }
