@@ -163,3 +163,30 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .modules { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 13px; }
 .module-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .module-toggle input { min-width: 0; width: 16px; height: 16px; accent-color: var(--brand); }
+.owner-shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+.owner-side { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 18px; padding: 18px 12px; background: #13213f; color: #e5e7eb; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
+.brand-mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--brand); color: #fff; font-weight: 800; font-size: 22px; }
+.brand strong { display: block; font-size: 20px; color: #fff; line-height: 1.1; }
+.brand small { color: #fb923c; font-weight: 700; }
+.side-title { display: grid; gap: 2px; padding: 0 6px; }
+.side-title strong { color: #fff; }
+.side-title span { font-size: 13px; color: #cbd5e1; }
+.side-nav { display: grid; gap: 4px; }
+.side-link { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; border: none; color: #e5e7eb; padding: 10px 12px; border-radius: 10px; }
+.side-link:hover { background: rgb(255 255 255 / 0.08); }
+.side-link.active { background: var(--brand); color: #fff; font-weight: 700; }
+.side-icon { width: 20px; text-align: center; }
+.side-foot { margin-top: auto; display: grid; gap: 2px; border-top: 1px solid rgb(255 255 255 / 0.12); padding-top: 12px; }
+.side-user { padding: 0 12px 6px; font-size: 13px; color: #cbd5e1; }
+.owner-main { min-width: 0; padding: 20px; }
+@media (max-width: 900px) {
+  .owner-shell { grid-template-columns: 1fr; }
+  .owner-side { position: sticky; z-index: 5; height: auto; flex-direction: row; align-items: center; gap: 6px; padding: 8px 10px; overflow-x: auto; }
+  .brand { padding: 0; }
+  .brand > span:last-child, .side-title, .side-user { display: none; }
+  .brand-mark { width: 34px; height: 34px; font-size: 18px; }
+  .side-nav, .side-foot { display: flex; gap: 4px; margin: 0; border: none; padding: 0; }
+  .side-link { width: auto; white-space: nowrap; padding: 8px 10px; font-size: 14px; }
+  .owner-main { padding: 12px; }
+}

@@ -37,7 +37,7 @@ const TEXT = {
     when: 'เวลา', actor: 'ผู้ทำ', action: 'การกระทำ', branches: 'สาขา', yourShop: 'ร้านของคุณ', noShops: 'ยังไม่มีร้าน',
     module_qr_ordering: 'สั่งอาหารผ่าน QR', module_menu_editing: 'แก้เมนูจากเว็บ', module_reports: 'รายงานเจ้าของร้าน',
     modules: 'โมดูล', moduleOff: 'ปิด', moduleConfirmOff: 'ปิด "{module}" ของ {branch}?', noReportBranches: 'ยังไม่มีสาขาที่เปิดโมดูลรายงาน ติดต่อผู้ดูแลระบบ', error_module_disabled: 'สาขานี้ปิดโมดูลนี้อยู่',
-    manageMenu: 'จัดการเมนู', dashboard: 'สรุปผู้บริหาร', myShop: 'ร้านและเมนู', back: 'กลับ',
+    manageMenu: 'จัดการเมนู', dashboard: 'สรุปผู้บริหาร', myShop: 'เมนูและราคา', ownerArea: 'ระบบจัดการร้าน', back: 'กลับ',
     menuHint: 'แก้ราคาหรือรูปแล้ว POS ของสาขาจะรับไปใช้เองเมื่อออนไลน์ (ภายในประมาณ 1 นาที) ลูกค้า QR เห็นค่าใหม่หลัง POS รับแล้ว',
     menuEmpty: 'สาขานี้ยังไม่ได้เผยแพร่เมนูจาก POS', price: 'ราคา (บาท)', save: 'บันทึก', changePhoto: 'เปลี่ยนรูป', noPhoto: 'ไม่มีรูป',
     changes: 'รายการเปลี่ยนแปลง', pending: 'รอ POS รับ', applied: 'POS ใช้แล้ว', conflict: 'ชนกับ POS', kept_pos: 'ใช้ค่าจาก POS',
@@ -72,7 +72,7 @@ const TEXT = {
     when: 'Time', actor: 'By', action: 'Action', branches: 'Branches', yourShop: 'Your shop', noShops: 'No shops yet',
     module_qr_ordering: 'QR ordering', module_menu_editing: 'Web menu editing', module_reports: 'Owner reports',
     modules: 'Modules', moduleOff: 'off', moduleConfirmOff: 'Turn off "{module}" for {branch}?', noReportBranches: 'No branch has the reports module on. Contact your administrator.', error_module_disabled: 'This module is turned off for this branch',
-    manageMenu: 'Manage menu', dashboard: 'Executive summary', myShop: 'Shop and menu', back: 'Back',
+    manageMenu: 'Manage menu', dashboard: 'Executive summary', myShop: 'Menu and prices', ownerArea: 'Shop management', back: 'Back',
     menuHint: 'Change a price or photo and the branch POS applies it when online (about a minute). QR guests see the new value after the POS applies it.',
     menuEmpty: 'This branch has not published its menu from the POS yet', price: 'Price (THB)', save: 'Save', changePhoto: 'Change photo', noPhoto: 'No photo',
     changes: 'Changes', pending: 'Waiting for POS', applied: 'Applied by POS', conflict: 'Conflicts with POS', kept_pos: 'Kept POS value',
@@ -545,6 +545,30 @@ async function menuView(container: HTMLElement, shop: Shop, branch: Branch) {
     h('section', { class: 'card' }, ...(itemRows.length ? itemRows : [h('p', { class: 'muted' }, tr('menuEmpty'))])));
 }
 
+function ownerSidebar() {
+  const icons = { dashboard: '▤', myShop: '☰' } as const;
+  return h('aside', { class: 'owner-side' },
+    h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, 'F'),
+      h('span', {}, h('strong', {}, 'FloCafe'), h('small', {}, 'POS'))),
+    h('div', { class: 'side-title' }, h('strong', {}, 'Executive Dashboard'), h('span', {}, tr('ownerArea'))),
+    h('nav', { class: 'side-nav' }, ...(['dashboard', 'myShop'] as const).map((name) =>
+      h('button', { type: 'button', class: ownerTab === name ? 'side-link active' : 'side-link', 'aria-current': ownerTab === name ? 'page' : undefined,
+        onclick: () => { ownerTab = name; render(); } }, h('span', { class: 'side-icon', 'aria-hidden': 'true' }, icons[name]), tr(name)))),
+    h('div', { class: 'side-foot' },
+      h('span', { class: 'side-user' }, current?.display_name ?? ''),
+      h('button', { type: 'button', class: 'side-link', onclick: () => {
+        lang = lang === 'th' ? 'en' : 'th';
+        localStorage.setItem('flo-portal-lang', lang);
+        document.documentElement.lang = lang;
+        render();
+      } }, lang === 'th' ? 'English' : 'ไทย'),
+      h('button', { type: 'button', class: 'side-link', onclick: async () => {
+        await api('/logout', {}).catch(() => {});
+        current = null;
+        render();
+      } }, tr('signOut'))));
+}
+
 function render() {
   const invite = new URLSearchParams(location.hash.slice(1)).get('invite');
   const body = h('div', { class: 'content' });
@@ -555,10 +579,8 @@ function render() {
   const failed = errorLine();
   const load = (run: (container: HTMLElement) => Promise<void>) => run(view).catch((failure) => showError(failed, failure));
   if (current.role === 'owner') {
-    const ownerTabs = h('nav', { class: 'tabs' }, ...(['dashboard', 'myShop'] as const).map((name) =>
-      h('button', { type: 'button', class: ownerTab === name ? 'tab active' : 'tab', onclick: () => { ownerTab = name; render(); } }, tr(name))));
-    if (ownerTab === 'dashboard') body.classList.add('wide');
-    body.append(ownerTabs, failed, view);
+    const main = h('div', { class: 'owner-main' }, failed, view);
+    root.replaceChildren(h('div', { class: 'owner-shell' }, ownerSidebar(), main));
     return void load(ownerTab === 'dashboard' ? ownerDashboard : ownerView);
   }
   const tabs = h('nav', { class: 'tabs' }, ...(['shops', 'users', 'audit'] as const).map((name) =>
