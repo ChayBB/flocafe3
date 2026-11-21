@@ -72,7 +72,7 @@ test.skipIf(!testUrl)(
       expect(saved.tenant_id).toBe(tenantId);
       expect(saved.branch_id).toBe(branchId);
       expect(Date.parse(sticker.expires_at)).toBeLessThanOrEqual(saved.expires_at.getTime());
-      for (let index = 0; index < 11; index++)
+      for (let index = 0; index < 19; index++)
         expect((await call(guest, { table_key: key })).status).toBe(200);
       expect((await call(guest, { table_key: key })).status).toBe(429);
       expect((await call(connector, { ...table, action: 'close' }, true)).status).toBe(200);

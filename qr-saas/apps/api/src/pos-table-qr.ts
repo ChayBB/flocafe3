@@ -27,7 +27,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
           UPDATE dining_tables d SET name = s.name, bill_awaiting_payment = s.awaiting_payment,
             pos_active_order_numbers = coalesce(s.active_order_numbers, d.pos_active_order_numbers),
             pos_active_orders_synced_at = CASE WHEN s.active_order_numbers IS NOT NULL THEN now() ELSE d.pos_active_orders_synced_at END,
-            qr_ordering_until = CASE WHEN s.active THEN now() + interval '365 days' ELSE NULL END,
+            qr_ordering_until = CASE WHEN s.active THEN (date_trunc('day', now() AT TIME ZONE 'Asia/Bangkok') + CASE WHEN (now() AT TIME ZONE 'Asia/Bangkok')::time < time '07:00' THEN interval '7 hours' ELSE interval '1 day 7 hours' END) AT TIME ZONE 'Asia/Bangkok' ELSE NULL END,
             qr_session_generation = CASE WHEN NOT s.active THEN NULL
               WHEN d.qr_ordering_until > now() THEN coalesce(d.qr_session_generation, gen_random_uuid())
               ELSE gen_random_uuid() END
@@ -115,7 +115,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         INSERT INTO dining_tables (tenant_id, branch_id, name, pos_table_id, pos_installation_id,
           qr_ordering_until, qr_session_generation, bill_awaiting_payment)
         VALUES (${tenantId}, ${branchId}, ${body.name}, ${body.pos_table_id}, ${installationId},
-          now() + interval '365 days', gen_random_uuid(), ${body.awaiting_payment ?? false})
+          (date_trunc('day', now() AT TIME ZONE 'Asia/Bangkok') + CASE WHEN (now() AT TIME ZONE 'Asia/Bangkok')::time < time '07:00' THEN interval '7 hours' ELSE interval '1 day 7 hours' END) AT TIME ZONE 'Asia/Bangkok', gen_random_uuid(), ${body.awaiting_payment ?? false})
         ON CONFLICT (tenant_id, branch_id, pos_table_id) DO UPDATE
         SET name = excluded.name, pos_installation_id = excluded.pos_installation_id,
           qr_ordering_until = excluded.qr_ordering_until,
@@ -161,7 +161,7 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
           SELECT COUNT(*)::int AS count FROM table_sessions
           WHERE table_id = ${table.id} AND revoked_at IS NULL AND expires_at > now()
         `;
-          if (active.count >= 12) return reply(429, { error: 'table device limit' });
+          if (active.count >= 20) return reply(429, { error: 'table device limit' });
           const secret = token();
           await tx`
           INSERT INTO table_sessions (tenant_id, branch_id, table_id, token_hash, expires_at, qr_generation)
