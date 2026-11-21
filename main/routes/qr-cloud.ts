@@ -40,14 +40,7 @@ import {
   pendingCloudOrders,
   previewCloudOrder,
 } from '../services/qr-cloud/order-acceptance';
-import {
-  approveLegacyCutover,
-  activateQrCloudSetup,
-  commitLegacyImport,
-  importLegacyCa,
-  LegacyImportError,
-  previewLegacyImport,
-} from '../services/qr-cloud/legacy-import';
+import { activateQrCloudSetup, QrCloudSetupError } from '../services/qr-cloud/setup';
 import { PairingError, pairQrCloud } from '../services/qr-cloud/pairing';
 import {
   CaCertificateError,
@@ -431,7 +424,7 @@ router.post(
   },
 );
 
-function legacyAction(
+function loopbackAction(
   fields: string[],
   action: (actor: string, body: Record<string, unknown>) => unknown,
 ) {
@@ -453,11 +446,11 @@ function legacyAction(
       const result = await action(String(actor), body as Record<string, unknown>);
       return res.json(result);
     } catch (error) {
-      if (error instanceof LegacyImportError)
+      if (error instanceof QrCloudSetupError)
         return res.status(error.status).json({ code: error.code });
       if (error instanceof QrCloudConfigError || error instanceof CaCertificateError)
         return fail(res, error);
-      return res.status(500).json({ code: 'legacy_import_failed' });
+      return res.status(500).json({ code: 'qr_cloud_activate_failed' });
     }
   };
 }
@@ -487,43 +480,10 @@ router.get('/', requirePermission('settings.view'), (_req: Request, res: Respons
 });
 
 router.post(
-  '/legacy-import/preview',
-  requirePermission('settings.manage'),
-  legacyAction([], (actor) => previewLegacyImport(actor)),
-);
-
-router.post(
-  '/legacy-import/commit',
-  requirePermission('settings.manage'),
-  legacyAction(['preview_id', 'confirm', 'replace_credential'], (actor, body) => {
-    commitLegacyImport(actor, body);
-    return { imported: true, cutover_pending: true };
-  }),
-);
-
-router.post(
-  '/legacy-import/ca',
-  requirePermission('settings.manage'),
-  legacyAction(['confirm', 'expected_fingerprint'], (_actor, body) => {
-    importLegacyCa(body);
-    return caStatus();
-  }),
-);
-
-router.post(
-  '/legacy-import/cutover',
-  requirePermission('settings.manage'),
-  testLimiter,
-  legacyAction(['confirm_legacy_stopped'], (actor, body) =>
-    approveLegacyCutover(actor, body.confirm_legacy_stopped),
-  ),
-);
-
-router.post(
   '/activate',
   requirePermission('settings.manage'),
   testLimiter,
-  legacyAction(['confirm_legacy_stopped'], async (actor, body) => {
+  loopbackAction(['confirm_legacy_stopped'], async (actor, body) => {
     const test = await activateQrCloudSetup(actor, body.confirm_legacy_stopped);
     return { ...test, config: sanitizedConfig(), status: getQrCloudStatus() };
   }),

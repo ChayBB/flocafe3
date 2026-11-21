@@ -8,7 +8,6 @@ import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/hooks/use-confirm';
 import { GuestQrNetworkSettings } from '@/components/settings/GuestQrNetworkSettings';
-import { LegacyCloudConnectorImport } from '@/components/settings/LegacyCloudConnectorImport';
 import { CloudInboxOrders } from '@/components/settings/CloudInboxOrders';
 import { CloudTableQr } from '@/components/settings/CloudTableQr';
 import { CloudCatalogPublish } from '@/components/settings/CloudCatalogPublish';
@@ -711,22 +710,6 @@ export function CloudConnectorSettings({
       {config && (showSetup || config.enabled) && (
         <section className="space-y-3">
           {!config.enabled && <h4 className="text-sm font-semibold">{t('qcSetupStep2')}</h4>}
-          {canManage && (
-            <LegacyCloudConnectorImport
-              cutoverPending={config.cutover_pending}
-              autoInspect={setupOpen}
-              trustedFingerprint={status?.tls.configured ? status.tls.fingerprint_sha256 : null}
-              onUpdated={async () => {
-                setLegacyStopped(false);
-                try {
-                  const { data } = await api.get('/qr-cloud');
-                  apply(data);
-                } catch {
-                  setLoadFailed(true);
-                }
-              }}
-            />
-          )}
           {mode === 'integrated' && (
             <details className="space-y-3 rounded-md border border-border p-3">
               <summary className="cursor-pointer text-sm font-medium">{t('qcSetupManual')}</summary>

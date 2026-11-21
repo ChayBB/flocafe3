@@ -1333,10 +1333,6 @@ counts, TLS fingerprint and `websocket: { available: false }`. `settings.manage`
 | `POST` | `/test` | none | One isolated request: `{ ok, code, detail, latency_ms, checked_at }`; rate-limited to 10 a minute. |
 | `POST` | `/retry` | none | Re-arms the loop. |
 | `POST` | `/enable`, `/disable` | none | Persists the enabled state and updates the connector loop. Enabling by either route or settings update fails with `cutover_required` while `config.cutover_pending` is true. |
-| `POST` | `/legacy-import/preview` | none | Reads the fixed Windows legacy paths. Returns sanitized fields, conflicts, `validation_errors` for the configuration, and separate CA metadata and errors. A valid configuration receives an actor-bound preview ID valid for five minutes. |
-| `POST` | `/legacy-import/commit` | `preview_id`, `confirm: true`, optional `replace_credential: true` | Revalidates the source and current settings, stores the credential securely, and returns `{ imported: true, cutover_pending: true }`. Requires replacement confirmation if a credential exists. |
-| `POST` | `/legacy-import/ca` | `expected_fingerprint`, `confirm: true` | Approves the fixed legacy staging CA during cutover when the supplied fingerprint matches the certificate and the staging root. Refuses a different configured CA. |
-| `POST` | `/legacy-import/cutover` | `confirm_legacy_stopped: true` | Runs a rate-limited connection test. Success clears the hold and leaves polling disabled. Returns the connection test result. |
 | `POST` | `/activate` | `confirm_legacy_stopped: true` when cutover is pending | Tests the saved connection on a disabled integrated Connector. Success enables polling and clears any confirmed cutover hold. Returns the test result, configuration, and status. A failed test leaves polling disabled. Requires a loopback socket. |
 | `POST` | `/inbox/import` | `source_path`, `confirm: true` | Imports standalone `connector.db` events after writing a SQLite snapshot. Existing event IDs are skipped. |
 | `GET` | `/inbox/orders` | none | Also requires `orders.create`. Lists up to 30 pending order event IDs and timestamps. |
@@ -1353,8 +1349,9 @@ counts, TLS fingerprint and `websocket: { available: false }`. `settings.manage`
 
 `GET /diagnostics` and `GET /inbox` need `settings.view` and never include event payloads. Mutations
 refuse a non-loopback `Origin`. The API is bearer-token authenticated, so no cookie session exists
-for a cross-site request to ride. Legacy import operations also require a loopback socket and
-reject unrecognized body fields. A stale preview or a configuration conflict returns HTTP 409.
+for a cross-site request to ride. `POST /activate` also requires a loopback socket and rejects
+unrecognized body fields. A connector that is already enabled or not in integrated mode returns
+HTTP 409, as does a configuration that changed during the connection test.
 
 `requireServerAppAuth` is applied to every route except `/api/health`, `/api/server-app/info`, public product images, the four `/api/guest/*` routes, and the login route, and
 it runs the feature check **before** the token check. Behaviour by condition:

@@ -754,7 +754,7 @@ uses its saved Cloud URL, or `https://qr-ordering.accesscam.org` when the saved 
 staging URL. It stores the token, clears a pending legacy cutover hold, audits
 `qr_cloud_paired`, tests the connection, and starts polling when the test passes. After a failed
 test, the POS stays paired and offers a retry. **Set up manually (advanced)** opens the URL, token,
-CA, and legacy import steps below.
+and CA steps below.
 
 **Owner menu changes.** In the Cloud portal, a shop owner can set a published item's price or
 replace its photo (PNG, JPEG, or WebP up to 96,000 bytes; the portal shrinks larger photos to WebP
@@ -796,25 +796,12 @@ dashboard and sales targets. The POS needs no change, and each toggle is audited
 protected storage is unavailable, a replacement fails. The app migrates an older plaintext token only when it can encrypt it
 successfully. The API returns `has_token` and the result of authentication separately.
 
-**Legacy configuration import.** On the Windows POS, open Cloud QR Ordering in Settings → OrderFlow
-and inspect the legacy files. Preview reads `C:\\QRConnector\\config\\connector.env` and, when present,
-`C:\\QRConnector\\certs\\root.crt`. It reports the URL, polling interval, credential presence,
-certificate metadata including Basic Constraints, and conflicts. A confirmed import selects
-integrated mode and replaces the URL, interval, and credential. Replacing an existing credential
-requires its own confirmation.
-The new encrypted file is staged before SQLite commits the settings and actor-attributed audit
-event. A failed transaction leaves the previous settings and credential active.
-
-Under **Set up manually (advanced)**, choose the Cloud server, set up the token and CA, then test and
-start polling. The
-legacy import can approve the staging CA in the same action after you confirm its fingerprint
-against an independent trusted source. Before starting polling after import, verify that the
-legacy process has stopped and will stay stopped. Confirm that in OrderFlow. The final action
-tests the connection, lifts the cutover hold if present, and starts polling on success. To return
-to the legacy Connector after cutover, disable FloCafe
-polling before restarting the legacy process. The original files remain available. If the import
-replaced earlier FloCafe settings, re-enter the previous URL, interval, and credential from your
-approved records to restore that configuration.
+**Manual setup.** Under **Set up manually (advanced)**, choose the Cloud server, set up the token
+and CA, then test and start polling. An install that still carries a cutover hold from the retired
+Connector configuration import must first confirm in OrderFlow that the old QRConnector process has
+stopped and will stay stopped. `POST /api/qr-cloud/activate` tests the connection, lifts the hold,
+and starts polling on success. To return to the old Connector, disable FloCafe polling before
+restarting it.
 
 **TLS trust.** The staging Cloud uses a Caddy private root CA. `POST /api/qr-cloud/ca/inspect`
 parses a certificate and reports subject, issuer, validity and SHA-256 fingerprint without trusting

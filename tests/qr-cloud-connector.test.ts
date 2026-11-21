@@ -41,7 +41,7 @@ const config = require('../main/services/qr-cloud/config');
 const inbox = require('../main/services/qr-cloud/inbox');
 const connector = require('../main/services/qr-cloud/connector');
 const tls = require('../main/services/qr-cloud/tls');
-const legacyImport = require('../main/services/qr-cloud/legacy-import');
+const setup = require('../main/services/qr-cloud/setup');
 
 const CA_PEM = `-----BEGIN CERTIFICATE-----
 MIIC4zCCAcugAwIBAgIIWAjUhkitXFUwDQYJKoZIhvcNAQELBQAwHzEdMBsGA1UEAxMURmxvQ2Fm
@@ -1170,284 +1170,19 @@ async function main() {
   );
   assertEqualOrThrow(connector.getQrCloudStatus().last_error, null, 'last error is cleared');
 
-  console.log('--- 10. Legacy configuration preview, import, and cutover ---');
-  if (process.platform === 'win32') isPackaged = false;
+  console.log('--- 10. Setup activation and cutover hold ---');
   const db = getDatabase();
-  const actor = 'fixture-legacy-import-owner';
-  const root = path.join(tempRoot, 'legacy');
-  const source = path.join(root, 'config', 'connector.env');
-  const caSource = path.join(root, 'certs', 'root.crt');
-  fs.mkdirSync(path.dirname(source), { recursive: true });
-  fs.mkdirSync(path.dirname(caSource), { recursive: true });
-  assertEqualOrThrow(
-    legacyImport.previewLegacyImport(actor, root).source_found,
-    false,
-    'missing config',
-  );
-  fs.writeFileSync(caSource, CA_PEM);
-  const token = crypto.randomBytes(32).toString('hex');
-  const fixture = (url = 'https://qr-staging.test', credential = token, interval = '5000') =>
-    `# Test fixture\r\nCLOUD_URL="${url}"\r\nCONNECTOR_TOKEN='${credential}'\r\nPOLL_INTERVAL_MS=${interval} # milliseconds\r\nCONNECTOR_HOME=C:\\ignored\r\n`;
-  for (const [value, code] of [
-    [fixture(undefined, ''), 'token_invalid'],
-    [fixture('http://qr-staging.test'), 'cloud_url_not_https'],
-    [fixture('https://qr-staging.test/private'), 'cloud_url_invalid'],
-    [fixture(undefined, undefined, '3000'), 'poll_interval_invalid'],
-    [fixture(undefined, undefined, '5e3'), 'poll_interval_invalid'],
-    [fixture() + 'CLOUD_URL=x', 'legacy_env_invalid'],
-    [fixture() + 'unclosed="value', 'legacy_env_invalid'],
-    [fixture() + 'invalid=' + ' '.repeat(7000) + '"unterminated', 'legacy_env_invalid'],
-  ]) {
-    fs.writeFileSync(source, value);
-    const invalid = legacyImport.previewLegacyImport(actor, root);
-    assertOrThrow(
-      invalid.source_found &&
-        !invalid.ready_for_import &&
-        invalid.preview_id === null &&
-        invalid.validation_errors.includes(code),
-      `preview reports ${code} without authorizing import`,
-    );
-  }
-  fs.writeFileSync(source, 'x'.repeat(8193));
-  expectThrow(
-    () => legacyImport.previewLegacyImport(actor, root),
-    'legacy_file_too_large',
-    'size limit',
-  );
-  fs.writeFileSync(source, fixture('http://qr-staging.test', '', '5000'));
-  const partial = legacyImport.previewLegacyImport(actor, root);
-  assertOrThrow(
-    partial.connector_token_present === false &&
-      partial.poll_interval_ms === 5000 &&
-      partial.cloud_url === null &&
-      partial.validation_errors.join(',') === 'cloud_url_not_https,token_invalid',
-    'partial preview preserves valid fields and reports each invalid field',
-  );
-  fs.writeFileSync(source, fixture());
-  fs.writeFileSync(caSource, 'invalid certificate fixture');
-  const invalidCa = legacyImport.previewLegacyImport(actor, root);
-  assertOrThrow(
-    invalidCa.ca_certificate_found &&
-      invalidCa.ca_certificate === null &&
-      invalidCa.ca_error === 'certificate_invalid' &&
-      !invalidCa.ca_matches_expected,
-    'invalid CA is reported as present and cannot be trusted',
-  );
-  fs.writeFileSync(caSource, CA_PEM);
-  const linkedRoot = path.join(tempRoot, 'linked');
-  fs.mkdirSync(linkedRoot);
-  fs.symlinkSync(path.dirname(source), path.join(linkedRoot, 'config'), 'junction');
-  expectThrow(
-    () => legacyImport.previewLegacyImport(actor, linkedRoot),
-    'legacy_unsafe_file',
-    'linked ancestor',
-  );
-  const currentToken = config.readConnectorSetting();
-  const storedSettings = () => db.prepare('SELECT * FROM settings ORDER BY key').all();
-  const beforeImport = JSON.stringify(storedSettings());
-  const preview = legacyImport.previewLegacyImport(actor, root);
-  assertOrThrow(
-    preview.source_found && preview.ready_for_import,
-    'valid legacy settings are previewed',
-  );
-  assertEqualOrThrow(preview.cloud_url, 'https://qr-staging.test', 'legacy URL previewed');
-  assertEqualOrThrow(preview.poll_interval_ms, 5000, 'legacy interval previewed');
-  assertOrThrow(
-    preview.connector_token_present && preview.conflicts.includes('credential'),
-    'credential conflict detected',
-  );
-  assertOrThrow(
-    preview.ca_certificate.is_ca && !preview.ca_matches_expected,
-    'untrusted CA metadata only',
-  );
-  assertOrThrow(
-    preview.ca_certificate.basic_constraints?.critical &&
-      preview.ca_certificate.basic_constraints.path_length === null,
-    'CA preview exposes the Basic Constraints extension',
-  );
-  assertOrThrow(
-    !JSON.stringify(preview).includes(token) && !JSON.stringify(preview).includes(CA_PEM),
-    'preview redacts secrets and PEM',
-  );
-  assertOrThrow(JSON.stringify(storedSettings()) === beforeImport, 'preview changes no settings');
-  const commit = { preview_id: preview.preview_id, confirm: true, replace_credential: true };
-  expectThrow(
-    () => legacyImport.commitLegacyImport(actor, { ...commit, confirm: false }, root),
-    'confirmation_required',
-    'confirmation',
-  );
-  expectThrow(
-    () => legacyImport.commitLegacyImport(actor, { ...commit, replace_credential: false }, root),
-    'legacy_replace_credential_required',
-    'separate overwrite confirmation',
-  );
-  expectThrow(
-    () => legacyImport.commitLegacyImport('other-user', commit, root),
-    'legacy_preview_stale',
-    'preview is bound to actor',
-  );
-  fs.writeFileSync(source, fixture(undefined, undefined, '6000'));
-  expectThrow(
-    () => legacyImport.commitLegacyImport(actor, commit, root),
-    'legacy_preview_stale',
-    'source changed after preview',
-  );
-  fs.writeFileSync(source, fixture());
-  db.exec(`CREATE TEMP TRIGGER fail_legacy_audit BEFORE INSERT ON auth_audit_log
-    WHEN NEW.event_type = 'qr_cloud_legacy_config_import'
-    BEGIN SELECT RAISE(ABORT, 'fixture rollback'); END`);
-  expectThrow(
-    () => legacyImport.commitLegacyImport(actor, commit, root),
-    'SQLITE_CONSTRAINT_TRIGGER',
-    'audit write failure rolls back',
-  );
-  db.exec('DROP TRIGGER fail_legacy_audit');
-  assertOrThrow(
-    JSON.stringify(storedSettings()) === beforeImport,
-    'failed commit preserves prior settings',
-  );
-  assertOrThrow(
-    config.readConnectorSetting() === currentToken,
-    'failed commit preserves prior encrypted token',
-  );
-  encryptionAvailable = false;
-  expectThrow(
-    () =>
-      legacyImport.commitLegacyImport(
-        actor,
-        { ...commit, preview_id: legacyImport.previewLegacyImport(actor, root).preview_id },
-        root,
-      ),
-    'credential_storage_unavailable',
-    'commit requires protected storage',
-  );
-  encryptionAvailable = true;
-  const bytesBefore = fs.readFileSync(source);
-  const caBefore = fs.readFileSync(caSource);
-  const saleData = () =>
-    ['products', 'bills'].map((table) => db.prepare(`SELECT * FROM ${table}`).all());
-  const saleDataBefore = JSON.stringify(saleData());
-  let cutoverCalls = 0;
-  connector.__setFetchEventsForTests(async () => {
-    cutoverCalls += 1;
-    throw new QrCloudClientError('tls_failed');
-  });
-  legacyImport.commitLegacyImport(actor, commit, root);
-  assertOrThrow(
-    config.readConnectorSetting() === token,
-    'imported token reads from protected storage',
-  );
-  assertOrThrow(
-    !JSON.stringify(storedSettings()).includes(token),
-    'imported token is absent from SQLite settings',
-  );
-  assertOrThrow(
-    config.readConfig().cutoverPending && !config.readConfig().enabled,
-    'cutover hold persists with polling disabled',
+  const actor = 'fixture-setup-owner';
+  const assertRejects = require('node:assert/strict').rejects;
+  connector.applyQrCloudConfig({ enabled: false });
+  config.updateConfig({ cloudUrl: 'https://qr-staging.test' });
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')").run(
+    config.QR_CLOUD_SETTING_KEYS.cutoverPending,
   );
   expectThrow(
     () => config.updateConfig({ enabled: true }),
     'cutover_required',
-    'normal enable blocked',
-  );
-  connector.startQrCloudConnector({ force: true });
-  assertEqualOrThrow(cutoverCalls, 0, 'import and force retry do not make Cloud requests');
-  expectThrow(
-    () =>
-      legacyImport.importLegacyCa(
-        {
-          confirm: true,
-          expected_fingerprint: preview.ca_certificate.fingerprint_sha256,
-        },
-        root,
-      ),
-    'fingerprint_mismatch',
-    'legacy CA requires the expected staging fingerprint',
-  );
-  const assertRejects = require('node:assert/strict').rejects;
-  await assertRejects(legacyImport.approveLegacyCutover(actor, false), {
-    code: 'confirmation_required',
-  });
-  assertEqualOrThrow(cutoverCalls, 0, 'unconfirmed cutover makes no request');
-  const failed = await legacyImport.approveLegacyCutover(actor, true);
-  assertOrThrow(
-    !failed.ok && config.readConfig().cutoverPending,
-    'failed verification leaves the hold in place',
-  );
-  const https = require('node:https');
-  const { PassThrough } = require('node:stream');
-  const { EventEmitter } = require('node:events');
-  const originalRequest = https.request;
-  const outbound: string[] = [];
-  https.request = (
-    options: { method: string; path: string },
-    callback: (response: unknown) => void,
-  ) => {
-    const request = new EventEmitter();
-    outbound.push(`${options.method} ${options.path}`);
-    request.end = () => {
-      const response = new PassThrough();
-      response.statusCode = 200;
-      callback(response);
-      response.end(
-        JSON.stringify({ events: [{ id: 'test-only', kind: 'order.created', payload: {} }] }),
-      );
-    };
-    return request;
-  };
-  let verified;
-  try {
-    connector.__setFetchEventsForTests(null);
-    verified = await legacyImport.approveLegacyCutover(actor, true);
-  } finally {
-    https.request = originalRequest;
-  }
-  assertOrThrow(
-    verified.ok && !config.readConfig().cutoverPending,
-    'verified cutover clears the hold',
-  );
-  assertOrThrow(
-    !config.readConfig().enabled && !connector.__isLoopArmedForTests(),
-    'verified cutover does not enable polling',
-  );
-  assertEqualOrThrow(cutoverCalls, 1, 'failed verification made one transport attempt');
-  assertEqualOrThrow(
-    outbound.join(','),
-    'GET /api/v1/connectors/events',
-    'cutover makes only a feed GET, with no ACK or Cloud price write',
-  );
-  assertEqualOrThrow(
-    inbox.inboxSummary().total,
-    totalBeforeClear,
-    'test connection never persists events',
-  );
-  assertEqualOrThrow(
-    db.prepare('SELECT COUNT(*) AS c FROM orders').get().c,
-    ordersBefore,
-    'import and verification create no orders',
-  );
-  assertOrThrow(
-    JSON.stringify(saleData()) === saleDataBefore,
-    'import and verification leave products and payments unchanged',
-  );
-  assertOrThrow(
-    fs.readFileSync(source).equals(bytesBefore) && fs.readFileSync(caSource).equals(caBefore),
-    'legacy files remain byte identical',
-  );
-  const audit = db
-    .prepare(
-      "SELECT user_id, details_json FROM auth_audit_log WHERE event_type = 'qr_cloud_legacy_config_import'",
-    )
-    .get();
-  assertOrThrow(
-    audit.user_id === actor && !audit.details_json.includes(token),
-    'successful import is attributed and sanitized',
-  );
-  const setupPreview = legacyImport.previewLegacyImport(actor, root);
-  legacyImport.commitLegacyImport(
-    actor,
-    { preview_id: setupPreview.preview_id, confirm: true, replace_credential: true },
-    root,
+    'a cutover hold blocks a normal enable',
   );
   let setupRequests = 0;
   let setupSucceeds = false;
@@ -1456,11 +1191,11 @@ async function main() {
     if (!setupSucceeds) throw new QrCloudClientError('tls_failed');
     return { events: [], status: 200, latencyMs: 1 };
   });
-  await assertRejects(legacyImport.activateQrCloudSetup(actor, false), {
+  await assertRejects(setup.activateQrCloudSetup(actor, false), {
     code: 'confirmation_required',
   });
   assertEqualOrThrow(setupRequests, 0, 'setup requires cutover confirmation before testing');
-  const rejectedSetup = await legacyImport.activateQrCloudSetup(actor, true);
+  const rejectedSetup = await setup.activateQrCloudSetup(actor, true);
   assertOrThrow(
     !rejectedSetup.ok &&
       !config.readConfig().enabled &&
@@ -1469,7 +1204,7 @@ async function main() {
     'failed setup test leaves cutover on hold and polling off',
   );
   setupSucceeds = true;
-  const activated = await legacyImport.activateQrCloudSetup(actor, true);
+  const activated = await setup.activateQrCloudSetup(actor, true);
   await waitFor(() => connector.getQrCloudStatus().state === 'CONNECTED_POLLING');
   assertOrThrow(
     activated.ok && config.readConfig().enabled && !config.readConfig().cutoverPending,
@@ -1480,6 +1215,15 @@ async function main() {
     3,
     'setup made one failed test, one successful test, and one first poll',
   );
+  assertOrThrow(
+    db
+      .prepare("SELECT user_id FROM auth_audit_log WHERE event_type = 'qr_cloud_legacy_cutover_verified'")
+      .get()?.user_id === actor,
+    'clearing the hold is attributed',
+  );
+  await assertRejects(setup.activateQrCloudSetup(actor, true), {
+    code: 'legacy_cutover_not_pending',
+  });
   connector.applyQrCloudConfig({ enabled: false });
   const encryptedSlots = () =>
     fs

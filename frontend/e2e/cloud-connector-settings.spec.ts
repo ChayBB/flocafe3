@@ -46,7 +46,6 @@ test('a new branch connects with a one-time pairing code', async ({ page }) => {
   const connector = page.getByTestId('settings-qr-cloud');
   await expect(connector.getByRole('heading', { name: 'Connect this POS to Cloud QR Ordering' })).toBeVisible();
   await expect(connector.getByTestId('qc-url')).toHaveCount(0);
-  await expect(connector.getByRole('region', { name: 'Import settings from the legacy Connector' })).toHaveCount(0);
   const code = connector.getByTestId('qc-pair-code');
   const submit = connector.getByTestId('qc-pair-submit');
   await code.fill('kn7q-4m2');
@@ -303,43 +302,25 @@ test('connector mutations require settings management and a permitted Origin', a
   expect(await foreignOrigin.json()).toMatchObject({ code: 'origin_not_allowed' });
 });
 
-test('legacy import endpoints enforce permission, confirmation and the fixed source', async ({
-  request,
-}) => {
-  const endpoint = `${connectorApi}/legacy-import`;
+test('setup activation enforces permission and a fixed body', async ({ request }) => {
+  const endpoint = `${connectorApi}/activate`;
   const owner = { Authorization: `Bearer ${getE2eToken()}` };
   const server = {
     Authorization: `Bearer ${getE2eToken('e2e-server', 'server@flo.local', 'server')}`,
   };
-  const unauthenticated = await request.post(`${endpoint}/commit`, { data: { confirm: true } });
+  const unauthenticated = await request.post(endpoint, { data: {} });
   expect(unauthenticated.status()).toBe(401);
-  const forbidden = await request.post(`${endpoint}/commit`, {
-    headers: server,
-    data: { confirm: true },
-  });
+  const forbidden = await request.post(endpoint, { headers: server, data: {} });
   expect(forbidden.status()).toBe(403);
-  const activateForbidden = await request.post(`${connectorApi}/activate`, { headers: server });
-  expect(activateForbidden.status()).toBe(403);
-  const traversal = await request.post(`${endpoint}/preview`, {
+  const unknownField = await request.post(endpoint, {
     headers: owner,
     data: { source_path: '../../connector.env' },
   });
-  expect(traversal.status()).toBe(400);
-  expect(await traversal.json()).toMatchObject({ code: 'legacy_request_invalid' });
-  const unconfirmed = await request.post(`${endpoint}/commit`, { headers: owner, data: {} });
-  expect(unconfirmed.status()).toBe(400);
-  expect(await unconfirmed.json()).toMatchObject({ code: 'confirmation_required' });
-  const stale = await request.post(`${endpoint}/commit`, {
-    headers: owner,
-    data: { confirm: true },
-  });
-  expect(stale.status()).toBe(409);
-  expect(await stale.json()).toMatchObject({ code: 'legacy_preview_stale' });
+  expect(unknownField.status()).toBe(400);
+  expect(await unknownField.json()).toMatchObject({ code: 'legacy_request_invalid' });
 });
 
-test('OrderFlow imports settings and trust, then tests and starts polling in one action', async ({
-  page,
-}) => {
+test('a pending cutover hold needs confirmation, then tests and starts polling', async ({ page }) => {
   await page.goto(`${E2E_BASE_URL}/auth/login`);
   await page.getByLabel('Email').fill('owner@flo.local');
   await page.getByLabel('Password').fill(E2E_PASSWORD);
@@ -351,137 +332,31 @@ test('OrderFlow imports settings and trust, then tests and starts polling in one
   });
   expect(baseline.ok()).toBeTruthy();
   const { config, status } = await baseline.json();
-  let cutoverPending = false;
+  let cutoverPending = true;
   let enabled = false;
-  let caApproved = false;
   let activationCount = 0;
-  let previewCount = 0;
-  let commitCount = 0;
-  const fingerprint = Array(32).fill('AA').join(':');
+  const current = () => ({
+    ...config,
+    mode: 'integrated',
+    cloud_url: 'https://qr-staging.test',
+    enabled,
+    has_token: true,
+    cutover_pending: cutoverPending,
+  });
   await page.route(connectorApi, (route) =>
-    route.fulfill({
-      json: {
-        config: {
-          ...config,
-          cloud_url: 'https://qr-staging.test',
-          enabled,
-          has_token: cutoverPending || enabled,
-          cutover_pending: cutoverPending,
-        },
-        status: {
-          ...status,
-          tls: {
-            ...status.tls,
-            configured: caApproved,
-            fingerprint_sha256: caApproved ? fingerprint : null,
-          },
-        },
-      },
-    }),
+    route.fulfill({ json: { config: current(), status } }),
   );
-  await page.route(`${connectorApi}/legacy-import/preview`, (route) => {
-    previewCount += 1;
-    const invalid = previewCount === 1;
-    return route.fulfill({
-      json: {
-        source_found: true,
-        cloud_url: invalid ? null : 'https://qr-staging.test',
-        connector_token_present: !invalid,
-        poll_interval_ms: 5000,
-        ca_certificate_found: true,
-        ca_certificate: {
-          subject: 'CN=Fixture Root',
-          issuer: 'CN=Fixture Root',
-          valid_from: '2026-01-01T00:00:00.000Z',
-          valid_to: '2036-01-01T00:00:00.000Z',
-          is_ca: true,
-          fingerprint_sha256: fingerprint,
-          basic_constraints: { critical: true, path_length: '1' },
-        },
-        ca_matches_expected: true,
-        conflicts: ['configuration', 'credential'],
-        validation_errors: invalid ? ['cloud_url_not_https', 'token_invalid'] : [],
-        ready_for_import: !invalid,
-        preview_id: invalid ? null : 'fixture-preview',
-      },
-    });
-  });
-  await page.route(`${connectorApi}/legacy-import/commit`, (route) => {
-    expect(route.request().postDataJSON()).toEqual({
-      preview_id: 'fixture-preview',
-      confirm: true,
-      replace_credential: true,
-    });
-    commitCount += 1;
-    if (commitCount === 1) return route.fulfill({ json: {} });
-    cutoverPending = true;
-    return route.fulfill({ json: { imported: true, cutover_pending: true } });
-  });
-  await page.route(`${connectorApi}/legacy-import/ca`, (route) => {
-    expect(route.request().postDataJSON()).toEqual({
-      confirm: true,
-      expected_fingerprint: fingerprint,
-    });
-    caApproved = true;
-    return route.fulfill({ json: { configured: true } });
-  });
   await page.route(`${connectorApi}/activate`, (route) => {
     expect(route.request().postDataJSON()).toEqual({ confirm_legacy_stopped: true });
-    expect(caApproved).toBe(true);
     activationCount += 1;
     if (activationCount === 1) return route.fulfill({ json: { ok: false, code: 'tls_failed' } });
     cutoverPending = false;
     enabled = true;
-    return route.fulfill({
-      json: {
-        ok: true,
-        code: null,
-        config: {
-          ...config,
-          cloud_url: 'https://qr-staging.test',
-          enabled,
-          has_token: true,
-          cutover_pending: false,
-        },
-        status,
-      },
-    });
+    return route.fulfill({ json: { ok: true, code: null, config: current(), status } });
   });
 
   await page.goto(`${E2E_BASE_URL}/settings?tab=orderflow`);
-  await page.getByTestId('qc-manual-setup').click();
-  await page.getByTestId('qc-setup-start').click();
-  await expect(page.getByTestId('qc-test')).toHaveCount(0);
-  const panel = page.getByRole('region', { name: 'Import settings from the legacy Connector' });
-  const inspect = panel.getByRole('button', { name: 'Inspect legacy files' });
-  await expect(panel.getByText('Legacy configuration file found')).toBeVisible();
-  await expect(panel.getByText('Token missing', { exact: true })).toBeVisible();
-  await expect(panel.getByRole('alert')).toContainText(
-    'The legacy Connector Token is missing or invalid.',
-  );
-  await expect(panel.getByRole('button', { name: 'Confirm import' })).toHaveCount(0);
-  await inspect.click();
-  await expect(panel.getByText('Token found', { exact: true })).toBeVisible();
-  await expect(panel.getByText('CA certificate found')).toBeVisible();
-  await expect(panel.getByText('https://qr-staging.test')).toBeVisible();
-  await expect(panel.getByText(fingerprint)).toBeVisible();
-  await panel.getByText('Inspect certificate', { exact: true }).click();
-  await expect(panel.getByText('Maximum intermediate CA depth')).toBeVisible();
-  await expect(panel.getByText('FloCafe already has a Connector credential.')).toBeVisible();
-  const commit = panel.getByRole('button', { name: 'Confirm import' });
-  await panel.getByRole('checkbox', { name: 'I have reviewed the settings' }).check();
-  await expect(commit).toBeDisabled();
-  await panel.getByRole('checkbox', { name: 'I also confirm replacing' }).check();
-  await panel.getByLabel('Enter the SHA-256 fingerprint', { exact: false }).fill(fingerprint);
-  await panel
-    .getByRole('checkbox', { name: 'I verified the fingerprint independently', exact: false })
-    .check();
-  await commit.click();
-  await expect(panel.getByRole('alert')).toContainText('FloCafe could not complete');
-  await expect(panel.getByText('Settings imported.', { exact: false })).toHaveCount(0);
-  expect(caApproved).toBe(false);
-  await commit.click();
-  await expect(panel.getByText('Settings imported and CA approved.')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Import settings from the legacy Connector' })).toHaveCount(0);
   const verify = page.getByTestId('qc-setup-activate');
   await expect(verify).toBeDisabled();
   await page
@@ -495,19 +370,4 @@ test('OrderFlow imports settings and trust, then tests and starts polling in one
   await expect(page.getByTestId('qc-enabled')).toHaveCount(0);
   await verify.click();
   await expect(page.getByTestId('qc-enabled')).toBeChecked();
-
-  await setLanguage(page, 'th');
-  try {
-    await page.reload();
-    const thaiPanel = page.getByRole('region', { name: 'นำเข้าการตั้งค่าจาก Connector เดิม' });
-    await thaiPanel.getByRole('button', { name: 'ตรวจสอบการตั้งค่าเดิม' }).click();
-    await expect(thaiPanel.getByText('พบไฟล์การตั้งค่า', { exact: true })).toBeVisible();
-    await expect(thaiPanel.getByText('พบโทเคน', { exact: true })).toBeVisible();
-    await expect(thaiPanel.getByText('พบใบรับรอง CA', { exact: true })).toBeVisible();
-    await expect(thaiPanel.getByText('ตรวจสอบใบรับรอง', { exact: true })).toBeVisible();
-    await expect(thaiPanel.getByRole('button', { name: 'ยืนยันนำเข้า', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'ทดสอบการเชื่อมต่อ', exact: true })).toBeVisible();
-  } finally {
-    await setLanguage(page, 'en');
-  }
 });
