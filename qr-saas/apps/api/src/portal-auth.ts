@@ -32,11 +32,11 @@ export function readSessionCookie(request: Request): string {
   return '';
 }
 
-/** Verifies credentials in constant work whether or not the account exists. */
-export async function verifyLogin(sql: Sql, email: string, password: string): Promise<PortalUser | null> {
+/** Verifies an email or username and password in constant work whether or not the account exists. */
+export async function verifyLogin(sql: Sql, login: string, password: string): Promise<PortalUser | null> {
   const [row] = await sql`
     SELECT id, email, display_name, role, tenant_id, password_hash FROM portal_users
-    WHERE lower(email) = lower(${email}) AND disabled_at IS NULL`;
+    WHERE (lower(email) = lower(${login}) OR username = lower(${login})) AND disabled_at IS NULL`;
   const ok = await Bun.password.verify(password, row?.password_hash ?? DUMMY_HASH);
   if (!row?.password_hash || !ok) return null;
   const { password_hash: _hash, ...user } = row;

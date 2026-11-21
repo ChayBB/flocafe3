@@ -30,6 +30,7 @@ const fail = (status: number, code: string) => json({ code }, status);
 const Uuid = t.String({ format: 'uuid' });
 const ReportDate = t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
 const Name = t.String({ minLength: 1, maxLength: 100 });
+const USERNAME = /^[a-z0-9][a-z0-9._-]{2,31}$/;
 
 function clientOf(request: Request, server: { requestIP(r: Request): { address: string } | null } | null) {
   return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || server?.requestIP(request)?.address || 'unknown';
@@ -79,9 +80,9 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
     .use(portalAssets())
     .post('/api/v1/portal/login', async ({ request, body, server }) => {
       if (request.headers.get(PORTAL_HEADER) !== '1') return fail(403, 'portal_header_required');
-      const email = body.email.trim().toLowerCase();
-      if (!loginByClient.allow(clientOf(request, server)) || !loginByEmail.allow(email)) return fail(429, 'too_many_attempts');
-      const user = await verifyLogin(sql, email, body.password);
+      const login = body.email.trim().toLowerCase();
+      if (!loginByClient.allow(clientOf(request, server)) || !loginByEmail.allow(login)) return fail(429, 'too_many_attempts');
+      const user = await verifyLogin(sql, login, body.password);
       if (!user) return fail(401, 'invalid_credentials');
       await audit(sql, { userId: user.id, action: 'login', tenantId: user.tenant_id });
       return signIn(user);
@@ -156,7 +157,7 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       const user = await guard(request, 'admin');
       if (user instanceof Response) return user;
       const users = await sql`
-        SELECT u.id, u.email, u.display_name, u.role, u.tenant_id, t.name AS shop,
+        SELECT u.id, u.email, u.username, u.display_name, u.role, u.tenant_id, t.name AS shop,
                u.password_hash IS NOT NULL AS active, u.disabled_at, u.created_at
         FROM portal_users u LEFT JOIN tenants t ON t.id = u.tenant_id
         ORDER BY u.role, t.name NULLS FIRST, u.email`;
@@ -169,9 +170,13 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       if (body.role === 'owner' && !tenantId) return fail(400, 'shop_required');
       const email = body.email.trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(400, 'email_invalid');
+      const username = body.username?.trim().toLowerCase() || null;
+      if (username !== null && !USERNAME.test(username)) return fail(400, 'username_invalid');
+      if (username !== null && (await sql`SELECT 1 FROM portal_users WHERE username = ${username}`).length)
+        return fail(409, 'username_exists');
       const created = await sql`
-        INSERT INTO portal_users(email, display_name, role, tenant_id)
-        VALUES (${email}, ${body.display_name.trim()}, ${body.role}, ${tenantId})
+        INSERT INTO portal_users(email, username, display_name, role, tenant_id)
+        VALUES (${email}, ${username}, ${body.display_name.trim()}, ${body.role}, ${tenantId})
         ON CONFLICT DO NOTHING RETURNING id`.catch((error) => {
         if ((error as { code?: string }).code === '23503') return null;
         throw error;
@@ -183,10 +188,27 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       return json({ user_id: created[0].id, invite_url: inviteUrl });
     }, { body: t.Object({
       email: t.String({ minLength: 3, maxLength: 200 }),
+      username: t.Optional(t.String({ maxLength: 32 })),
       display_name: Name,
       role: t.Union([t.Literal('admin'), t.Literal('owner')]),
       tenant_id: t.Optional(Uuid),
     }) })
+    .post('/api/v1/portal/admin/users/:userId/username', async ({ request, params, body }) => {
+      const user = await guard(request, 'admin');
+      if (user instanceof Response) return user;
+      const username = body.username.trim().toLowerCase() || null;
+      if (username !== null && !USERNAME.test(username)) return fail(400, 'username_invalid');
+      const updated = await sql`
+        UPDATE portal_users SET username = ${username} WHERE id = ${params.userId}
+        RETURNING tenant_id, email`.catch((error) => {
+        if ((error as { code?: string }).code === '23505') return null;
+        throw error;
+      });
+      if (updated === null) return fail(409, 'username_exists');
+      if (!updated.length) return fail(404, 'user_not_found');
+      await audit(sql, { userId: user.id, action: 'username_set', tenantId: updated[0].tenant_id, detail: { email: updated[0].email, username } });
+      return json({ ok: true });
+    }, { params: t.Object({ userId: Uuid }), body: t.Object({ username: t.String({ maxLength: 32 }) }) })
     .post('/api/v1/portal/admin/users/:userId/invite', async ({ request, params }) => {
       const user = await guard(request, 'admin');
       if (user instanceof Response) return user;

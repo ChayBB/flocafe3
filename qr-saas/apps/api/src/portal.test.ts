@@ -134,6 +134,21 @@ test.skipIf(!databaseUrl || !redisUrl)(
       expect((await call(`/api/v1/portal/admin/branches/${north.branch_id}/revoke-pos`, { session: admin, body: {} })).body.code).toBe('pos_not_paired');
 
       const ownerId = invited.body.user_id;
+      const setName = (username: string, session = admin) =>
+        call(`/api/v1/portal/admin/users/${ownerId}/username`, { session, body: { username } });
+      expect((await setName('no')).body.code).toBe('username_invalid');
+      expect((await setName('nop@shop')).body.code).toBe('username_invalid');
+      expect((await setName('kuknop', owner)).status).toBe(403);
+      expect((await setName('KukNop')).status).toBe(200);
+      const listed = (await call('/api/v1/portal/admin/users', { session: admin })).body.users;
+      expect(listed.find((u: any) => u.id === ownerId).username).toBe('kuknop');
+      expect((await call('/api/v1/portal/admin/users', { session: admin, body: { email: 'twin@kuknop.test', username: 'kuknop', display_name: 'Twin', role: 'owner', tenant_id: north.tenant_id } })).body.code).toBe('username_exists');
+      const byName = await call('/api/v1/portal/login', { body: { email: 'KUKNOP', password: 'owner password 1' } });
+      expect(byName.status).toBe(200);
+      expect(byName.body.user.id).toBe(ownerId);
+      expect((await call('/api/v1/portal/login', { body: { email: 'kuknop', password: 'wrong password' } })).status).toBe(401);
+      expect((await setName('')).status).toBe(200);
+      expect((await call('/api/v1/portal/login', { body: { email: 'kuknop', password: 'owner password 1' } })).status).toBe(401);
       expect((await call(`/api/v1/portal/admin/users/${ownerId}/disabled`, { session: admin, body: { disabled: true } })).status).toBe(200);
       expect((await call('/api/v1/portal/owner/shop', { session: owner })).status).toBe(401);
       expect((await call('/api/v1/portal/login', { body: { email: 'owner@kuknop.test', password: 'owner password 1' } })).status).toBe(401);

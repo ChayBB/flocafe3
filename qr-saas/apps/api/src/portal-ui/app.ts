@@ -12,15 +12,16 @@ type ModuleKey = 'qr_ordering' | 'menu_editing' | 'reports';
 const MODULE_KEYS: ModuleKey[] = ['qr_ordering', 'menu_editing', 'reports'];
 type Shop = { id: string; name: string; created_at: string; branches: Branch[] };
 type PortalAccount = {
-  id: string; email: string; display_name: string; role: 'admin' | 'owner'; shop: string | null;
+  id: string; email: string; username: string | null; display_name: string; role: 'admin' | 'owner'; shop: string | null;
   active: boolean; disabled_at: string | null;
 };
 type AuditEntry = { created_at: string; action: string; actor: string | null; shop: string | null; branch: string | null; detail: Record<string, unknown> };
 
 const TEXT = {
   th: {
-    customerSignIn: 'เข้าสู่ระบบลูกค้า', customerHint: 'หากคุณมีบัญชีอยู่แล้ว สามารถเข้าสู่ระบบด้วยอีเมลของคุณ',
-    showPassword: 'แสดงรหัสผ่าน', forgotPassword: 'ลืมรหัสผ่าน?', forgotHint: 'ติดต่อผู้ดูแลระบบเพื่อขอลิงก์ตั้งรหัสผ่านใหม่',
+    login: 'ที่อยู่อีเมล หรือ ชื่อผู้ใช้', showPassword: 'แสดงรหัสผ่าน', hidePassword: 'ซ่อนรหัสผ่าน',
+    username: 'ชื่อผู้ใช้ (ไม่บังคับ)', setUsername: 'ตั้งชื่อผู้ใช้',
+    usernamePrompt: 'ชื่อผู้ใช้ของ {email} (a-z, 0-9, . _ - ยาว 3-32 ตัว) เว้นว่างเพื่อลบ', forgotPassword: 'ลืมรหัสผ่าน?', forgotHint: 'ติดต่อผู้ดูแลระบบเพื่อขอลิงก์ตั้งรหัสผ่านใหม่',
     title: 'FloCafe Portal', email: 'อีเมล', password: 'รหัสผ่าน', signIn: 'เข้าสู่ระบบ', signOut: 'ออกจากระบบ',
     setPassword: 'ตั้งรหัสผ่าน', newPassword: 'รหัสผ่านใหม่ (อย่างน้อย 10 ตัว)', confirmPassword: 'ยืนยันรหัสผ่าน',
     passwordMismatch: 'รหัสผ่านไม่ตรงกัน', shops: 'ร้านและสาขา', users: 'บัญชีผู้ใช้', audit: 'ประวัติการใช้งาน',
@@ -47,15 +48,16 @@ const TEXT = {
     photoTooLarge: 'ย่อรูปให้เล็กพอไม่ได้ ลองรูปอื่น', error_image_invalid: 'ไฟล์รูปไม่ถูกต้อง ใช้ JPG, PNG หรือ WebP',
     error_item_not_found: 'ไม่พบเมนูนี้แล้ว โหลดหน้าใหม่', error_change_not_found: 'รายการนี้เปลี่ยนสถานะไปแล้ว โหลดหน้าใหม่',
     error_branch_not_found: 'ไม่พบสาขา',
-    error_invalid_credentials: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง', error_too_many_attempts: 'ลองหลายครั้งเกินไป รอ 15 นาที',
+    error_invalid_credentials: 'อีเมล ชื่อผู้ใช้ หรือรหัสผ่านไม่ถูกต้อง', error_too_many_attempts: 'ลองหลายครั้งเกินไป รอ 15 นาที',
     error_invite_invalid: 'ลิงก์นี้ใช้ไม่ได้แล้ว ขอลิงก์ใหม่จากผู้ดูแล', error_password_too_short: 'รหัสผ่านต้องมีอย่างน้อย 10 ตัว',
-    error_shop_exists: 'มีร้านชื่อนี้แล้ว', error_email_exists: 'มีบัญชีอีเมลนี้แล้ว', error_email_invalid: 'อีเมลไม่ถูกต้อง',
+    error_shop_exists: 'มีร้านชื่อนี้แล้ว', error_email_exists: 'มีบัญชีอีเมลนี้แล้ว', error_email_invalid: 'อีเมลไม่ถูกต้อง', error_username_invalid: 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z, 0-9, . _ - ยาว 3-32 ตัว', error_username_exists: 'มีชื่อผู้ใช้นี้แล้ว',
     error_shop_required: 'เลือกร้านของเจ้าของ', error_pos_not_paired: 'สาขานี้ยังไม่มี POS', error_cannot_disable_self: 'ปิดบัญชีตัวเองไม่ได้',
     error_signed_out: 'หมดเวลาเข้าสู่ระบบ เข้าสู่ระบบใหม่', error_generic: 'ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง',
   },
   en: {
-    customerSignIn: 'Customer sign in', customerHint: 'If you already have an account, sign in with your email.',
-    showPassword: 'Show password', forgotPassword: 'Forgot password?', forgotHint: 'Ask the administrator for a new password link.',
+    login: 'Email or username', showPassword: 'Show password', hidePassword: 'Hide password',
+    username: 'Username (optional)', setUsername: 'Set username',
+    usernamePrompt: 'Username for {email} (a-z, 0-9, . _ -, 3-32 characters). Leave empty to remove.', forgotPassword: 'Forgot password?', forgotHint: 'Ask the administrator for a new password link.',
     title: 'FloCafe Portal', email: 'Email', password: 'Password', signIn: 'Sign in', signOut: 'Sign out',
     setPassword: 'Set password', newPassword: 'New password (at least 10 characters)', confirmPassword: 'Confirm password',
     passwordMismatch: 'The passwords do not match', shops: 'Shops and branches', users: 'Accounts', audit: 'Activity',
@@ -82,9 +84,9 @@ const TEXT = {
     photoTooLarge: 'Could not make this photo small enough. Try another.', error_image_invalid: 'Use a JPG, PNG or WebP image',
     error_item_not_found: 'This item is gone. Reload the page.', error_change_not_found: 'This change already moved on. Reload the page.',
     error_branch_not_found: 'Branch not found',
-    error_invalid_credentials: 'Wrong email or password', error_too_many_attempts: 'Too many attempts. Wait 15 minutes.',
+    error_invalid_credentials: 'Wrong email, username, or password', error_too_many_attempts: 'Too many attempts. Wait 15 minutes.',
     error_invite_invalid: 'This link no longer works. Ask the administrator for a new one.', error_password_too_short: 'Use at least 10 characters',
-    error_shop_exists: 'A shop with this name exists', error_email_exists: 'An account with this email exists', error_email_invalid: 'Enter a valid email',
+    error_shop_exists: 'A shop with this name exists', error_email_exists: 'An account with this email exists', error_email_invalid: 'Enter a valid email', error_username_invalid: 'Use 3-32 characters: a-z, 0-9, . _ -', error_username_exists: 'This username is taken',
     error_shop_required: 'Choose the owner’s shop', error_pos_not_paired: 'This branch has no POS', error_cannot_disable_self: 'You cannot disable yourself',
     error_signed_out: 'Your session ended. Sign in again.', error_generic: 'That did not work. Try again.',
   },
@@ -176,31 +178,51 @@ function header() {
       } }, tr('signOut'))));
 }
 
-const customerEntry = location.pathname.replace(/\/+$/, '').startsWith('/customer');
+function eyeIcon(open: boolean) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const paths = open
+    ? ['M1.5 12S5.5 4.5 12 4.5 22.5 12 22.5 12 18.5 19.5 12 19.5 1.5 12 1.5 12Z', 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z']
+    : ['M3 3l18 18', 'M10.6 5.1A10 10 0 0 1 12 4.5c6.5 0 10.5 7.5 10.5 7.5a17 17 0 0 1-3 3.9M6.6 6.6A17 17 0 0 0 1.5 12S5.5 19.5 12 19.5a9.6 9.6 0 0 0 5.4-1.6', 'M9.9 9.9a3 3 0 0 0 4.2 4.2'];
+  for (const d of paths) {
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+  }
+  return svg;
+}
 
 function loginView() {
-  const email = h('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'email@example.com' });
+  const login = h('input', { type: 'text', required: true, autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', placeholder: tr('login') });
   const password = h('input', { type: 'password', required: true, autocomplete: 'current-password', placeholder: tr('password') });
   const error = errorLine();
   const hint = h('p', { class: 'muted small', role: 'status' });
-  const reveal = h('input', { type: 'checkbox', onchange: () => { password.type = reveal.checked ? 'text' : 'password'; } });
-  const extras = h('div', { class: 'login-extras' },
-    h('label', { class: 'check' }, reveal, tr('showPassword')),
-    h('button', { type: 'button', class: 'link', onclick: () => { hint.textContent = tr('forgotHint'); } }, tr('forgotPassword')));
-  const heading = customerEntry
-    ? [h('h1', {}, tr('customerSignIn')), h('p', { class: 'muted' }, tr('customerHint'))]
-    : [h('h2', {}, tr('signIn'))];
-  return h('form', { class: customerEntry ? 'card narrow customer-login' : 'card narrow', onsubmit: async (event: Event) => {
+  const eye = h('button', { type: 'button', class: 'eye', 'aria-label': tr('showPassword'), onclick: () => {
+    const show = password.type === 'password';
+    password.type = show ? 'text' : 'password';
+    eye.setAttribute('aria-label', tr(show ? 'hidePassword' : 'showPassword'));
+    eye.replaceChildren(eyeIcon(!show));
+  } }, eyeIcon(true));
+  return h('form', { class: 'login-card', onsubmit: async (event: Event) => {
     event.preventDefault();
     error.textContent = '';
     try {
-      current = (await api<{ user: User }>('/login', { email: email.value, password: password.value })).user;
+      current = (await api<{ user: User }>('/login', { email: login.value, password: password.value })).user;
       render();
     } catch (failure) {
       showError(error, failure);
     }
-  } }, ...heading, field(`${tr('email')} *`, email), field(`${tr('password')} *`, password), extras, hint, error,
-  h('button', { type: 'submit' }, tr('signIn')));
+  } },
+  h('h2', { class: 'login-head' }, tr('signIn')),
+  h('div', { class: 'login-body' },
+    field(`${tr('login')} *`, login),
+    h('label', { class: 'field' }, h('span', {}, `${tr('password')} *`), h('div', { class: 'password-box' }, password, eye)),
+    hint, error),
+  h('div', { class: 'login-foot' },
+    h('button', { type: 'button', class: 'link', onclick: () => { hint.textContent = tr('forgotHint'); } }, tr('forgotPassword')),
+    h('button', { type: 'submit', class: 'login-submit' }, tr('signIn'))));
 }
 
 function inviteView(token: string) {
@@ -331,6 +353,7 @@ async function usersView(container: HTMLElement) {
     dialog(tr('inviteTitle', { email }), copyBox(url), h('p', { class: 'muted' }, tr('inviteHint')));
   const email = h('input', { type: 'email', required: true, maxlength: 200 });
   const name = h('input', { required: true, maxlength: 100 });
+  const username = h('input', { maxlength: 32, autocapitalize: 'none', spellcheck: 'false' });
   const role = h('select', {}, h('option', { value: 'owner' }, tr('roleOwner')), h('option', { value: 'admin' }, tr('roleAdmin')));
   const shop = h('select', {}, h('option', { value: '' }, tr('chooseShop')),
     ...shops.map((entry) => h('option', { value: entry.id }, entry.name)));
@@ -341,6 +364,7 @@ async function usersView(container: HTMLElement) {
     try {
       const created = await api<{ invite_url: string }>('/admin/users', {
         email: email.value, display_name: name.value, role: role.value,
+        ...(username.value.trim() ? { username: username.value.trim() } : {}),
         ...(role.value === 'owner' && shop.value ? { tenant_id: shop.value } : {}),
       });
       inviteDialog(email.value, created.invite_url);
@@ -348,14 +372,14 @@ async function usersView(container: HTMLElement) {
     } catch (failure) {
       showError(error, failure);
     }
-  } }, h('h3', {}, tr('newUser')), field(tr('email'), email), field(tr('displayName'), name), field(tr('role'), role),
+  } }, h('h3', {}, tr('newUser')), field(tr('email'), email), field(tr('username'), username), field(tr('displayName'), name), field(tr('role'), role),
   field(tr('shop'), shop), h('button', { type: 'submit' }, tr('create')), error);
 
   const rows = users.map((user) => {
     const rowError = errorLine();
     const status = user.disabled_at ? tr('statusDisabled') : user.active ? tr('statusActive') : tr('statusInvited');
     return h('tr', {},
-      h('td', {}, user.display_name, h('div', { class: 'muted small' }, user.email)),
+      h('td', {}, user.display_name, h('div', { class: 'muted small' }, user.username ? `${user.email} · ${user.username}` : user.email)),
       h('td', {}, user.role === 'admin' ? tr('roleAdmin') : `${tr('roleOwner')} · ${user.shop ?? ''}`),
       h('td', {}, status),
       h('td', { class: 'actions' },
@@ -366,6 +390,16 @@ async function usersView(container: HTMLElement) {
             showError(rowError, failure);
           }
         } }, tr('resendInvite')),
+        h('button', { type: 'button', class: 'secondary', onclick: async () => {
+          const next = prompt(tr('usernamePrompt', { email: user.email }), user.username ?? '');
+          if (next === null) return;
+          try {
+            await api(`/admin/users/${user.id}/username`, { username: next.trim() });
+            refresh();
+          } catch (failure) {
+            showError(rowError, failure);
+          }
+        } }, tr('setUsername')),
         user.id !== current?.id && h('button', { type: 'button', class: user.disabled_at ? 'secondary' : 'danger', onclick: async () => {
           try {
             await api(`/admin/users/${user.id}/disabled`, { disabled: !user.disabled_at });
