@@ -46,6 +46,7 @@ import {
 import { TERMINAL_ITEM_STATUSES } from '@shared/order-item-status';
 import { optionsNote, spokenItemName, withoutOptionsNote } from '@/lib/item-options-note';
 import { parseVariantSelection } from '@/lib/printer/item-heading';
+import { useKeepScreenAwake } from '@/hooks/useKeepScreenAwake';
 
 const INACTIVE_STAGES_KEY = 'flocafe:kds-inactive-stages';
 type InactiveStages = Record<string, KitchenStatus[]>;
@@ -106,6 +107,7 @@ export function KdsWorkspace({
   serverDefault?: 'tabs' | 'kanban' | null;
 }) {
   const t = useTranslations('kds');
+  useKeepScreenAwake();
   const screen = useKdsScreenMode();
 
   // Sound needs one tap per page in a browser; any tap or key press on the display unlocks it.
