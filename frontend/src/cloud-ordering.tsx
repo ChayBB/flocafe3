@@ -7,6 +7,7 @@ import ProductGrid from '@/components/pos/ProductGrid';
 import AddonModal from '@/components/pos/AddonModal';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { StaffSignIn } from '@/components/server-app/StaffSignIn';
 import { ItemStatusBadge } from '@/components/server-app/ItemStatus';
 import { Ltr } from '@/components/layout/Ltr';
@@ -188,6 +189,7 @@ function Ordering() {
   const [billAwaitingPayment, setBillAwaitingPayment] = useState(false);
   const announced = useRef(new Map<string, string | null>());
   const [pending, setPending] = useState<Attempt>();
+  const [confirmingSend, setConfirmingSend] = useState(false);
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [expired, setExpired] = useState(false);
@@ -477,7 +479,7 @@ function Ordering() {
     );
   }
 
-  async function send() {
+  async function send(confirmed = false) {
     const current = context.current;
     if (!current || flight.current || expired || !lines.length) return;
     if (billAwaitingPayment && !pending) {
@@ -486,7 +488,10 @@ function Ordering() {
     }
     let attempt = pending;
     if (!attempt) {
-      if (!window.confirm(`ยืนยันส่ง ${count} ชิ้นให้ร้านหรือไม่?`)) return;
+      if (!confirmed) {
+        setConfirmingSend(true);
+        return;
+      }
       const note = orderNote.trim();
       attempt = {
         key: crypto.randomUUID(),
@@ -914,6 +919,35 @@ function Ordering() {
           }}
         />
       )}
+      <Dialog open={confirmingSend} onOpenChange={setConfirmingSend}>
+        <DialogContent
+          showCloseButton={false}
+          data-testid="confirm-send-dialog"
+          className="max-w-md gap-0 rounded-2xl p-6"
+        >
+          <DialogTitle className="text-start text-[1.35rem] leading-snug font-bold">
+            โปรดยืนยันออร์เดอร์
+          </DialogTitle>
+          <DialogDescription className="my-6 text-center text-[1.2rem] text-foreground">
+            ยืนยันส่ง {count} รายการให้ร้านหรือไม่?
+          </DialogDescription>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" size="lg" onClick={() => setConfirmingSend(false)}>
+              ยกเลิก
+            </Button>
+            <Button
+              size="lg"
+              autoFocus
+              onClick={() => {
+                setConfirmingSend(false);
+                void send(true);
+              }}
+            >
+              ตกลง
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

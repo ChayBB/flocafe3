@@ -281,8 +281,16 @@ async function main() {
       await page.getByRole('button', { name: labels.currentTicket, exact: true }).click();
       const submit = page.getByRole('button', { name: labels.sendToKitchen, exact: true });
       await submit.waitFor();
-      page.once('dialog', (dialog) => dialog.accept());
       await submit.click();
+      const confirmSend = page.getByTestId('confirm-send-dialog');
+      await confirmSend.getByRole('heading', { name: 'โปรดยืนยันออร์เดอร์' }).waitFor();
+      const confirmMessage = confirmSend.getByText('ยืนยันส่ง 1 รายการให้ร้านหรือไม่?', { exact: true });
+      assert.equal(await confirmMessage.evaluate((el) => getComputedStyle(el).textAlign), 'center');
+      await confirmSend.getByRole('button', { name: 'ยกเลิก', exact: true }).click();
+      await confirmSend.waitFor({ state: 'hidden' });
+      assert.equal(orderWrites, 0, 'cancelling the confirmation sends nothing');
+      await submit.click();
+      await confirmSend.getByRole('button', { name: 'ตกลง', exact: true }).click();
       await page
         .getByRole('alert')
         .filter({ hasText: labels.tableAwaitingPaymentLocked })
@@ -313,8 +321,11 @@ async function main() {
         .first()
         .click();
       await retryPage.getByRole('button', { name: labels.currentTicket, exact: true }).click();
-      retryPage.once('dialog', (dialog) => dialog.accept());
       await retryPage.getByRole('button', { name: labels.sendToKitchen, exact: true }).click();
+      await retryPage
+        .getByTestId('confirm-send-dialog')
+        .getByRole('button', { name: 'ตกลง', exact: true })
+        .click();
       await retryPage.getByRole('status').filter({ hasText: 'ยังไม่ทราบผลการส่ง' }).waitFor();
       await retryPage.reload();
       await retryPage
