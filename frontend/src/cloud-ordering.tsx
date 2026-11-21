@@ -8,7 +8,7 @@ import AddonModal from '@/components/pos/AddonModal';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { HEADER_PILL_FILLED, ServerAppHeader } from '@/components/server-app/ServerAppHeader';
+import { ServerAppHeader } from '@/components/server-app/ServerAppHeader';
 import { ItemStatusBadge } from '@/components/server-app/ItemStatus';
 import { Ltr } from '@/components/layout/Ltr';
 import {
@@ -627,18 +627,7 @@ function Ordering({
         staffLoginLabel={t('staffButton')}
         onHistory={() => setOpen(true)}
         historyDisabled={!ready || expired}
-        staffButton={
-          staffUrl && (
-            <a
-              href={staffUrl}
-              referrerPolicy="no-referrer"
-              data-testid="server-app-login-button"
-              className={HEADER_PILL_FILLED}
-            >
-              {t('staffButton')}
-            </a>
-          )
-        }
+        staffButton={null}
       />
       <main className="mx-auto flex h-dvh max-w-5xl flex-col bg-background px-3 text-foreground">
         {status && (
