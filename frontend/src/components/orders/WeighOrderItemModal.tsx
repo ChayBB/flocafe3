@@ -82,7 +82,10 @@ function KitchenPriceModal({ orderId, item, onClose, onSaved }: Props) {
           </button>
         </div>
         <div className="p-5 space-y-3">
-          <label className="block text-sm font-medium text-foreground" htmlFor="kitchen-price-input">
+          <label
+            className="block text-sm font-medium text-foreground"
+            htmlFor="kitchen-price-input"
+          >
             {tOrders('kitchenPriceLabel')}
           </label>
           <input
@@ -134,7 +137,8 @@ function WeightModal({ orderId, item, onClose, onSaved }: Props) {
 
   const basePrice = Number(item.unit_price);
   const weight = Number(draft);
-  const weightValid = draft.trim() !== '' && Number.isFinite(weight) && weight >= MIN_WEIGHT && weight <= MAX_WEIGHT;
+  const weightValid =
+    draft.trim() !== '' && Number.isFinite(weight) && weight >= MIN_WEIGHT && weight <= MAX_WEIGHT;
   const weightInvalid = draft.trim() !== '' && !weightValid;
   const weightLooksHigh = weightValid && weight >= HIGH_WEIGHT_WARNING;
   const roundedWeight = weightValid ? Number(weight.toFixed(3)) : 0;
@@ -204,13 +208,13 @@ function WeightModal({ orderId, item, onClose, onSaved }: Props) {
           )}
           {weightLooksHigh && (
             <p className="text-xs font-medium text-orange-600 dark:text-orange-400">
-              {tOrders('weightLooksHigh', { weight: roundedWeight.toFixed(3) })}
+              {tOrders('weightLooksHigh', { weight: roundedWeight.toFixed(2) })}
             </p>
           )}
           {weightValid && (
             <p className="text-sm font-semibold text-foreground tabular-nums">
-              {tOrders('weightAmount', { weight: roundedWeight.toFixed(3) })} ×{' '}
-              {fmt(basePrice)} = {fmt(basePrice * roundedWeight)}
+              {tOrders('weightAmount', { weight: roundedWeight.toFixed(2) })} × {fmt(basePrice)} ={' '}
+              {fmt(basePrice * roundedWeight)}
             </p>
           )}
         </div>

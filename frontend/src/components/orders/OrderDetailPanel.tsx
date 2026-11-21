@@ -703,7 +703,7 @@ function OrderDetailContent({
                     </span>
                     {item.weight != null && (
                       <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
-                        {tOrders('weightAmount', { weight: Number(item.weight).toFixed(3) })}
+                        {tOrders('weightAmount', { weight: Number(item.weight).toFixed(2) })}
                       </span>
                     )}
                   </div>

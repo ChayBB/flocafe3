@@ -18,7 +18,8 @@ export function KdsSetPrice({ item, className = '' }: { item: KdsOrderItem; clas
   if (item.kitchen_set_price == null) return null;
   return (
     <p data-testid="kds-set-price" className={`text-sm font-semibold text-green-600 ${className}`}>
-      {item.weight != null && `${tOrders('weightAmount', { weight: Number(item.weight) })} · `}
+      {item.weight != null &&
+        `${tOrders('weightAmount', { weight: Number(item.weight).toFixed(2) })} · `}
       {formatPrice(item.kitchen_set_price, item.currency, locale)}
     </p>
   );

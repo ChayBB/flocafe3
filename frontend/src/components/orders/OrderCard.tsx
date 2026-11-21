@@ -695,7 +695,7 @@ export function OrderCard({
                     </span>
                     {item.weight != null && (
                       <span className="text-muted-foreground shrink-0 tabular-nums">
-                        {tOrders('weightAmount', { weight: Number(item.weight).toFixed(3) })}
+                        {tOrders('weightAmount', { weight: Number(item.weight).toFixed(2) })}
                       </span>
                     )}
                   </div>
