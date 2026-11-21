@@ -7,9 +7,9 @@
  * Prints real paper, so use a test roll or expect to throw the slips away.
  *
  * Usage:
- *   node scripts/loadtest/printer-speed.cjs [printer-ip] [--count 5] [--lines 20] [--port 9100] [--no-wait]
+ *   node scripts/loadtest/printer-speed.cjs <printer-ip> [--count 5] [--lines 20] [--port 9100] [--no-wait]
  *
- *   printer-ip defaults to the shop's kitchen printer, 192.168.123.100
+ *   printer-ip is required, or set FLO_PRINTER_IP
  *   --count   tickets to print (default 5)
  *   --lines    item lines per ticket (default 20, about one long kitchen ticket)
  *   --no-wait  skip the Enter prompt and report only how fast the printer accepted the data
@@ -21,7 +21,6 @@ const ESC = 0x1b;
 const GS = 0x1d;
 const DLE = 0x10;
 const EOT = 0x04;
-const DEFAULT_PRINTER_IP = '192.168.123.100';
 
 function readArgs() {
   const argv = process.argv.slice(2);
@@ -36,7 +35,8 @@ function readArgs() {
     } else if (!arg.startsWith('--') && !args.host) args.host = arg;
     else usage(`Unknown option: ${arg}`);
   }
-  args.host ||= DEFAULT_PRINTER_IP;
+  args.host ||= process.env.FLO_PRINTER_IP?.trim() ?? '';
+  if (!args.host) usage('Printer IP required');
   if (!net.isIP(args.host)) usage(`Not an IP address: ${args.host}`);
   return args;
 }
@@ -44,7 +44,7 @@ function readArgs() {
 function usage(message) {
   console.error(message);
   console.error(
-    'Usage: node scripts/loadtest/printer-speed.cjs [printer-ip] [--count 5] [--lines 20] [--port 9100] [--no-wait]',
+    'Usage: node scripts/loadtest/printer-speed.cjs <printer-ip> [--count 5] [--lines 20] [--port 9100] [--no-wait]',
   );
   process.exit(2);
 }
