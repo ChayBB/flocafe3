@@ -1229,7 +1229,7 @@ export default function ProductsPage() {
         </TabsList>
 
         <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-3">
-          <div className="relative w-full sm:max-w-xs">
+          <div className="relative w-full sm:max-w-[26rem]">
             <Search
               size={16}
               className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground"
