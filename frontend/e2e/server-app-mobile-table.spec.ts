@@ -153,9 +153,10 @@ for (const screenSize of SCREENS) {
         return body.order.items.length;
       })
       .toBe(5);
-    await expect(page.locator('header')).toContainText('Select a table');
+    await expect(page.locator('header')).toContainText('Table —');
 
-    // Choosing the table again shows all five; "Exit" leaves the list like the back arrow, keeping the table.
+    // Choosing the table again shows all five; "Exit" leaves the list like the back arrow, keeping the
+    // table but hiding the kitchen chips and the ordered-items button.
     await openServerAppTables(page);
     await page.getByRole('button', { name: new RegExp(`Phone ${run}`) }).click();
     await page.getByTestId('server-app-ordered-items-button').click();
@@ -163,7 +164,8 @@ for (const screenSize of SCREENS) {
     await page.getByTestId('server-app-ordered-exit').click();
     await expect(page.getByTestId('server-app-ordered-items')).toHaveCount(0);
     await expect(page.locator('header')).toContainText(`Phone ${run}`);
-    await expect(page.getByTestId('server-app-kitchen-summary')).toBeVisible();
+    await expect(page.getByTestId('server-app-kitchen-summary')).toHaveCount(0);
+    await expect(page.getByTestId('server-app-ordered-items-button')).toHaveCount(0);
     if (screenSize.phone) await expect(page.getByTestId('server-app-cart-button')).toBeVisible();
   });
 }

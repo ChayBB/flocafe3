@@ -342,6 +342,7 @@ export default function ServerStandalonePage() {
   const [disabled, setDisabled] = useState(false);
   const [tablePickerOpen, setTablePickerOpen] = useState(true);
   const [orderedItemsOpen, setOrderedItemsOpen] = useState(false);
+  const [summaryHiddenTable, setSummaryHiddenTable] = useState<string | null>(null);
   const [ticketMenuOpen, setTicketMenuOpen] = useState(false);
   const [transferMode, setTransferMode] = useState<TransferMode | null>(null);
   const [transferring, setTransferring] = useState(false);
@@ -2020,9 +2021,16 @@ export default function ServerStandalonePage() {
   const activeServeConfirmFlag = (activeTable?.activeOrder || activeTable?.current_order)
     ?.serve_confirm_requested_at;
   // Kitchen chips only for a table that has ordered, or that the cashier asked to confirm serving.
+  // Leaving the ordered-items list hides the kitchen chips until another table is chosen.
+  const [summaryTable, setSummaryTable] = useState(selectedTableId);
+  if (summaryTable !== selectedTableId) {
+    setSummaryTable(selectedTableId);
+    setSummaryHiddenTable(null);
+  }
   const showKitchenSummary =
-    Boolean(activeServeConfirmFlag) ||
-    (currentOrder?.items ?? []).some((item) => !isCancelledItem(String(item.status)));
+    summaryHiddenTable !== selectedTableId &&
+    (Boolean(activeServeConfirmFlag) ||
+      (currentOrder?.items ?? []).some((item) => !isCancelledItem(String(item.status))));
   const serveConfirmSeenRef = useRef('');
   useEffect(() => {
     const key =
@@ -2821,7 +2829,10 @@ export default function ServerStandalonePage() {
           tableName={activeTable.name ?? String(activeTable.number)}
           orderNumber={currentOrder?.order_number}
           items={drinksLast((currentOrder?.items ?? []) as OrderedItem[], isDrinkItem)}
-          onBack={() => setOrderedItemsOpen(false)}
+          onBack={() => {
+            setOrderedItemsOpen(false);
+            setSummaryHiddenTable(selectedTableId);
+          }}
           onAddItems={() => {
             setOrderedItemsOpen(false);
             setTablePickerOpen(false);
