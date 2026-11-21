@@ -199,6 +199,9 @@ type ReceiptTenant = Pick<
   | 'calendar'
 >;
 
+/** Kitchen tickets on a printer: one per menu line, the whole send on one ticket, or both. */
+export type KotPrintLayout = 'separate' | 'combined' | 'both';
+
 export interface HardwarePrinter {
   id: string;
   name: string;
@@ -207,6 +210,7 @@ export interface HardwarePrinter {
   port?: number | null;
   paper_width?: string | null;
   text_size?: PrinterTextSize | null;
+  kot_print_layout?: KotPrintLayout;
   is_default: number;
   readiness_state?: 'configured';
   configured_profile_id?: string | null;
@@ -853,7 +857,7 @@ export const usePrinterStore = create<PrinterState>()(
           const hw = get().hardwarePrinter;
           const usesBackendPrinter = Boolean(hw && get().printMethod === 'escpos');
           const ticketItems = opts?.items ?? order.items ?? [];
-          const layout = usePosSettingsStore.getState().kotPrintLayout;
+          const layout = (hw ?? get().webusbPrinter)?.kot_print_layout ?? 'combined';
           if (
             !usesBackendPrinter &&
             !opts?.singleTicket &&

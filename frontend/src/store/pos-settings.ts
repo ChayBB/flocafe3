@@ -16,9 +16,6 @@ export function normalizeAutoLockMinutesValue(value: unknown): AutoLockMinutes {
   return 0;
 }
 
-/** Kitchen tickets: one per menu line, the whole send on one ticket, or both. */
-export type KotPrintLayout = 'separate' | 'combined' | 'both';
-
 export interface PosSettingsState {
   showProductImages: boolean;
   customerMandatory: boolean;
@@ -67,7 +64,6 @@ export interface PosSettingsState {
   kdsEnabled: boolean;
   kotPrintingEnabled: boolean;
   // One kitchen ticket per menu line instead of one per order.
-  kotPrintLayout: KotPrintLayout;
   // Whether WhatsApp messaging is enabled for this tenant.
   whatsappEnabled: boolean;
   // Print language policies synced from backend settings.
@@ -114,7 +110,6 @@ export interface PosSettingsState {
   setPrinterTrimDecimals: (v: boolean) => void;
   setKdsEnabled: (v: boolean) => void;
   setKotPrintingEnabled: (v: boolean) => void;
-  setKotPrintLayout: (v: KotPrintLayout) => void;
   setWhatsappEnabled: (v: boolean) => void;
   setBillLanguagePolicy: (policy: ReceiptLanguagePolicy) => void;
   setKotLanguagePolicy: (policy: KotLanguagePolicy) => void;
@@ -206,7 +201,6 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       printerTrimDecimals: false,
       kdsEnabled: true,
       kotPrintingEnabled: true,
-      kotPrintLayout: 'combined',
       // Default false so sidebar hides WhatsApp nav until tenant enables it.
       // Synced from /api/whatsapp/status on auth load.
       whatsappEnabled: false,
@@ -256,7 +250,6 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       setPrinterTrimDecimals: (v) => set({ printerTrimDecimals: v }),
       setKdsEnabled: (v) => set({ kdsEnabled: v }),
       setKotPrintingEnabled: (v) => set({ kotPrintingEnabled: v }),
-      setKotPrintLayout: (v) => set({ kotPrintLayout: v }),
       setWhatsappEnabled: (v: boolean) => set({ whatsappEnabled: v }),
       setBillLanguagePolicy: (billLanguagePolicy) => set({ billLanguagePolicy }),
       setKotLanguagePolicy: (kotLanguagePolicy) => set({ kotLanguagePolicy }),

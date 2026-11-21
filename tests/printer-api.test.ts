@@ -692,8 +692,8 @@ async function runTests() {
         serverPrintersRes.body.printers[0].text_size === 'extra_large' &&
         serverPrintersRes.body.printers[0].readiness_state === 'configured' &&
         Object.keys(serverPrintersRes.body.printers[0]).sort().join(',') ===
-          'connection_type,id,is_default,name,readiness_state,text_size',
-      'printing.execute receives only default-printer readiness fields including text_size',
+          'connection_type,id,is_default,kot_print_layout,name,readiness_state,text_size',
+      'printing.execute receives only default-printer readiness fields including text_size and kot_print_layout',
     );
 
     const deniedKickRes = await request(app).post('/api/printers/kick-drawer');
@@ -946,7 +946,9 @@ async function runTests() {
     }
   }
 
-  console.log('\nTest 13: kitchen tickets print combined or one per menu line');
+  console.log(
+    '\nTest 13: each printer prints its kitchen tickets combined, one per menu line, or both',
+  );
   {
     const tickets: string[] = [];
     const kitchenServer = net.createServer((socket) => {
@@ -987,11 +989,26 @@ async function runTests() {
          VALUES (?, ?, ?, 10, 1, 10, 10, datetime('now'), datetime('now'))`,
       ).run(kitchenOrderId, `prod-${name}`, name);
     }
+    const kitchenPrinterId = kitchenPrinter.body.printer?.id;
+    assert(
+      kitchenPrinter.body.printer?.kot_print_layout === 'combined',
+      `a new printer prints combined kitchen tickets (got ${kitchenPrinter.body.printer?.kot_print_layout})`,
+    );
+    const badLayout = await request(app)
+      .put(`/api/printers/${kitchenPrinterId}`)
+      .send({ kot_print_layout: 'stacked' });
+    assert(
+      badLayout.status === 400,
+      `an unknown printer layout is rejected (got ${badLayout.status})`,
+    );
     const printKitchen = async (layout: string) => {
-      db.prepare(
-        `INSERT INTO settings (key, value, updated_at) VALUES ('kot_print_layout', ?, datetime('now'))
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      ).run(layout);
+      const saved = await request(app)
+        .put(`/api/printers/${kitchenPrinterId}`)
+        .send({ kot_print_layout: layout });
+      assert(
+        saved.status === 200 && saved.body.printer?.kot_print_layout === layout,
+        `printer saves the ${layout} layout (got ${saved.status} ${saved.body.printer?.kot_print_layout})`,
+      );
       tickets.length = 0;
       const res = await request(app)
         .post('/api/printers/print-kot')

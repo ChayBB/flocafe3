@@ -2558,9 +2558,11 @@ export function isKotPrintingEnabled(): boolean {
 
 export type KotPrintLayout = 'separate' | 'combined' | 'both';
 
-/** Kitchen tickets print one per menu line, all lines of the send on one ticket, or both. */
-export function kotPrintLayout(): KotPrintLayout {
-  const value = getSettingValue('kot_print_layout');
+/** A printer's kitchen tickets: one per menu line, the whole send on one ticket, or both. */
+export function printerKotLayout(
+  printer: { kot_print_layout?: unknown } | null | undefined,
+): KotPrintLayout {
+  const value = printer?.kot_print_layout;
   return value === 'separate' || value === 'both' ? value : 'combined';
 }
 
@@ -10539,6 +10541,24 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 144,
+    name: 'add_printer_kot_print_layout',
+    up: () => {
+      // Each printer keeps the shop-wide kitchen ticket layout it printed with before.
+      if (!getColumns(db, 'printers').includes('kot_print_layout')) {
+        db.exec(
+          `ALTER TABLE printers ADD COLUMN kot_print_layout TEXT NOT NULL DEFAULT 'combined' CHECK (kot_print_layout IN ('separate', 'combined', 'both'))`,
+        );
+      }
+      const row = db.prepare("SELECT value FROM settings WHERE key = 'kot_print_layout'").get() as
+        | { value: string }
+        | undefined;
+      if (row?.value === 'separate' || row?.value === 'both') {
+        db.prepare('UPDATE printers SET kot_print_layout = ?').run(row.value);
+      }
+    },
+  },
 ];
 
 const LEGACY_LOCAL_MIGRATIONS: typeof MIGRATIONS = [
@@ -11659,6 +11679,7 @@ function createSchema(): void {
       cash_drawer_pulse_enabled INTEGER NOT NULL DEFAULT 0,
       paper_width TEXT DEFAULT '80mm',
       text_size TEXT NOT NULL DEFAULT 'normal' CHECK (text_size IN ('normal', 'large', 'extra_large')),
+      kot_print_layout TEXT NOT NULL DEFAULT 'combined' CHECK (kot_print_layout IN ('separate', 'combined', 'both')),
       profile_id TEXT DEFAULT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP

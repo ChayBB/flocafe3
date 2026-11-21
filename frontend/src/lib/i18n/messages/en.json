@@ -3299,7 +3299,6 @@
     "kotPrintLayoutSeparate": "Print each menu item separately (1 ticket per item)",
     "kotPrintLayoutCombined": "Print the round together (all items of that send on 1 ticket)",
     "kotPrintLayoutBoth": "Both",
-    "kotPrintLayoutSaved": "Print layout saved",
     "qrAccountLabel": "QR payment account (PromptPay)",
     "qrAccountPlaceholder": "Phone number, 13-digit ID or e-wallet ID",
     "qrAccountHint": "Used to create a QR code with the bill amount at checkout.",

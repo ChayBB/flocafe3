@@ -3299,7 +3299,6 @@
     "kotPrintLayoutSeparate": "พิมพ์แยกเมนู (แต่ละเมนู 1 ใบ)",
     "kotPrintLayoutCombined": "พิมพ์รวมเมนู (รวมทุกเมนูใน 1 รอบการสั่งนั้นๆ)",
     "kotPrintLayoutBoth": "ทั้ง 2 อย่าง",
-    "kotPrintLayoutSaved": "บันทึกรูปแบบการพิมพ์แล้ว",
     "qrAccountLabel": "บัญชีรับชำระด้วย QR (พร้อมเพย์)",
     "qrAccountPlaceholder": "เบอร์โทรศัพท์ เลขบัตร 13 หลัก หรือเลข e-Wallet",
     "qrAccountHint": "ใช้สร้าง QR Code พร้อมยอดเงินตามบิลตอนชำระเงิน",

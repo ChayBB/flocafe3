@@ -1375,15 +1375,6 @@ export default function POSPage() {
           .then((res) => setKotPrintingEnabled(res.data.setting?.value !== 'false'))
           .catch(() => {});
         api
-          .get('/settings/kot_print_layout')
-          .then((res) => {
-            const value = res.data.setting?.value;
-            usePosSettingsStore
-              .getState()
-              .setKotPrintLayout(value === 'separate' || value === 'both' ? value : 'combined');
-          })
-          .catch(() => {});
-        api
           .get('/settings/auto_print_kot')
           .then((res) => {
             const setting = res.data.setting;

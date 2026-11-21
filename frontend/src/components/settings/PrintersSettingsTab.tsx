@@ -31,13 +31,8 @@ import {
   isTemplateCardSelected,
   type BillTemplateSelectionSource,
 } from '@/lib/bill-template-picker';
-import {
-  type PaperSize,
-  type BillTemplate,
-  type KotPrintLayout,
-  usePosSettingsStore,
-} from '@/store/pos-settings';
-import { usePrinterStore } from '@/hooks/usePrinter';
+import { type PaperSize, type BillTemplate } from '@/store/pos-settings';
+import { type KotPrintLayout, usePrinterStore } from '@/hooks/usePrinter';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import type { PrinterTextSize } from '@print/text-size';
@@ -56,6 +51,7 @@ export type HwPrinter = {
   cash_drawer_pulse_enabled: number;
   paper_width: string;
   text_size?: PrinterTextSize;
+  kot_print_layout?: KotPrintLayout;
   is_default: number;
   configured_profile_id?: string | null;
   profile_id?: string;
@@ -85,6 +81,7 @@ export type PrinterForm = {
   port: string;
   paper_width: string;
   text_size: PrinterTextSize;
+  kot_print_layout: KotPrintLayout;
   profile_id: string;
 };
 
@@ -156,6 +153,7 @@ const emptyPrinterForm: PrinterForm = {
   port: '9100',
   paper_width: 'cols-42',
   text_size: 'normal',
+  kot_print_layout: 'combined',
   profile_id: '',
 };
 
@@ -228,36 +226,7 @@ export function PrintersSettingsTab({
   const [addingDetectedName, setAddingDetectedName] = useState<string | null>(null);
   const [installedPrintersOpen, setInstalledPrintersOpen] = useState(false);
   const [cashDrawerMethodsOpen, setCashDrawerMethodsOpen] = useState(false);
-  const [kotLayoutOpen, setKotLayoutOpen] = useState(false);
-  const [kotLayout, setKotLayout] = useState<KotPrintLayout>(
-    () => usePosSettingsStore.getState().kotPrintLayout,
-  );
-
-  useEffect(() => {
-    api
-      .get('/settings/kot_print_layout')
-      .then((res) => {
-        const value = res.data.setting?.value;
-        const layout: KotPrintLayout =
-          value === 'separate' || value === 'both' ? value : 'combined';
-        setKotLayout(layout);
-        usePosSettingsStore.getState().setKotPrintLayout(layout);
-      })
-      .catch(() => {});
-  }, []);
-
-  const saveKotLayout = async (layout: KotPrintLayout) => {
-    const previous = kotLayout;
-    setKotLayout(layout);
-    try {
-      await api.put('/settings/kot_print_layout', { value: layout });
-      usePosSettingsStore.getState().setKotPrintLayout(layout);
-      toast.success(t('kotPrintLayoutSaved'));
-    } catch {
-      setKotLayout(previous);
-      toast.error(t('saveFailed'));
-    }
-  };
+  const [printerLayoutOpen, setPrinterLayoutOpen] = useState(false);
 
   const normalizePrinterWidthValue = (value?: string | null): string => {
     if (value === '58mm') return 'cols-32';
@@ -387,6 +356,7 @@ export function PrintersSettingsTab({
       port: String(p.port || 9100),
       paper_width: normalizePrinterWidthValue(p.paper_width),
       text_size: p.text_size ?? 'normal',
+      kot_print_layout: p.kot_print_layout ?? 'combined',
       profile_id: p.configured_profile_id || '',
     });
     setPaperWidthTouched(false);
@@ -418,6 +388,7 @@ export function PrintersSettingsTab({
             ? undefined
             : printerForm.paper_width,
         text_size: printerForm.text_size,
+        kot_print_layout: printerForm.kot_print_layout,
         profile_id: printerForm.profile_id || null,
       };
       if (editingPrinterId) {
@@ -990,6 +961,52 @@ export function PrintersSettingsTab({
                 </div>
               </div>
 
+              <div
+                className="mt-4 rounded-lg border border-border overflow-hidden"
+                data-testid="printer-kot-layout"
+              >
+                <button
+                  type="button"
+                  onClick={() => setPrinterLayoutOpen((open) => !open)}
+                  aria-expanded={printerLayoutOpen}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-start text-sm font-medium text-foreground hover:bg-muted"
+                >
+                  <span>{t('kotPrintLayout')}</span>
+                  <ChevronDown
+                    size={16}
+                    className={`text-muted-foreground transition-transform ${
+                      printerLayoutOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                {printerLayoutOpen && (
+                  <div className="border-t border-border bg-muted/30 px-3 py-2 space-y-2">
+                    {(
+                      [
+                        ['separate', t('kotPrintLayoutSeparate')],
+                        ['combined', t('kotPrintLayoutCombined')],
+                        ['both', t('kotPrintLayoutBoth')],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <label
+                        key={value}
+                        className="flex items-center gap-2 text-sm text-foreground"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={printerForm.kot_print_layout === value}
+                          onChange={() =>
+                            setPrinterForm((p) => ({ ...p, kot_print_layout: value }))
+                          }
+                          className="h-4 w-4 rounded border-border text-brand focus:ring-brand"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="mt-4 flex gap-2">
                 <button
                   onClick={savePrinterHw}
@@ -1201,49 +1218,6 @@ export function PrintersSettingsTab({
                 }}
               />
             </div>
-            {kotPrintingEnabledSetting && (
-              <div className="rounded-lg border border-border overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setKotLayoutOpen((open) => !open)}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-start text-sm font-medium text-foreground hover:bg-muted"
-                >
-                  <span>{t('kotPrintLayout')}</span>
-                  <ChevronDown
-                    size={16}
-                    className={`text-muted-foreground transition-transform ${
-                      kotLayoutOpen ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
-                {kotLayoutOpen && (
-                  <div className="border-t border-border bg-muted/30 px-3 py-2 space-y-2">
-                    {(
-                      [
-                        ['separate', t('kotPrintLayoutSeparate')],
-                        ['combined', t('kotPrintLayoutCombined')],
-                        ['both', t('kotPrintLayoutBoth')],
-                      ] as const
-                    ).map(([value, label]) => (
-                      <label
-                        key={value}
-                        className="flex items-center gap-2 text-sm text-foreground"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={kotLayout === value}
-                          onChange={() => {
-                            if (kotLayout !== value) saveKotLayout(value);
-                          }}
-                          className="h-4 w-4 rounded border-border text-brand focus:ring-brand"
-                        />
-                        {label}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
             {!kdsEnabledSetting && !kotPrintingEnabledSetting && (
               <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/40 rounded-lg">
                 <AlertTriangle

@@ -18,7 +18,7 @@ import {
   now,
   attachEffectiveAddons,
   isKotPrintingEnabled,
-  kotPrintLayout,
+  printerKotLayout,
   isServerBillPrintingEnabled,
   parseItemJson,
   getSettingValue,
@@ -165,6 +165,12 @@ function validatePrinterFields(body: any, existing?: any): string | null {
     return 'text_size must be normal, large, or extra_large';
   }
   if (
+    body.kot_print_layout !== undefined &&
+    !['separate', 'combined', 'both'].includes(body.kot_print_layout)
+  ) {
+    return 'kot_print_layout must be separate, combined, or both';
+  }
+  if (
     body.profile_id !== undefined &&
     body.profile_id !== null &&
     body.profile_id !== '' &&
@@ -248,6 +254,7 @@ export function printerShape(printer: any) {
     cash_drawer_pulse_enabled: printer.cash_drawer_pulse_enabled,
     paper_width: printer.paper_width,
     text_size: textSize,
+    kot_print_layout: printerKotLayout(printer),
     created_at: printer.created_at,
     updated_at: printer.updated_at,
     configured_profile_id: printer.profile_id ?? null,
@@ -266,6 +273,7 @@ interface DefaultPrinter {
   is_default: number;
   paper_width: string | null;
   text_size?: string | null;
+  kot_print_layout?: string | null;
 }
 
 function printerReadinessShape(printer: DefaultPrinter) {
@@ -275,6 +283,7 @@ function printerReadinessShape(printer: DefaultPrinter) {
     connection_type: printer.connection_type,
     is_default: printer.is_default,
     text_size: normalizePrinterTextSize(printer.text_size),
+    kot_print_layout: printerKotLayout(printer),
     readiness_state: 'configured',
   };
 }
@@ -387,6 +396,7 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
       port,
       paper_width,
       text_size,
+      kot_print_layout,
       profile_id,
       is_default,
       cash_drawer_pulse_enabled,
@@ -452,8 +462,8 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
       const shouldBeDefault = Boolean(is_default) || isFirstPrinter;
       if (shouldBeDefault) db.prepare('UPDATE printers SET is_default = 0').run();
       db.prepare(`
-        INSERT INTO printers (id, name, device_name, connection_type, ip_address, port, paper_width, text_size, profile_id, is_default, cash_drawer_pulse_enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO printers (id, name, device_name, connection_type, ip_address, port, paper_width, text_size, kot_print_layout, profile_id, is_default, cash_drawer_pulse_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         name,
@@ -463,6 +473,7 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
         port ?? 9100,
         resolvedPaperWidth,
         text_size ?? 'normal',
+        kot_print_layout ?? 'combined',
         persistedProfileId,
         shouldBeDefault ? 1 : 0,
         cash_drawer_pulse_enabled === true ? 1 : 0,
@@ -494,6 +505,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
       port,
       paper_width,
       text_size,
+      kot_print_layout,
       profile_id,
       is_default,
       cash_drawer_pulse_enabled,
@@ -528,7 +540,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
       db.prepare(`
         UPDATE printers SET
           name = ?, device_name = ?, connection_type = ?, ip_address = ?, port = ?,
-          paper_width = ?, text_size = ?, profile_id = ?, is_default = ?, cash_drawer_pulse_enabled = ?, updated_at = ?
+          paper_width = ?, text_size = ?, kot_print_layout = ?, profile_id = ?, is_default = ?, cash_drawer_pulse_enabled = ?, updated_at = ?
         WHERE id = ?
       `).run(
         name !== undefined ? name : existing.name,
@@ -538,6 +550,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
         port !== undefined ? port : existing.port,
         paper_width !== undefined ? paper_width : existing.paper_width,
         text_size !== undefined ? text_size : existing.text_size,
+        kot_print_layout !== undefined ? kot_print_layout : existing.kot_print_layout,
         updatedProfileId,
         becameDefault ? 1 : is_default === false ? 0 : existing.is_default,
         cash_drawer_pulse_enabled !== undefined
@@ -1624,8 +1637,8 @@ export async function printOrderKot(
         isKotItemPending(item?.status) && (!retryIds || retryIds.has(Number(item?.id))),
     );
 
-    const layout = kotPrintLayout();
-    const tickets = (ticketItems: any[]) => {
+    const tickets = (ticketItems: any[], ticketPrinter: any) => {
+      const layout = printerKotLayout(ticketPrinter);
       if (layout === 'combined' || ticketItems.length < 2) return [ticketItems];
       const singles = ticketItems.map((item) => [item]);
       return layout === 'both' ? [...singles, ticketItems] : singles;
@@ -1660,7 +1673,7 @@ export async function printOrderKot(
 
     if (stationName) {
       const station = stationName || 'Kitchen';
-      for (const ticket of kotSourceItems.length > 0 ? tickets(kotSourceItems) : []) {
+      for (const ticket of kotSourceItems.length > 0 ? tickets(kotSourceItems, printer) : []) {
         const result = await printKOTDetailed(
           order,
           ticket,
@@ -1681,7 +1694,7 @@ export async function printOrderKot(
         (g) => g.items.length > 0 && (!retryStation || g.stationName === retryStation),
       );
       for (const group of groups.flatMap((g) =>
-        tickets(g.items).map((items) => ({ ...g, items })),
+        tickets(g.items, g.printer || printer).map((items) => ({ ...g, items })),
       )) {
         const result = await printKOTDetailed(
           order,

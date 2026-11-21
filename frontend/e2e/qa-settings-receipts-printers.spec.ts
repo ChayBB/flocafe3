@@ -353,43 +353,61 @@ test.describe('@ci-tier2 Settings > Printers', () => {
     await expect(page.getByText('USB · FUJIFILM Apeos C3070')).toBeVisible();
   });
 
-  test('the kitchen ticket print layout is one choice saved straight to the server', async ({
+  test('each printer saves its own kitchen ticket layout from the printer form', async ({
     page,
   }) => {
     await openPrintersTab(page);
     const token = await page.evaluate(() => localStorage.getItem('token'));
     const headers = { Authorization: `Bearer ${token}` };
+    const created = await page.request.post(`${BASE}/api/printers`, {
+      headers,
+      data: {
+        name: 'E2E Layout Printer',
+        connection_type: 'network',
+        ip_address: '127.0.0.1',
+        port: 9,
+      },
+    });
+    expect(created.status()).toBe(201);
+    const printerId = (await created.json()).printer.id as string;
     const layout = async () =>
-      (await (await page.request.get(`${BASE}/api/settings/kot_print_layout`, { headers })).json())
-        .setting?.value;
-    const original = await layout();
+      (
+        (await (await page.request.get(`${BASE}/api/printers`, { headers })).json())
+          .printers as Array<{
+          id: string;
+          kot_print_layout: string;
+        }>
+      ).find((p) => p.id === printerId)?.kot_print_layout;
     try {
-      await page.getByRole('button', { name: 'Print layout', exact: true }).click();
-      const separate = page.getByRole('checkbox', { name: /Print each menu item separately/ });
-      const combined = page.getByRole('checkbox', { name: /Print the round together/ });
-      const both = page.getByRole('checkbox', { name: 'Both', exact: true });
-      await separate.check();
-      await expect(separate).toBeChecked();
-      await expect(combined).not.toBeChecked();
+      expect(await layout()).toBe('combined');
+      await openPrintersTab(page);
+      const chooseLayout = async (name: RegExp | string) => {
+        await page
+          .locator('div')
+          .filter({ has: page.getByText('E2E Layout Printer', { exact: true }) })
+          .filter({ has: page.getByTitle('Edit', { exact: true }) })
+          .last()
+          .getByTitle('Edit', { exact: true })
+          .click();
+        const box = page.getByTestId('printer-kot-layout');
+        const toggle = box.getByRole('button', { name: 'Print layout', exact: true });
+        if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+        const choice =
+          typeof name === 'string'
+            ? box.getByRole('checkbox', { name, exact: true })
+            : box.getByRole('checkbox', { name });
+        await choice.check();
+        await expect(box.getByRole('checkbox', { checked: true })).toHaveCount(1);
+        await page.getByRole('button', { name: 'Update', exact: true }).click();
+      };
+      await chooseLayout(/Print each menu item separately/);
       await expect.poll(layout).toBe('separate');
-      await combined.check();
-      await expect(separate).not.toBeChecked();
-      await expect.poll(layout).toBe('combined');
-      await both.check();
-      await expect(combined).not.toBeChecked();
-      await expect(separate).not.toBeChecked();
+      await chooseLayout('Both');
       await expect.poll(layout).toBe('both');
-      await combined.check();
-      await expect(both).not.toBeChecked();
+      await chooseLayout(/Print the round together/);
       await expect.poll(layout).toBe('combined');
-      // Unticking the chosen layout keeps it, since one layout always applies.
-      await combined.click();
-      await expect(combined).toBeChecked();
     } finally {
-      await page.request.put(`${BASE}/api/settings/kot_print_layout`, {
-        headers,
-        data: { value: original ?? 'combined' },
-      });
+      await page.request.delete(`${BASE}/api/printers/${printerId}`, { headers });
     }
   });
 
