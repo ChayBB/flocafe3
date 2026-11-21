@@ -918,6 +918,15 @@ function Ordering() {
   );
 }
 
+// A long press opens the browser's page menu over the menu; guests only need taps, so block it.
+const textEntry = 'input, textarea, [contenteditable="true"]';
+const noLongPress = document.createElement('style');
+noLongPress.textContent = `html{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}${textEntry}{-webkit-touch-callout:default;-webkit-user-select:text;user-select:text}`;
+document.head.appendChild(noLongPress);
+document.addEventListener('contextmenu', (event) => {
+  if (!(event.target instanceof Element && event.target.closest(textEntry))) event.preventDefault();
+});
+
 createRoot(document.getElementById('root')!, {
   onUncaughtError: () => window.dispatchEvent(new Event('flo-menu-render-error')),
 }).render(
