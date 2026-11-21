@@ -753,6 +753,32 @@ staging URL. It stores the token, clears a pending legacy cutover hold, audits
 test, the POS stays paired and offers a retry. **Set up manually (advanced)** opens the URL, token,
 CA, and legacy import steps below.
 
+**Owner menu changes.** In the Cloud portal, a shop owner can set a published item's price or
+replace its photo (PNG, JPEG, or WebP up to 96,000 bytes; the portal shrinks larger photos to WebP
+before upload). Each change records the value the POS last published as its base. A newer change to
+the same item and field supersedes an older one that has not been applied. At most once a minute, the
+delivery loop pulls up to 10 pending changes from `GET /api/v1/connectors/menu-changes`
+(`catalog.write`). `applyOwnerMenuChange()` in `main/services/qr-cloud/owner-menu.ts` writes the
+price to the product or variant, or stores the photo as the product's image data URL, only when the
+POS value still equals the base, or when the owner chose to override it. Otherwise it reports a
+conflict with the current POS value. In the portal the owner keeps either the web value, which sends
+the change again as an override, or the POS value. Every outcome is reported to
+`POST /api/v1/connectors/menu-changes/:id/result`, and each applied change is audited as
+`qr_cloud_owner_menu_change`. A Cloud without these routes returns 404, and the POS then checks
+again only every 10 minutes.
+
+**Owner reports.** `buildOwnerDailyReport()` in `main/services/qr-cloud/owner-report.ts` aggregates
+one business day for the owner dashboard. Sales, refunds, items, ingredient cost, and payment
+methods come from `buildDailySalesExportDataset()`. Hourly sales use bills paid in the store-local
+hour. Guests are the order guest count, or one per order without it. Table use is the merged
+open-to-close time of dine-in orders per table. Kitchen times come from the order's cooking and ready
+timestamps, and an order counts as on time when it is ready within 20 minutes. Labor is clocked
+hours times each user's hourly rate. Expenses are the day's live expense records. Members are counted
+without names, phone numbers, or user IDs. The delivery loop sends today and yesterday every
+5 minutes to `POST /api/v1/connectors/reports` (`catalog.write`). After start-up it also sends the
+previous 62 days, a week every 30 seconds. The Cloud keeps the latest copy of each day per branch, and
+an older Cloud that returns 404 is retried hourly.
+
 **Credentials.** Packaged builds and the Windows checkout app encrypt the token with Electron
 `safeStorage` in the application data directory and store only a storage marker in settings. If
 protected storage is unavailable, a replacement fails. The app migrates an older plaintext token only when it can encrypt it

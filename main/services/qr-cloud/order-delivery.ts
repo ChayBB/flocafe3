@@ -11,6 +11,8 @@ import { readConfig, readConnectorSetting, type QrCloudConfig } from './config';
 import { openInbox } from './inbox';
 import { acceptCloudOrder, CloudOrderError } from './order-acceptance';
 import { readApprovedCa } from './tls';
+import { syncOwnerMenuChanges } from './owner-menu';
+import { syncOwnerReports } from './owner-report';
 
 const STATUS_SYNC_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -127,6 +129,8 @@ export async function processCloudOrderDelivery(config: QrCloudConfig, signal: A
   // Kitchen progress is informational for guests; it must never fail order delivery.
   await syncKitchenStatus(config, signal).catch(() => undefined);
   await syncTableStates(config, signal).catch(() => undefined);
+  await syncOwnerMenuChanges(config, signal).catch(() => undefined);
+  await syncOwnerReports(config, signal).catch(() => undefined);
 }
 
 async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {

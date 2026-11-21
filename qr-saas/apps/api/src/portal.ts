@@ -1,3 +1,4 @@
+import { MAX_REPORT_DAYS, ownerDashboard, setSalesTarget } from './reports';
 import { Elysia, t } from 'elysia';
 import type { Sql } from 'postgres';
 import { revokeInstallation } from './connector-auth';
@@ -17,6 +18,7 @@ import {
   verifyLogin,
 } from './portal-auth';
 import { portalAssets } from './portal-ui/assets';
+import { branchMenu, cancelChange, MAX_PRICE_SATANG, ownerImage, requestMenuChange, resolveConflict } from './menu-changes';
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
@@ -25,6 +27,7 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
   });
 const fail = (status: number, code: string) => json({ code }, status);
 const Uuid = t.String({ format: 'uuid' });
+const ReportDate = t.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
 const Name = t.String({ minLength: 1, maxLength: 100 });
 
 function clientOf(request: Request, server: { requestIP(r: Request): { address: string } | null } | null) {
@@ -221,5 +224,75 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       if (user instanceof Response) return user;
       const [shop] = await listShops(sql, user.tenant_id);
       return shop ? json({ shop }) : fail(404, 'shop_not_found');
-    });
+    })
+    .get('/api/v1/portal/owner/reports', async ({ request, query }) => {
+      const user = await guard(request, 'owner');
+      if (user instanceof Response) return user;
+      const days = (Date.parse(query.to) - Date.parse(query.from)) / 86_400_000 + 1;
+      if (!(days >= 1 && days <= MAX_REPORT_DAYS)) return fail(400, 'range_invalid');
+      if (query.branch) {
+        const branch = await branchOf(query.branch);
+        if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      }
+      return json(await ownerDashboard(sql, user.tenant_id!, { from: query.from, to: query.to, branchId: query.branch ?? null }));
+    }, { query: t.Object({ from: ReportDate, to: ReportDate, branch: t.Optional(Uuid) }) })
+    .post('/api/v1/portal/owner/branches/:branchId/target', async ({ request, params, body }) => {
+      const user = await guard(request, 'owner');
+      if (user instanceof Response) return user;
+      const branch = await branchOf(params.branchId);
+      if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      await setSalesTarget(sql, branch.tenant_id, branch.id, body.month, body.target);
+      await audit(sql, { userId: user.id, action: 'sales_target_set', tenantId: branch.tenant_id, branchId: branch.id, detail: { month: body.month, target: body.target } });
+      return json({ ok: true });
+    }, {
+      params: t.Object({ branchId: Uuid }),
+      body: t.Object({ month: t.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }), target: t.Union([t.Null(), t.Number({ minimum: 0, maximum: 1_000_000_000 })]) }),
+    })
+    .get('/api/v1/portal/owner/branches/:branchId/menu', async ({ request, params }) => {
+      const user = await guard(request, 'owner');
+      if (user instanceof Response) return user;
+      const branch = await branchOf(params.branchId);
+      if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      return json(await branchMenu(sql, branch.tenant_id, branch.id));
+    }, { params: t.Object({ branchId: Uuid }) })
+    .post('/api/v1/portal/owner/branches/:branchId/menu/:itemId/price', async ({ request, params, body }) => {
+      const user = await guard(request, 'owner');
+      if (user instanceof Response) return user;
+      const branch = await branchOf(params.branchId);
+      if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      const result = await requestMenuChange(sql, { tenantId: branch.tenant_id, branchId: branch.id, userId: user.id },
+        params.itemId, { field: 'price', value: String(body.price_satang) });
+      if (!result) return fail(404, 'item_not_found');
+      if ('id' in result) await audit(sql, { userId: user.id, action: 'menu_price_requested', tenantId: branch.tenant_id, branchId: branch.id, detail: { item: params.itemId, price_satang: body.price_satang } });
+      return json(result);
+    }, { params: t.Object({ branchId: Uuid, itemId: Uuid }), body: t.Object({ price_satang: t.Integer({ minimum: 0, maximum: MAX_PRICE_SATANG }) }) })
+    .post('/api/v1/portal/owner/branches/:branchId/menu/:itemId/image', async ({ request, params, body }) => {
+      const user = await guard(request, 'owner');
+      if (user instanceof Response) return user;
+      const branch = await branchOf(params.branchId);
+      if (!branch || branch.tenant_id !== user.tenant_id) return fail(404, 'branch_not_found');
+      const image = ownerImage(body.data);
+      if (!image) return fail(400, 'image_invalid');
+      const result = await requestMenuChange(sql, { tenantId: branch.tenant_id, branchId: branch.id, userId: user.id },
+        params.itemId, { field: 'image', value: image.name }, image);
+      if (!result) return fail(404, 'item_not_found');
+      if ('id' in result) await audit(sql, { userId: user.id, action: 'menu_image_requested', tenantId: branch.tenant_id, branchId: branch.id, detail: { item: params.itemId, image: image.name } });
+      return json(result);
+    }, { params: t.Object({ branchId: Uuid, itemId: Uuid }), body: t.Object({ data: t.String({ minLength: 8, maxLength: 140_000 }) }) })
+    .post('/api/v1/portal/owner/changes/:changeId/resolve', async ({ request, params, body }) => {
+      const user = await guard(request, 'owner');
+      if (user instanceof Response) return user;
+      const row = await resolveConflict(sql, user.tenant_id!, params.changeId, body.keep);
+      if (!row) return fail(404, 'change_not_found');
+      await audit(sql, { userId: user.id, action: body.keep === 'web' ? 'menu_conflict_keep_web' : 'menu_conflict_keep_pos', tenantId: user.tenant_id, branchId: row.branch_id, detail: { change: params.changeId } });
+      return json({ ok: true });
+    }, { params: t.Object({ changeId: Uuid }), body: t.Object({ keep: t.Union([t.Literal('web'), t.Literal('pos')]) }) })
+    .post('/api/v1/portal/owner/changes/:changeId/cancel', async ({ request, params }) => {
+      const user = await guard(request, 'owner');
+      if (user instanceof Response) return user;
+      const row = await cancelChange(sql, user.tenant_id!, params.changeId);
+      if (!row) return fail(404, 'change_not_found');
+      await audit(sql, { userId: user.id, action: 'menu_change_cancelled', tenantId: user.tenant_id, branchId: row.branch_id, detail: { change: params.changeId } });
+      return json({ ok: true });
+    }, { params: t.Object({ changeId: Uuid }) });
 }

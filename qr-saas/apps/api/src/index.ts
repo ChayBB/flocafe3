@@ -16,6 +16,8 @@ import { AddonGroups, AddonSelection, resolveCatalogAddons, type AddonGroup } fr
 import { enterTenant, inTenant } from './tenant-scope';
 import { attemptLimiter, createPairingCode, redeemPairingCode } from './pairing';
 import { portal } from './portal';
+import { connectorMenuChanges } from './menu-changes';
+import { connectorReports } from './reports';
 const sql=postgres(process.env.DATABASE_URL!,{max:12});
 const redis=new Redis(process.env.REDIS_URL!);
 const adminSecret=process.env.ADMIN_BOOTSTRAP_TOKEN!;
@@ -44,6 +46,8 @@ async function createTableSession(scope: typeof tableSessionScope.static) {
 
 const app=new Elysia({ websocket: connectorWebSocketOptions })
 .use(portal({ sql, publicOrigin: process.env.PORTAL_PUBLIC_ORIGIN ?? 'https://order.aiwittaya.com' }))
+.use(connectorMenuChanges({ sql, authorize: (request) => authorizeConnector(request, 'catalog.write') }))
+.use(connectorReports({ sql, authorize: (request) => authorizeConnector(request, 'catalog.write') }))
 .use(posTableQr({ sql, authorize: (request) => authorizeConnector(request, 'tables.write'), publicOrigin: process.env.QR_ORDERING_PUBLIC_ORIGIN }))
 .use(menuImages({ store: postgresMenuImageStore(sql), authorize: (request) => authorizeConnector(request, 'catalog.write') }))
 .use(menuPreview({

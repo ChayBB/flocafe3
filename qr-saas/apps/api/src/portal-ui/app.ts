@@ -1,3 +1,4 @@
+import { dashboardView } from './dashboard';
 type Lang = 'th' | 'en';
 type User = { id: string; email: string; display_name: string; role: 'admin' | 'owner'; tenant_id: string | null };
 type Branch = {
@@ -29,6 +30,16 @@ const TEXT = {
     inviteHint: 'ส่งลิงก์นี้ให้เจ้าของบัญชีทางช่องทางส่วนตัว ใช้ได้ครั้งเดียวภายใน 7 วัน', resendInvite: 'สร้างลิงก์ใหม่',
     disable: 'ปิดใช้งาน', enable: 'เปิดใช้งาน', statusActive: 'ใช้งานอยู่', statusInvited: 'รอตั้งรหัสผ่าน', statusDisabled: 'ปิดใช้งาน',
     when: 'เวลา', actor: 'ผู้ทำ', action: 'การกระทำ', branches: 'สาขา', yourShop: 'ร้านของคุณ', noShops: 'ยังไม่มีร้าน',
+    manageMenu: 'จัดการเมนู', dashboard: 'สรุปผู้บริหาร', myShop: 'ร้านและเมนู', back: 'กลับ',
+    menuHint: 'แก้ราคาหรือรูปแล้ว POS ของสาขาจะรับไปใช้เองเมื่อออนไลน์ (ภายในประมาณ 1 นาที) ลูกค้า QR เห็นค่าใหม่หลัง POS รับแล้ว',
+    menuEmpty: 'สาขานี้ยังไม่ได้เผยแพร่เมนูจาก POS', price: 'ราคา (บาท)', save: 'บันทึก', changePhoto: 'เปลี่ยนรูป', noPhoto: 'ไม่มีรูป',
+    changes: 'รายการเปลี่ยนแปลง', pending: 'รอ POS รับ', applied: 'POS ใช้แล้ว', conflict: 'ชนกับ POS', kept_pos: 'ใช้ค่าจาก POS',
+    cancelled: 'ยกเลิกแล้ว', failed: 'POS ใช้ไม่ได้', fieldPrice: 'ราคา', fieldImage: 'รูป',
+    conflictHint: 'พนักงานแก้ค่านี้ที่ POS แล้ว (ตอนนี้ POS เป็น {pos}) เลือกว่าจะใช้ค่าไหน',
+    keepWeb: 'ใช้ค่าจากเว็บ', keepPos: 'ใช้ค่าจาก POS', cancel: 'ยกเลิก', saved: 'ส่งไป POS แล้ว', unchanged: 'ค่าเท่าเดิม ไม่ต้องส่ง',
+    photoTooLarge: 'ย่อรูปให้เล็กพอไม่ได้ ลองรูปอื่น', error_image_invalid: 'ไฟล์รูปไม่ถูกต้อง ใช้ JPG, PNG หรือ WebP',
+    error_item_not_found: 'ไม่พบเมนูนี้แล้ว โหลดหน้าใหม่', error_change_not_found: 'รายการนี้เปลี่ยนสถานะไปแล้ว โหลดหน้าใหม่',
+    error_branch_not_found: 'ไม่พบสาขา',
     error_invalid_credentials: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง', error_too_many_attempts: 'ลองหลายครั้งเกินไป รอ 15 นาที',
     error_invite_invalid: 'ลิงก์นี้ใช้ไม่ได้แล้ว ขอลิงก์ใหม่จากผู้ดูแล', error_password_too_short: 'รหัสผ่านต้องมีอย่างน้อย 10 ตัว',
     error_shop_exists: 'มีร้านชื่อนี้แล้ว', error_email_exists: 'มีบัญชีอีเมลนี้แล้ว', error_email_invalid: 'อีเมลไม่ถูกต้อง',
@@ -50,6 +61,16 @@ const TEXT = {
     inviteHint: 'Send this link privately to the account holder. It works once within 7 days.', resendInvite: 'New link',
     disable: 'Disable', enable: 'Enable', statusActive: 'Active', statusInvited: 'Invited', statusDisabled: 'Disabled',
     when: 'Time', actor: 'By', action: 'Action', branches: 'Branches', yourShop: 'Your shop', noShops: 'No shops yet',
+    manageMenu: 'Manage menu', dashboard: 'Executive summary', myShop: 'Shop and menu', back: 'Back',
+    menuHint: 'Change a price or photo and the branch POS applies it when online (about a minute). QR guests see the new value after the POS applies it.',
+    menuEmpty: 'This branch has not published its menu from the POS yet', price: 'Price (THB)', save: 'Save', changePhoto: 'Change photo', noPhoto: 'No photo',
+    changes: 'Changes', pending: 'Waiting for POS', applied: 'Applied by POS', conflict: 'Conflicts with POS', kept_pos: 'Kept POS value',
+    cancelled: 'Cancelled', failed: 'POS could not apply', fieldPrice: 'Price', fieldImage: 'Photo',
+    conflictHint: 'Staff changed this on the POS (the POS now has {pos}). Choose which value to keep.',
+    keepWeb: 'Use web value', keepPos: 'Keep POS value', cancel: 'Cancel', saved: 'Sent to the POS', unchanged: 'Same value, nothing sent',
+    photoTooLarge: 'Could not make this photo small enough. Try another.', error_image_invalid: 'Use a JPG, PNG or WebP image',
+    error_item_not_found: 'This item is gone. Reload the page.', error_change_not_found: 'This change already moved on. Reload the page.',
+    error_branch_not_found: 'Branch not found',
     error_invalid_credentials: 'Wrong email or password', error_too_many_attempts: 'Too many attempts. Wait 15 minutes.',
     error_invite_invalid: 'This link no longer works. Ask the administrator for a new one.', error_password_too_short: 'Use at least 10 characters',
     error_shop_exists: 'A shop with this name exists', error_email_exists: 'An account with this email exists', error_email_invalid: 'Enter a valid email',
@@ -99,6 +120,7 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
 const root = document.getElementById('app')!;
 let current: User | null = null;
 let tab: 'shops' | 'users' | 'audit' = 'shops';
+let ownerTab: 'dashboard' | 'myShop' = 'dashboard';
 
 function field(label: string, input: HTMLInputElement | HTMLSelectElement) {
   return h('label', { class: 'field' }, h('span', {}, label), input);
@@ -328,7 +350,149 @@ async function ownerView(container: HTMLElement) {
   const { shop } = await api<{ shop: Shop }>('/owner/shop');
   container.replaceChildren(h('section', { class: 'card' },
     h('p', { class: 'muted' }, tr('yourShop')), h('h2', {}, shop.name), h('h3', {}, tr('branches')),
-    h('ul', { class: 'branches' }, ...shop.branches.map((branch) => branchRow(shop, branch, false, () => void ownerView(container))))));
+    h('ul', { class: 'branches' }, ...shop.branches.map((branch) => {
+      const row = branchRow(shop, branch, false, () => void ownerView(container));
+      row.append(h('button', { type: 'button', class: 'secondary', onclick: () => void menuView(container, shop, branch) }, tr('manageMenu')));
+      return row;
+    }))));
+}
+
+async function ownerDashboard(container: HTMLElement) {
+  const { shop } = await api<{ shop: Shop }>('/owner/shop');
+  await dashboardView(container, { h, api, lang, branches: shop.branches });
+}
+
+type MenuItem = { id: string; name: string; category: string | null; price_satang: number; image: string | null };
+type MenuChange = {
+  id: string; menu_item_id: string; field: 'price' | 'image'; base_value: string | null; new_value: string;
+  status: 'pending' | 'applied' | 'conflict' | 'kept_pos' | 'cancelled' | 'failed'; pos_value: string | null;
+  created_at: string; item_name: string;
+};
+const baht = (satang: number) =>
+  (satang / 100).toLocaleString(lang === 'th' ? 'th-TH' : 'en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const imageUrl = (name: string) => `/api/v1/menu-images/${name}`;
+
+/** Re-encodes a photo until it fits the POS limit, shrinking it when quality alone is not enough. */
+async function shrinkPhoto(file: File): Promise<string | null> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const node = new Image();
+      node.onload = () => resolve(node);
+      node.onerror = reject;
+      node.src = url;
+    });
+    for (const edge of [960, 800, 640, 480, 360]) {
+      const scale = Math.min(1, edge / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      for (const quality of [0.85, 0.7, 0.55]) {
+        let blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', quality));
+        if (blob?.type !== 'image/webp') blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+        if (blob && blob.size <= 95_000) {
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          let binary = '';
+          for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+          return btoa(binary);
+        }
+      }
+    }
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function changeValue(change: MenuChange, value: string | null): Child {
+  if (change.field === 'price') return value === null ? '-' : `฿${baht(Number(value))}`;
+  return value ? h('img', { class: 'thumb', src: imageUrl(value), alt: '' }) : tr('noPhoto');
+}
+
+async function menuView(container: HTMLElement, shop: Shop, branch: Branch) {
+  const { items, changes } = await api<{ items: MenuItem[]; changes: MenuChange[] }>(`/owner/branches/${branch.id}/menu`);
+  const top = errorLine();
+  const notice = h('p', { class: 'notice', role: 'status' });
+  const reload = (message = '') =>
+    void menuView(container, shop, branch).then(() => {
+      const fresh = container.querySelector('.notice');
+      if (fresh) fresh.textContent = message;
+    }).catch((failure) => showError(top, failure));
+  const open = new Map(changes.filter((c) => c.status === 'pending' || c.status === 'conflict').map((c) => [`${c.menu_item_id}:${c.field}`, c]));
+  const send = async (line: HTMLElement, path: string, body: unknown) => {
+    line.textContent = '';
+    try {
+      const result = await api<{ unchanged?: boolean }>(path, body);
+      reload(result.unchanged ? tr('unchanged') : tr('saved'));
+    } catch (failure) {
+      showError(line, failure);
+    }
+  };
+
+  const changeRows = changes.map((change) => {
+    const line = errorLine();
+    const tone = change.status === 'applied' ? 'badge ok' : change.status === 'conflict' || change.status === 'failed' ? 'badge warn' : 'badge';
+    const posValue = change.field === 'price' && change.pos_value !== null ? `฿${baht(Number(change.pos_value))}` : tr('fieldImage');
+    return h('li', { class: 'change' },
+      h('div', {}, h('strong', {}, change.item_name), ' · ', change.field === 'price' ? tr('fieldPrice') : tr('fieldImage'), ' ',
+        h('span', { class: tone }, tr(change.status)), h('span', { class: 'muted small' }, ' ', when(change.created_at))),
+      h('div', { class: 'values' }, changeValue(change, change.base_value), ' → ', changeValue(change, change.new_value)),
+      change.status === 'conflict' && h('p', { class: 'small' }, tr('conflictHint', { pos: posValue })),
+      change.status === 'conflict' && h('div', { class: 'actions' },
+        h('button', { type: 'button', onclick: () => send(line, `/owner/changes/${change.id}/resolve`, { keep: 'web' }) }, tr('keepWeb')),
+        h('button', { type: 'button', class: 'secondary', onclick: () => send(line, `/owner/changes/${change.id}/resolve`, { keep: 'pos' }) }, tr('keepPos'))),
+      change.status === 'pending' && h('div', { class: 'actions' },
+        h('button', { type: 'button', class: 'secondary', onclick: () => send(line, `/owner/changes/${change.id}/cancel`, {}) }, tr('cancel'))),
+      line);
+  });
+
+  let category: string | null | undefined;
+  const itemRows: HTMLElement[] = [];
+  for (const item of items) {
+    if (item.category !== category) {
+      category = item.category;
+      itemRows.push(h('h4', { class: 'category' }, category ?? '-'));
+    }
+    const line = errorLine();
+    const price = h('input', {
+      type: 'number', min: '0', step: '0.01', inputmode: 'decimal', value: String(item.price_satang / 100),
+      class: 'price-input', 'aria-label': `${tr('price')} ${item.name}`,
+    });
+    const file = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', class: 'hidden-file' });
+    file.addEventListener('change', async () => {
+      const picked = file.files?.[0];
+      file.value = '';
+      if (!picked) return;
+      const data = await shrinkPhoto(picked).catch(() => null);
+      if (!data) {
+        line.textContent = tr('photoTooLarge');
+        return;
+      }
+      await send(line, `/owner/branches/${branch.id}/menu/${item.id}/image`, { data });
+    });
+    const pendingPrice = open.get(`${item.id}:price`);
+    const pendingImage = open.get(`${item.id}:image`);
+    itemRows.push(h('div', { class: 'menu-item' },
+      item.image ? h('img', { class: 'thumb', src: imageUrl(item.image), alt: '' }) : h('div', { class: 'thumb empty' }, tr('noPhoto')),
+      h('div', { class: 'menu-name' }, h('strong', {}, item.name), h('div', { class: 'muted small' }, `฿${baht(item.price_satang)}`),
+        pendingPrice && h('span', { class: pendingPrice.status === 'conflict' ? 'badge warn' : 'badge' }, `${tr('fieldPrice')}: ${tr(pendingPrice.status)}`),
+        pendingImage && h('span', { class: pendingImage.status === 'conflict' ? 'badge warn' : 'badge' }, `${tr('fieldImage')}: ${tr(pendingImage.status)}`)),
+      h('form', { class: 'actions', onsubmit: (event: Event) => {
+        event.preventDefault();
+        const satang = Math.round(Number(price.value) * 100);
+        if (!Number.isFinite(satang) || satang < 0) return;
+        void send(line, `/owner/branches/${branch.id}/menu/${item.id}/price`, { price_satang: satang });
+      } }, price, h('button', { type: 'submit' }, tr('save')),
+        h('button', { type: 'button', class: 'secondary', onclick: () => file.click() }, tr('changePhoto')), file),
+      line));
+  }
+
+  container.replaceChildren(
+    h('button', { type: 'button', class: 'link', onclick: () => void ownerView(container) }, `← ${tr('back')}`),
+    h('section', { class: 'card' }, h('h2', {}, `${shop.name} · ${branch.name}`), h('p', { class: 'muted' }, tr('menuHint')), notice, top,
+      changeRows.length ? h('div', {}, h('h3', {}, tr('changes')), h('ul', { class: 'changes' }, ...changeRows)) : null),
+    h('section', { class: 'card' }, ...(itemRows.length ? itemRows : [h('p', { class: 'muted' }, tr('menuEmpty'))])));
 }
 
 function render() {
@@ -341,8 +505,11 @@ function render() {
   const failed = errorLine();
   const load = (run: (container: HTMLElement) => Promise<void>) => run(view).catch((failure) => showError(failed, failure));
   if (current.role === 'owner') {
-    body.append(failed, view);
-    return void load(ownerView);
+    const ownerTabs = h('nav', { class: 'tabs' }, ...(['dashboard', 'myShop'] as const).map((name) =>
+      h('button', { type: 'button', class: ownerTab === name ? 'tab active' : 'tab', onclick: () => { ownerTab = name; render(); } }, tr(name))));
+    if (ownerTab === 'dashboard') body.classList.add('wide');
+    body.append(ownerTabs, failed, view);
+    return void load(ownerTab === 'dashboard' ? ownerDashboard : ownerView);
   }
   const tabs = h('nav', { class: 'tabs' }, ...(['shops', 'users', 'audit'] as const).map((name) =>
     h('button', { type: 'button', class: tab === name ? 'tab active' : 'tab', onclick: () => { tab = name; render(); } }, tr(name))));

@@ -299,6 +299,27 @@ export function redeemConnectorPairingCode(
   );
 }
 
+export function fetchOwnerMenuChanges(options: FetchEventsOptions): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/menu-changes');
+}
+
+export function reportOwnerMenuChange(
+  options: FetchEventsOptions,
+  changeId: string,
+  result: { outcome: 'applied' | 'conflict' | 'failed'; pos_value?: string | null; detail?: string },
+): Promise<unknown> {
+  if (!CONNECTOR_EVENT_ID.test(changeId)) throw new QrCloudClientError('bad_response');
+  return requestConnectorJson(
+    options,
+    `/api/v1/connectors/menu-changes/${changeId}/result`,
+    JSON.stringify(result),
+  );
+}
+
+export function publishOwnerReports(options: FetchEventsOptions, reports: unknown[]): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/reports', JSON.stringify({ reports }));
+}
+
 export function readConnectorCapabilities(options: FetchEventsOptions): Promise<unknown> {
   return requestConnectorJson(options, '/api/v1/connectors/capabilities');
 }
