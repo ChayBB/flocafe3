@@ -118,6 +118,7 @@ export default function AddonModal({
     (product.addon_groups || []).some(
       (g) => g.name?.trim() === WEIGHT_PRICED_GROUP_NAME || Boolean(g.price_pending),
     );
+  const priceAfterOrder = awaitingWeight || Boolean(product.price_unit);
   const startQuantity = awaitingWeight ? 1 : initialQuantity;
   const [quantity, setQuantity] = useState(startQuantity);
   const [qtyDraft, setQtyDraft] = useState(() => String(startQuantity));
@@ -651,9 +652,13 @@ export default function AddonModal({
             className="w-full bg-orange-500 text-white hover:bg-orange-600 disabled:bg-orange-500/50"
             size="lg"
           >
-            {mode === 'edit'
-              ? t('saveItemChanges', { total: fmt(itemTotal) })
-              : t('addToCart', { total: fmt(itemTotal) })}
+            {priceAfterOrder
+              ? mode === 'edit'
+                ? t('saveItemChangesNoPrice')
+                : t('addToCartNoPrice')
+              : mode === 'edit'
+                ? t('saveItemChanges', { total: fmt(itemTotal) })
+                : t('addToCart', { total: fmt(itemTotal) })}
           </Button>
         </div>
       </div>
