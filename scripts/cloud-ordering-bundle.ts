@@ -15,7 +15,23 @@ const base = {
   define: { 'process.env.NODE_ENV': '"production"' },
 } as const;
 
-const scan = await Bun.build(base);
+// next/font only works inside a Next.js build; the guest page keeps the browser's own sans face.
+const guestFonts: BunPlugin = {
+  name: 'guest-fonts',
+  setup(build) {
+    build.onResolve({ filter: /^next\/font\/google$/ }, () => ({
+      path: 'guest-fonts',
+      namespace: 'guest-fonts',
+    }));
+    build.onLoad({ filter: /.*/, namespace: 'guest-fonts' }, () => ({
+      loader: 'js',
+      contents: `const font = () => ({ className: '', style: {} });
+export const Prompt = font;`,
+    }));
+  },
+};
+
+const scan = await Bun.build({ ...base, plugins: [guestFonts] });
 if (!scan.success) throw new AggregateError(scan.logs, 'Browser build failed');
 const sources = Object.keys(scan.metafile!.inputs)
   .filter((file) => !file.includes('node_modules') && /\.[cm]?[jt]sx?$/.test(file))
@@ -71,7 +87,7 @@ const result = await Bun.build({
   ...base,
   outdir,
   naming: { entry: 'order.js', chunk: 'chunks/[name]-[hash].[ext]' },
-  plugins: [guestMessages, guestApi],
+  plugins: [guestMessages, guestApi, guestFonts],
 });
 if (!result.success) throw new AggregateError(result.logs, 'Browser build failed');
 

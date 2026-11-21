@@ -8,7 +8,7 @@ import AddonModal from '@/components/pos/AddonModal';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { StaffSignIn } from '@/components/server-app/StaffSignIn';
+import { HEADER_PILL_FILLED, ServerAppHeader } from '@/components/server-app/ServerAppHeader';
 import { ItemStatusBadge } from '@/components/server-app/ItemStatus';
 import { Ltr } from '@/components/layout/Ltr';
 import {
@@ -20,6 +20,7 @@ import { productNeedsCustomizer } from '@/lib/product-variants';
 import { kdsItemLine } from '@/lib/item-options-note';
 import { buildMenuQuickFilters } from '@/lib/menu-quick-filters';
 import type { Addon, Product, ProductVariant } from '@/lib/types';
+import { LANGUAGES, isLanguage, type Language } from '@/lib/i18n/languages';
 import messages from '@/lib/i18n/messages/th.json';
 
 interface Line {
@@ -47,12 +48,19 @@ interface SentOrder {
   }[];
 }
 
+interface Branding {
+  logo?: string;
+  cover?: string;
+}
+
 const uuid = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const DEFAULT_SCROLL_PERCENT = 87;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const money = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' });
 const plainAmount = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
 const assetUrl = (file: string) => new URL(file, import.meta.url).href;
+const brandingFile = /^branding\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/;
+const LANGUAGE_KEY = 'flocafe-guest-language';
 const lineKey = (line: Line) =>
   JSON.stringify([
     line.menu_item_id,
@@ -163,13 +171,31 @@ function staffAreaUrl(address: string) {
   return url.href;
 }
 
-function Ordering() {
+function staticJson(file: string) {
+  return fetch(assetUrl(file), {
+    credentials: 'omit',
+    cache: 'force-cache',
+    mode: 'same-origin',
+    redirect: 'error',
+    signal: AbortSignal.timeout(15_000),
+  }).then((response) => (response.ok ? response.json() : null));
+}
+
+function Ordering({
+  language,
+  onLanguage,
+}: {
+  language: Language;
+  onLanguage: (language: Language) => void;
+}) {
   const t = useTranslations('serverApp');
   const tCommon = useTranslations('common');
   const tPos = useTranslations('pos');
   const [menu, setMenu] = useState<CloudMenuItem[]>([]);
   const [scrollPercent, setScrollPercent] = useState(DEFAULT_SCROLL_PERCENT);
   const [snapshot, setSnapshot] = useState<PosMenuPresentation>();
+  const [branding, setBranding] = useState<Branding>({});
+  const [tableName, setTableName] = useState('');
   const [category, setCategory] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Line[]>([]);
@@ -287,6 +313,7 @@ function Ordering() {
       const orders = readSentOrders(body);
       if (!orders || requestId !== sentRequest.current || context.current !== current) return;
       setBillAwaitingPayment(body.bill_awaiting_payment === true);
+      if (typeof body.table_name === 'string') setTableName(body.table_name.slice(0, 80));
       const seen = announced.current;
       for (const order of orders) {
         order.items.forEach((item, index) => {
@@ -326,22 +353,22 @@ function Ordering() {
   useEffect(() => {
     window.dispatchEvent(new Event('flo-menu-mounted'));
     void Promise.resolve().then(() => load());
-    void fetch(assetUrl('./menu-presentation.json'), {
-      credentials: 'omit',
-      cache: 'force-cache',
-      mode: 'same-origin',
-      redirect: 'error',
-      signal: AbortSignal.timeout(15_000),
-    })
-      .then(async (response) => {
-        if (!response.ok) return;
-        const data = await response.json();
+    void staticJson('./menu-presentation.json')
+      .then((data) => {
         if (
+          data &&
           Array.isArray(data.categories) &&
           Array.isArray(data.products) &&
           Array.isArray(data.popular)
         )
           setSnapshot(data);
+      })
+      .catch(() => {});
+    void staticJson('./branding.json')
+      .then((data) => {
+        const pick = (file: unknown) =>
+          typeof file === 'string' && brandingFile.test(file) ? assetUrl(file) : undefined;
+        if (data) setBranding({ logo: pick(data.logo), cover: pick(data.cover) });
       })
       .catch(() => {});
     const refresh = () => location.reload();
@@ -584,369 +611,440 @@ function Ordering() {
     },
   });
   const disabled = Boolean(pending) || expired || sending || billAwaitingPayment;
+  const staffUrl = snapshot?.staffUrl ? staffAreaUrl(snapshot.staffUrl) : null;
   return (
-    <main className="mx-auto flex h-dvh max-w-5xl flex-col bg-background px-3 text-foreground">
-      {snapshot?.staffUrl && (
-        <header className="flex shrink-0 justify-end py-2">
-          <StaffSignIn href={staffAreaUrl(snapshot.staffUrl)} label="พนักงาน" />
-        </header>
-      )}
-      {status && (
-        <p
-          className="my-2 rounded-lg bg-muted px-3 py-2 text-center text-sm break-all"
-          role="status"
-        >
-          {status}
-        </p>
-      )}
-      {billAwaitingPayment && (
-        <p role="alert" className="my-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-950">
-          {t('tableAwaitingPaymentLocked')}
-        </p>
-      )}
-      {canReload && (
-        <Button className="self-start" variant="outline" onClick={() => void load()}>
-          ลองใหม่
-        </Button>
-      )}
-      {ready && (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <ProductGrid
-            categories={presentation.categories}
-            products={presentation.products}
-            selectedCategory={category}
-            setSelectedCategory={setCategory}
-            search={search}
-            setSearch={setSearch}
-            currency="THB"
-            showImages
-            imageOf={(product) => {
-              const file = presentation.images.get(product.id);
-              return file &&
-                /^(?:menu-images|\/api\/v1\/menu-images)\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/.test(
-                  file,
-                )
-                ? assetUrl(file)
-                : undefined;
-            }}
-            gridClassName="grid-cols-2"
-            formatPrice={(amount) => money.format(amount)}
-            quickFilters={quickFilters}
-            cartQuantities={quantities}
-            searchPlaceholder={t('searchMenu')}
-            flat
-            flingScale={scrollPercent / 100}
-            scrollSpy
-            disabled={disabled}
-            onProductClick={(product, quantity) => {
-              if (productNeedsCustomizer(product)) setCustomize({ product, quantity });
-              else add({ menu_item_id: presentation.orderItemIds.get(product.id)!, quantity });
-            }}
-            onScannedVariant={(product, variant, quantity) =>
-              setCustomize({ product, variant, quantity })
-            }
-            onScaledProduct={() => {}}
-          />
-        </div>
-      )}
-      {((ready && !expired) || pending) && (
-        <Drawer open={open} onOpenChange={setOpen}>
-          <DrawerTrigger asChild>
-            <button
-              type="button"
-              aria-label={t('currentTicket')}
-              className="fixed bottom-5 end-5 z-40 flex size-14 items-center justify-center rounded-full bg-brand text-white shadow-lg hover:bg-brand-hover"
+    <>
+      <ServerAppHeader
+        logoUrl={branding.logo ?? null}
+        coverUrl={branding.cover ?? assetUrl('./server-app-cover.jpg')}
+        tableText={t('tableLabel', { name: tableName || '—' })}
+        customerName={<span data-testid="server-app-guest-name">{t('guestLabel')}</span>}
+        language={language}
+        onLanguage={onLanguage}
+        onStaffLogin={() => {
+          if (staffUrl) location.assign(staffUrl);
+        }}
+        staffLoginLabel={t('staffButton')}
+        onHistory={() => setOpen(true)}
+        historyDisabled={!ready || expired}
+        staffButton={
+          staffUrl && (
+            <a
+              href={staffUrl}
+              referrerPolicy="no-referrer"
+              data-testid="server-app-login-button"
+              className={HEADER_PILL_FILLED}
             >
-              <ShoppingCart size={22} />
-              {count > 0 && (
-                <span className="absolute -top-0.5 -end-0.5 flex size-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold">
-                  {count}
-                </span>
-              )}
-            </button>
-          </DrawerTrigger>
-          <DrawerContent className="max-h-[90vh] text-foreground">
-            <div className="max-h-[85vh] overflow-y-auto px-3">
-              <DrawerTitle className="py-3 text-sm font-semibold">{t('currentTicket')}</DrawerTitle>
-              {billAwaitingPayment && (
-                <p role="alert" className="mb-2 rounded-lg bg-amber-100 p-2 text-sm text-amber-950">
-                  {t('tableAwaitingPaymentLocked')}
-                </p>
-              )}
-              {status && (
-                <p role="status" className="mb-2 rounded-lg bg-muted p-2 text-center text-sm">
-                  {status}
-                </p>
-              )}
-              <div className="border-t border-border pt-3">
-                <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
-                  {t('newItems')}
-                </p>
-                {lines.length === 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => setOpen(false)}
-                    className="w-full rounded-lg py-6 text-center text-sm text-muted-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-brand"
+              {t('staffButton')}
+            </a>
+          )
+        }
+      />
+      <main className="mx-auto flex h-dvh max-w-5xl flex-col bg-background px-3 text-foreground">
+        {status && (
+          <p
+            className="my-2 rounded-lg bg-muted px-3 py-2 text-center text-sm break-all"
+            role="status"
+          >
+            {status}
+          </p>
+        )}
+        {billAwaitingPayment && (
+          <p role="alert" className="my-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-950">
+            {t('tableAwaitingPaymentLocked')}
+          </p>
+        )}
+        {canReload && (
+          <Button className="self-start" variant="outline" onClick={() => void load()}>
+            ลองใหม่
+          </Button>
+        )}
+        {ready && (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <ProductGrid
+              categories={presentation.categories}
+              products={presentation.products}
+              selectedCategory={category}
+              setSelectedCategory={setCategory}
+              search={search}
+              setSearch={setSearch}
+              currency="THB"
+              showImages
+              imageOf={(product) => {
+                const file = presentation.images.get(product.id);
+                return file &&
+                  /^(?:menu-images|\/api\/v1\/menu-images)\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/.test(
+                    file,
+                  )
+                  ? assetUrl(file)
+                  : undefined;
+              }}
+              gridClassName="grid-cols-2"
+              formatPrice={(amount) => money.format(amount)}
+              quickFilters={quickFilters}
+              cartQuantities={quantities}
+              searchPlaceholder={t('searchMenu')}
+              flat
+              flingScale={scrollPercent / 100}
+              scrollSpy
+              disabled={disabled}
+              onProductClick={(product, quantity) => {
+                if (productNeedsCustomizer(product)) setCustomize({ product, quantity });
+                else add({ menu_item_id: presentation.orderItemIds.get(product.id)!, quantity });
+              }}
+              onScannedVariant={(product, variant, quantity) =>
+                setCustomize({ product, variant, quantity })
+              }
+              onScaledProduct={() => {}}
+            />
+          </div>
+        )}
+        {((ready && !expired) || pending) && (
+          <Drawer open={open} onOpenChange={setOpen}>
+            <DrawerTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('currentTicket')}
+                className="fixed bottom-5 end-5 z-40 flex size-14 items-center justify-center rounded-full bg-brand text-white shadow-lg hover:bg-brand-hover"
+              >
+                <ShoppingCart size={22} />
+                {count > 0 && (
+                  <span className="absolute -top-0.5 -end-0.5 flex size-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold">
+                    {count}
+                  </span>
+                )}
+              </button>
+            </DrawerTrigger>
+            <DrawerContent className="max-h-[90vh] text-foreground">
+              <div className="max-h-[85vh] overflow-y-auto px-3">
+                <DrawerTitle className="py-3 text-sm font-semibold">
+                  {t('currentTicket')}
+                </DrawerTitle>
+                {billAwaitingPayment && (
+                  <p
+                    role="alert"
+                    className="mb-2 rounded-lg bg-amber-100 p-2 text-sm text-amber-950"
                   >
-                    {t('emptyDraft')}
-                  </button>
-                ) : (
-                  <div className="space-y-3">
-                    {lines.map((line) => {
-                      const key = lineKey(line);
-                      const info = lineInfo(line);
-                      return (
-                        <div key={key} className="rounded-lg border border-border p-2">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium">
-                                {info.name}
-                              </span>
-                              {info.note && (
-                                <p className="mt-0.5 truncate text-xs italic text-muted-foreground">
-                                  {info.note}
-                                </p>
-                              )}
-                              {weighed(line) && (
-                                <p className="mt-0.5 text-xs text-muted-foreground">
-                                  {tPos('bahtPerUnit', {
-                                    price: plainAmount.format(
-                                      (presentation.itemById.get(line.menu_item_id)?.price_satang ??
-                                        0) / 100,
-                                    ),
-                                    unit: 'kg',
-                                  })}{' '}
-                                  · คิดตามน้ำหนักจริง
-                                </p>
-                              )}
-                            </div>
-                            <button
-                              type="button"
-                              disabled={disabled}
-                              aria-label={tCommon('removeItem')}
-                              onClick={() => setCart(cart.filter((item) => lineKey(item) !== key))}
-                              className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-red-500 disabled:opacity-50"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                          <div className="mt-2 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
+                    {t('tableAwaitingPaymentLocked')}
+                  </p>
+                )}
+                {status && (
+                  <p role="status" className="mb-2 rounded-lg bg-muted p-2 text-center text-sm">
+                    {status}
+                  </p>
+                )}
+                <div className="border-t border-border pt-3">
+                  <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+                    {t('newItems')}
+                  </p>
+                  {lines.length === 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setOpen(false)}
+                      className="w-full rounded-lg py-6 text-center text-sm text-muted-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-brand"
+                    >
+                      {t('emptyDraft')}
+                    </button>
+                  ) : (
+                    <div className="space-y-3">
+                      {lines.map((line) => {
+                        const key = lineKey(line);
+                        const info = lineInfo(line);
+                        return (
+                          <div key={key} className="rounded-lg border border-border p-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium">
+                                  {info.name}
+                                </span>
+                                {info.note && (
+                                  <p className="mt-0.5 truncate text-xs italic text-muted-foreground">
+                                    {info.note}
+                                  </p>
+                                )}
+                                {weighed(line) && (
+                                  <p className="mt-0.5 text-xs text-muted-foreground">
+                                    {tPos('bahtPerUnit', {
+                                      price: plainAmount.format(
+                                        (presentation.itemById.get(line.menu_item_id)
+                                          ?.price_satang ?? 0) / 100,
+                                      ),
+                                      unit: 'kg',
+                                    })}{' '}
+                                    · คิดตามน้ำหนักจริง
+                                  </p>
+                                )}
+                              </div>
                               <button
                                 type="button"
                                 disabled={disabled}
-                                aria-label="-1"
-                                onClick={() => changeQty(key, -1)}
-                                className="rounded-md border border-border bg-card p-1 disabled:opacity-50"
+                                aria-label={tCommon('removeItem')}
+                                onClick={() =>
+                                  setCart(cart.filter((item) => lineKey(item) !== key))
+                                }
+                                className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-red-500 disabled:opacity-50"
                               >
-                                <Minus size={14} />
-                              </button>
-                              <span className="w-6 text-center text-sm font-semibold">
-                                <Ltr>{line.quantity}</Ltr>
-                              </span>
-                              <button
-                                type="button"
-                                disabled={disabled}
-                                aria-label="+1"
-                                onClick={() => changeQty(key, 1)}
-                                className="rounded-md border border-border bg-card p-1 disabled:opacity-50"
-                              >
-                                <Plus size={14} />
+                                <Trash2 size={14} />
                               </button>
                             </div>
-                            <button
-                              type="button"
-                              disabled={disabled || !info.product}
-                              onClick={() => openEdit(line)}
-                              className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-200 disabled:opacity-50 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-950/60"
-                            >
-                              <SquarePen size={12} />
-                              {tCommon('edit')}
-                            </button>
+                            <div className="mt-2 flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={disabled}
+                                  aria-label="-1"
+                                  onClick={() => changeQty(key, -1)}
+                                  className="rounded-md border border-border bg-card p-1 disabled:opacity-50"
+                                >
+                                  <Minus size={14} />
+                                </button>
+                                <span className="w-6 text-center text-sm font-semibold">
+                                  <Ltr>{line.quantity}</Ltr>
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={disabled}
+                                  aria-label="+1"
+                                  onClick={() => changeQty(key, 1)}
+                                  className="rounded-md border border-border bg-card p-1 disabled:opacity-50"
+                                >
+                                  <Plus size={14} />
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={disabled || !info.product}
+                                onClick={() => openEdit(line)}
+                                className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-200 disabled:opacity-50 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-950/60"
+                              >
+                                <SquarePen size={12} />
+                                {tCommon('edit')}
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {lines.length > 0 && (
+                  <div className="mt-3">
+                    <textarea
+                      value={pending ? (pending.body.note ?? '') : orderNote}
+                      disabled={disabled}
+                      onChange={(event) => setOrderNote(event.target.value)}
+                      placeholder={tPos('orderNotesPlaceholder')}
+                      rows={2}
+                      maxLength={200}
+                      className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-brand focus:outline-none disabled:opacity-50"
+                    />
+                    <p className="mt-0.5 text-end text-xs text-muted-foreground">
+                      <Ltr>{(pending ? (pending.body.note ?? '') : orderNote).length}/200</Ltr>
+                    </p>
                   </div>
                 )}
-              </div>
 
-              {lines.length > 0 && (
-                <div className="mt-3">
-                  <textarea
-                    value={pending ? (pending.body.note ?? '') : orderNote}
-                    disabled={disabled}
-                    onChange={(event) => setOrderNote(event.target.value)}
-                    placeholder={tPos('orderNotesPlaceholder')}
-                    rows={2}
-                    maxLength={200}
-                    className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-brand focus:outline-none disabled:opacity-50"
-                  />
-                  <p className="mt-0.5 text-end text-xs text-muted-foreground">
-                    <Ltr>{(pending ? (pending.body.note ?? '') : orderNote).length}/200</Ltr>
-                  </p>
-                </div>
-              )}
-
-              {sent.some((order) => order.items.length > 0) && (
-                <div className="mt-4 border-t border-border pt-3">
-                  <p className="mb-2 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
-                    <span>{t('sentToKitchen')}</span>
-                    {[
-                      ...new Set(
-                        sent.flatMap((order) =>
-                          order.pos_order_number ? [order.pos_order_number] : [],
+                {sent.some((order) => order.items.length > 0) && (
+                  <div className="mt-4 border-t border-border pt-3">
+                    <p className="mb-2 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
+                      <span>{t('sentToKitchen')}</span>
+                      {[
+                        ...new Set(
+                          sent.flatMap((order) =>
+                            order.pos_order_number ? [order.pos_order_number] : [],
+                          ),
                         ),
-                      ),
-                    ].map((number) => (
-                      <Ltr
-                        key={number}
-                        as="span"
-                        className="rounded bg-muted px-1.5 py-0.5 font-mono normal-case text-foreground"
-                      >
-                        #{number}
-                      </Ltr>
-                    ))}
-                  </p>
-                  <ul className="divide-y divide-border">
-                    {sent
-                      .flatMap((order) =>
-                        order.items.map((item, index) => ({
-                          order,
-                          item,
-                          key: `${order.id}:${index}`,
-                        })),
-                      )
-                      .map(({ order, item, key }) => (
-                        <li key={key} className="flex items-start justify-between gap-2 py-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium">{item.name}</p>
-                            {item.note && (
-                              <p className="text-xs italic text-muted-foreground">{item.note}</p>
-                            )}
-                            <p className="text-xs text-muted-foreground">
-                              <Ltr>x {item.quantity}</Ltr>
-                            </p>
-                          </div>
-                          <SentStatus status={item.status ?? order.status} />
-                        </li>
+                      ].map((number) => (
+                        <Ltr
+                          key={number}
+                          as="span"
+                          className="rounded bg-muted px-1.5 py-0.5 font-mono normal-case text-foreground"
+                        >
+                          #{number}
+                        </Ltr>
                       ))}
-                  </ul>
-                </div>
-              )}
-
-              <div className="sticky bottom-0 z-10 -mx-3 mt-4 bg-background px-3 pb-3">
-                <div className="flex items-center justify-between border-t border-border pt-3">
-                  <span className="text-sm text-muted-foreground">{t('draftTotal')}</span>
-                  <span className="text-lg font-bold">
-                    <Ltr>{Number.isFinite(total) ? money.format(total / 100) : '-'}</Ltr>
-                  </span>
-                </div>
-                {hasWeighed && (
-                  <p className="mt-1 text-end text-xs text-muted-foreground">
-                    ยังไม่รวมเมนูตามน้ำหนัก ร้านจะแจ้งราคาหลังชั่ง
-                  </p>
+                    </p>
+                    <ul className="divide-y divide-border">
+                      {sent
+                        .flatMap((order) =>
+                          order.items.map((item, index) => ({
+                            order,
+                            item,
+                            key: `${order.id}:${index}`,
+                          })),
+                        )
+                        .map(({ order, item, key }) => (
+                          <li key={key} className="flex items-start justify-between gap-2 py-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium">{item.name}</p>
+                              {item.note && (
+                                <p className="text-xs italic text-muted-foreground">{item.note}</p>
+                              )}
+                              <p className="text-xs text-muted-foreground">
+                                <Ltr>x {item.quantity}</Ltr>
+                              </p>
+                            </div>
+                            <SentStatus status={item.status ?? order.status} />
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
                 )}
-                <button
-                  type="button"
-                  onClick={() => void send()}
-                  disabled={!count || sending || expired || (billAwaitingPayment && !pending)}
-                  className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-brand font-semibold text-white disabled:opacity-50"
-                >
-                  <Send size={17} />
-                  {sending
-                    ? t('sending')
-                    : pending
-                      ? 'ตรวจผลโดยส่งรายการเดิมอีกครั้ง'
-                      : sent.length
-                        ? t('addToOrder')
-                        : t('sendToKitchen')}
-                </button>
+
+                <div className="sticky bottom-0 z-10 -mx-3 mt-4 bg-background px-3 pb-3">
+                  <div className="flex items-center justify-between border-t border-border pt-3">
+                    <span className="text-sm text-muted-foreground">{t('draftTotal')}</span>
+                    <span className="text-lg font-bold">
+                      <Ltr>{Number.isFinite(total) ? money.format(total / 100) : '-'}</Ltr>
+                    </span>
+                  </div>
+                  {hasWeighed && (
+                    <p className="mt-1 text-end text-xs text-muted-foreground">
+                      ยังไม่รวมเมนูตามน้ำหนัก ร้านจะแจ้งราคาหลังชั่ง
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void send()}
+                    disabled={!count || sending || expired || (billAwaitingPayment && !pending)}
+                    className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-brand font-semibold text-white disabled:opacity-50"
+                  >
+                    <Send size={17} />
+                    {sending
+                      ? t('sending')
+                      : pending
+                        ? 'ตรวจผลโดยส่งรายการเดิมอีกครั้ง'
+                        : sent.length
+                          ? t('addToOrder')
+                          : t('sendToKitchen')}
+                  </button>
+                </div>
               </div>
-            </div>
-          </DrawerContent>
-        </Drawer>
-      )}
-      {customize && (
-        <AddonModal
-          product={customize.product}
-          initialQuantity={customize.quantity}
-          initialVariant={customize.variant}
-          currency="THB"
-          country="TH"
-          onClose={() => setCustomize(undefined)}
-          onAdd={(product, quantity, addons, note, variant) =>
-            add(toLine(product, quantity, addons, note, variant))
-          }
-        />
-      )}
-      {editing && (
-        <AddonModal
-          product={editing.product}
-          mode="edit"
-          initialQuantity={editing.line.quantity}
-          initialAddons={editing.addons}
-          initialInstructions={editing.line.note ?? ''}
-          initialVariant={editing.variant}
-          currency="THB"
-          country="TH"
-          onClose={() => {
-            setEditing(undefined);
-            setOpen(true);
-          }}
-          onAdd={(product, quantity, addons, note, variant) => {
-            if (pending || flight.current || expired) return;
-            const next = toLine(product, quantity, addons, note, variant);
-            const rest = cart.filter((item) => lineKey(item) !== editing.key);
-            const merge = rest.findIndex((item) => lineKey(item) === lineKey(next));
-            const updated =
-              merge < 0
-                ? [...rest, next]
-                : rest.map((item, index) =>
-                    index === merge ? { ...next, quantity: item.quantity + next.quantity } : item,
-                  );
-            if (
-              updated.some((item) => item.quantity > 50) ||
-              updated.reduce((sum, item) => sum + item.quantity, 0) > 100
-            ) {
-              limitError();
-              return;
+            </DrawerContent>
+          </Drawer>
+        )}
+        {customize && (
+          <AddonModal
+            product={customize.product}
+            initialQuantity={customize.quantity}
+            initialVariant={customize.variant}
+            currency="THB"
+            country="TH"
+            onClose={() => setCustomize(undefined)}
+            onAdd={(product, quantity, addons, note, variant) =>
+              add(toLine(product, quantity, addons, note, variant))
             }
-            if (weighedLimit(updated)) return;
-            setCart(updated);
-          }}
-        />
-      )}
-      <Dialog open={confirmingSend} onOpenChange={setConfirmingSend}>
-        <DialogContent
-          showCloseButton={false}
-          data-testid="confirm-send-dialog"
-          className="max-w-md gap-0 rounded-2xl p-6"
-        >
-          <DialogTitle className="text-start text-[1.35rem] leading-snug font-bold">
-            โปรดยืนยันออร์เดอร์
-          </DialogTitle>
-          <DialogDescription className="my-6 text-center text-[1.2rem] text-foreground">
-            ยืนยันส่ง {count} รายการให้ร้านหรือไม่?
-          </DialogDescription>
-          <div className="flex justify-end gap-3">
-            <Button variant="ghost" size="lg" onClick={() => setConfirmingSend(false)}>
-              ยกเลิก
-            </Button>
-            <Button
-              size="lg"
-              autoFocus
-              onClick={() => {
-                setConfirmingSend(false);
-                void send(true);
-              }}
-            >
-              ตกลง
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </main>
+          />
+        )}
+        {editing && (
+          <AddonModal
+            product={editing.product}
+            mode="edit"
+            initialQuantity={editing.line.quantity}
+            initialAddons={editing.addons}
+            initialInstructions={editing.line.note ?? ''}
+            initialVariant={editing.variant}
+            currency="THB"
+            country="TH"
+            onClose={() => {
+              setEditing(undefined);
+              setOpen(true);
+            }}
+            onAdd={(product, quantity, addons, note, variant) => {
+              if (pending || flight.current || expired) return;
+              const next = toLine(product, quantity, addons, note, variant);
+              const rest = cart.filter((item) => lineKey(item) !== editing.key);
+              const merge = rest.findIndex((item) => lineKey(item) === lineKey(next));
+              const updated =
+                merge < 0
+                  ? [...rest, next]
+                  : rest.map((item, index) =>
+                      index === merge ? { ...next, quantity: item.quantity + next.quantity } : item,
+                    );
+              if (
+                updated.some((item) => item.quantity > 50) ||
+                updated.reduce((sum, item) => sum + item.quantity, 0) > 100
+              ) {
+                limitError();
+                return;
+              }
+              if (weighedLimit(updated)) return;
+              setCart(updated);
+            }}
+          />
+        )}
+        <Dialog open={confirmingSend} onOpenChange={setConfirmingSend}>
+          <DialogContent
+            showCloseButton={false}
+            data-testid="confirm-send-dialog"
+            className="max-w-md gap-0 rounded-2xl p-6"
+          >
+            <DialogTitle className="text-start text-[1.35rem] leading-snug font-bold">
+              โปรดยืนยันออร์เดอร์
+            </DialogTitle>
+            <DialogDescription className="my-6 text-center text-[1.2rem] text-foreground">
+              ยืนยันส่ง {count} รายการให้ร้านหรือไม่?
+            </DialogDescription>
+            <div className="flex justify-end gap-3">
+              <Button variant="ghost" size="lg" onClick={() => setConfirmingSend(false)}>
+                ยกเลิก
+              </Button>
+              <Button
+                size="lg"
+                autoFocus
+                onClick={() => {
+                  setConfirmingSend(false);
+                  void send(true);
+                }}
+              >
+                ตกลง
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </main>
+    </>
+  );
+}
+
+function App() {
+  const [language, setLanguage] = useState<Language>(() => {
+    try {
+      const saved = localStorage.getItem(LANGUAGE_KEY);
+      return isLanguage(saved) ? saved : 'th';
+    } catch {
+      return 'th';
+    }
+  });
+  const [english, setEnglish] = useState<Record<string, unknown>>();
+  useEffect(() => {
+    if (language !== 'en' || english) return;
+    void LANGUAGES.en
+      .load()
+      .then((loaded) => setEnglish(loaded.default))
+      .catch(() => {});
+  }, [language, english]);
+  const shown = language === 'en' && english ? 'en' : 'th';
+  return (
+    <IntlProvider
+      locale={LANGUAGES[shown].locale}
+      messages={shown === 'en' ? english! : messages}
+      timeZone="Asia/Bangkok"
+    >
+      <Ordering
+        language={language}
+        onLanguage={(next) => {
+          try {
+            localStorage.setItem(LANGUAGE_KEY, next);
+          } catch {
+            // The choice still applies to this visit.
+          }
+          setLanguage(next);
+        }}
+      />
+      <Toaster containerStyle={{ zIndex: 2147483647 }} />
+    </IntlProvider>
   );
 }
 
@@ -961,9 +1059,4 @@ document.addEventListener('contextmenu', (event) => {
 
 createRoot(document.getElementById('root')!, {
   onUncaughtError: () => window.dispatchEvent(new Event('flo-menu-render-error')),
-}).render(
-  <IntlProvider locale="th-TH" messages={messages} timeZone="Asia/Bangkok">
-    <Ordering />
-    <Toaster containerStyle={{ zIndex: 2147483647 }} />
-  </IntlProvider>,
-);
+}).render(<App />);

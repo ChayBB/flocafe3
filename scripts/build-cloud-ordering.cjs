@@ -70,6 +70,26 @@ function exportPresentation() {
           variants: variants.all(product.id),
         };
       });
+    // The store's logo and cover, as the POS header shows them.
+    const branding = {};
+    const hasSettings = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'")
+      .get();
+    for (const [kind, key] of [
+      ['logo', 'store_logo'],
+      ['cover', 'store_cover'],
+    ]) {
+      const value = hasSettings
+        ? db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value
+        : undefined;
+      const match = /^data:image\/(webp|png|jpeg|gif);base64,([A-Za-z0-9+/=]+)$/.exec(value ?? '');
+      if (!match) continue;
+      const bytes = Buffer.from(match[2], 'base64');
+      const file = `branding/${createHash('sha256').update(bytes).digest('hex')}.${match[1]}`;
+      fs.writeFileSync(path.join(out, file), bytes);
+      branding[kind] = file;
+    }
+    fs.writeFileSync(path.join(out, 'branding.json'), JSON.stringify(branding));
     const popular = db
       .prepare(`
       SELECT i.product_id FROM order_items i JOIN orders o ON o.id = i.order_id
@@ -93,6 +113,7 @@ function exportPresentation() {
     return {
       products: products.length,
       images: products.filter((product) => product.image).length,
+      branding: Object.keys(branding),
     };
   } finally {
     db.close();
@@ -123,6 +144,11 @@ function precompress(dir) {
 
 async function main() {
   fs.mkdirSync(path.join(out, 'menu-images'), { recursive: true });
+  fs.mkdirSync(path.join(out, 'branding'), { recursive: true });
+  fs.copyFileSync(
+    path.join(frontend, 'public', 'images', 'server-app-cover-1920x1080.jpg'),
+    path.join(out, 'server-app-cover.jpg'),
+  );
   const entry = path.join(frontend, 'src', 'cloud-ordering.tsx');
   const bundle = spawnSync('bun', [path.join(__dirname, 'cloud-ordering-bundle.ts'), entry, out], {
     stdio: ['inherit', 'pipe', 'inherit'],
