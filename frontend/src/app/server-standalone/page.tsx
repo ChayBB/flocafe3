@@ -2786,7 +2786,6 @@ export default function ServerStandalonePage() {
               searchPlaceholder={t('searchMenu')}
               quickFilters={quickFilters}
               scrollSpy
-              loopSections
               flat
             />
           </section>

@@ -637,7 +637,6 @@ function Ordering() {
             flat
             flingScale={scrollPercent / 100}
             scrollSpy
-            loopSections
             disabled={disabled}
             onProductClick={(product, quantity) => {
               if (productNeedsCustomizer(product)) setCustomize({ product, quantity });
