@@ -455,39 +455,10 @@ async function main() {
         `UPDATE settings SET value = 'true', updated_at = ? WHERE key = 'server_app_bill_printing_enabled'`,
       ).run(now());
 
+      // Service staff print the bill whenever they choose; no item needs a table confirmation.
       db.prepare(
-        "UPDATE order_items SET status = 'served', served_confirmed_at = NULL WHERE order_id = ?",
+        "UPDATE order_items SET status = 'preparing', served_confirmed_at = NULL WHERE order_id = ?",
       ).run(orderId);
-      for (const token of [serverToken, managerToken, ownerToken]) {
-        const res = await postJson(
-          serverAppBaseUrl,
-          '/api/printers/print-bill',
-          { orderId },
-          token,
-        );
-        assertEqualOrThrow(res.status, 409, 'Serving alone does not allow a Server App bill');
-        assertEqualOrThrow(
-          res.body?.code,
-          'served_unconfirmed',
-          'The refusal explains the missing confirmation',
-        );
-      }
-      const directPrint = await postJson(
-        `http://127.0.0.1:${getServerPort()}`,
-        '/api/printers/print-bill',
-        { orderId, preview: true },
-        serverToken,
-      );
-      assertEqualOrThrow(
-        directPrint.status,
-        409,
-        'Direct API calls by a server also require confirmation',
-      );
-
-      db.prepare('UPDATE order_items SET served_confirmed_at = ? WHERE order_id = ?').run(
-        now(),
-        orderId,
-      );
       for (const [roleName, token] of [
         ['server', serverToken],
         ['manager', managerToken],
@@ -502,7 +473,7 @@ async function main() {
         assertEqualOrThrow(
           res.status,
           400,
-          `Server App reaches printer selection for ${roleName} after service confirmation`,
+          `Server App reaches printer selection for ${roleName} before any dish is confirmed served`,
         );
       }
     } finally {

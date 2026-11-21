@@ -1167,7 +1167,7 @@ router.post(
       if (billId ? billHasWeightPending(db, billId) : orderHasWeightPending(db, orderId)) {
         return sendWeightPendingError(res);
       }
-      if (authUser?.role === 'server' || req.body.requireServedConfirmation === true) {
+      if (req.body.requireServedConfirmation === true) {
         const target = (
           billId
             ? db.prepare('SELECT order_id AS id FROM bills WHERE id = ?').get(billId)

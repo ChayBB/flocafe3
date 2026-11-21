@@ -532,12 +532,20 @@ async function main() {
       const again = await confirmServed(served.orderId, served.itemId);
       assertEqualOrThrow(again.status, 200, 'confirming twice is harmless');
       const waiting = seedOrderWithItem(db, 'CONFIRM-WAITING', 'prod-cancel', 'pending');
-      const notServed = await confirmServed(waiting.orderId, waiting.itemId);
+      const notFinished = await confirmServed(waiting.orderId, waiting.itemId);
       assertEqualOrThrow(
-        notServed.status,
-        409,
-        'an item the kitchen has not finished cannot be confirmed at the table',
+        notFinished.status,
+        200,
+        'staff confirm a dish at the table before the kitchen marks it finished',
       );
+      const waitingRow = db
+        .prepare('SELECT status, served_confirmed_at FROM order_items WHERE id = ?')
+        .get(waiting.itemId) as { status: string; served_confirmed_at: string | null };
+      assertEqualOrThrow(waitingRow.status, 'served', 'the dish at the table counts as served');
+      assertOrThrow(Boolean(waitingRow.served_confirmed_at), 'the early confirmation is recorded');
+      const gone = seedOrderWithItem(db, 'CONFIRM-CANCELLED', 'prod-cancel', 'cancelled');
+      const cancelledConfirm = await confirmServed(gone.orderId, gone.itemId);
+      assertEqualOrThrow(cancelledConfirm.status, 409, 'a cancelled item cannot be confirmed');
       // A take-away item is confirmed while the kitchen still packs it, and stays confirmed.
       const takeawayConfirmed = await confirmServed(order.orderId, order.itemId);
       assertEqualOrThrow(
@@ -595,7 +603,7 @@ async function main() {
             .run(batch.orderId, status, now(), now()).lastInsertRowid,
         );
       const servedItem = addItem('served');
-      const cooking = addItem('preparing');
+      const cancelledItem = addItem('cancelled');
       const confirmMany = (itemIds: unknown) =>
         api(baseUrl, `/api/orders/${batch.orderId}/items/confirm-served`, {
           method: 'POST',
@@ -608,8 +616,8 @@ async function main() {
             'SELECT id FROM order_items WHERE order_id = ? AND served_confirmed_at IS NOT NULL',
           )
           .all(batch.orderId) as { id: number }[];
-      const mixed = await confirmMany([batch.itemId, servedItem, cooking]);
-      assertEqualOrThrow(mixed.status, 409, 'a dish still cooking refuses the whole batch');
+      const mixed = await confirmMany([batch.itemId, servedItem, cancelledItem]);
+      assertEqualOrThrow(mixed.status, 409, 'a cancelled item refuses the whole batch');
       assertEqualOrThrow(confirmedRows().length, 0, 'a refused batch confirms nothing');
       assertEqualOrThrow((await confirmMany([])).status, 400, 'an empty batch is refused');
       assertEqualOrThrow((await confirmMany(['x'])).status, 400, 'item ids must be numbers');
@@ -625,7 +633,7 @@ async function main() {
           .sort((a, b) => a - b)
           .join(','),
         [batch.itemId, servedItem].sort((a, b) => a - b).join(','),
-        'both dishes are confirmed and the cooking one is not',
+        'both dishes are confirmed and the cancelled one is not',
       );
       assertEqualOrThrow(
         (db.prepare('SELECT status FROM order_items WHERE id = ?').get(batch.itemId) as any).status,

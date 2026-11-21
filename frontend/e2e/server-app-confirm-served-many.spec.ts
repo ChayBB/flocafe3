@@ -63,30 +63,31 @@ test('several dishes are confirmed served at once from a ticked list, leaving ou
   await page.getByTestId('server-app-ordered-items-button').click();
   await expect(page.getByTestId('server-app-ordered-item')).toHaveCount(4);
 
-  // Ready and served dishes not yet at the table: three; the one still cooking is left out.
+  // Every dish not yet confirmed counts, the one still cooking included: staff confirm what reaches the table.
   const confirmMany = page.getByTestId('server-app-confirm-served-many');
-  await expect(confirmMany).toHaveText('Confirm 3 dishes served');
+  await expect(confirmMany).toHaveText('Confirm 4 dishes served');
   await confirmMany.click();
   const dialog = page.getByTestId('server-app-confirm-served-dialog');
   const rows = dialog.getByTestId('server-app-confirm-served-row');
-  await expect(rows).toHaveCount(3);
-  for (const index of [0, 1, 2]) await expect(rows.nth(index).getByRole('checkbox')).toBeChecked();
+  await expect(rows).toHaveCount(4);
+  for (const index of [0, 1, 2, 3])
+    await expect(rows.nth(index).getByRole('checkbox')).toBeChecked();
   await rows.nth(0).getByRole('checkbox').uncheck();
   const submit = dialog.getByTestId('server-app-confirm-served-submit');
-  await expect(submit).toHaveText('Confirm (2)');
+  await expect(submit).toHaveText('Confirm (3)');
   await submit.click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByText('2 dishes confirmed served').first()).toBeVisible();
+  await expect(page.getByText('3 dishes confirmed served').first()).toBeVisible();
 
   // One dish is left to confirm, and the footer button still offers it.
   const items = page.getByTestId('server-app-ordered-item');
-  await expect(items.getByTestId('server-app-served-confirmed-tag')).toHaveCount(2);
+  await expect(items.getByTestId('server-app-served-confirmed-tag')).toHaveCount(3);
   await expect(items.nth(0).getByTestId('server-app-served-confirmed-tag')).toHaveCount(0);
   await expect(confirmMany).toHaveText('Confirm 1 dish served');
 
   // The last dish is confirmed with one tap, without the checklist.
   await confirmMany.click();
   await expect(dialog).toHaveCount(0);
-  await expect(items.getByTestId('server-app-served-confirmed-tag')).toHaveCount(3);
+  await expect(items.getByTestId('server-app-served-confirmed-tag')).toHaveCount(4);
   await expect(confirmMany).toHaveCount(0);
 });

@@ -69,16 +69,15 @@ export function isOutOfStock(item: OrderedItem): boolean {
   return Boolean(item.out_of_stock_at) && ['pending', 'preparing'].includes(item.status);
 }
 
-/** A ready or served dish, or a take-away one still in the kitchen, not yet confirmed. */
+/** Any live dish not yet confirmed: staff confirm what they see at the table, whatever the kitchen shows. */
 function canConfirmServed(item: OrderedItem): boolean {
-  if (item.served_confirmed_at) return false;
-  if (item.status === 'ready' || item.status === 'served') return true;
-  return item.service_change === 'takeaway' && ['pending', 'preparing'].includes(item.status);
+  if (item.served_confirmed_at || isOutOfStock(item)) return false;
+  return ['pending', 'preparing', 'ready', 'served'].includes(item.status);
 }
 
 /**
- * Any item not yet served can be packed to go; only a waiting item can be cancelled; a served
- * item, or a take-away one the kitchen is still packing, can be confirmed once.
+ * Any item not yet served can be packed to go; only a waiting item can be cancelled; any live
+ * item can be confirmed at the table once.
  */
 export function itemChangeOptions(item: OrderedItem): {
   takeaway: boolean;
@@ -350,6 +349,14 @@ function ItemThumb({
 }
 
 /** Dishes not yet confirmed at the table, in list order. */
+/** Drinks go below the food, each group keeping its order. */
+export function drinksLast(
+  items: OrderedItem[],
+  isDrink: (item: OrderedItem) => boolean,
+): OrderedItem[] {
+  return [...items.filter((item) => !isDrink(item)), ...items.filter(isDrink)];
+}
+
 export function itemsToConfirmServed(items: OrderedItem[]): OrderedItem[] {
   return items.filter(canConfirmServed);
 }
@@ -509,7 +516,7 @@ export function OrderedItemsScreen({
   }[];
 
   const live = items.filter((item) => !isCancelledItem(item.status));
-  // The bill is printed once every live item is priced and confirmed at the table.
+  // The bill prints whenever every live item is priced; table confirmation is not required.
   const notAtTable = live.filter((item) => !item.served_confirmed_at).length;
   const confirmDishes = async (selected: OrderedItem[]) => {
     const finishesRequest = serveConfirmRequested && selected.length === notAtTable;
@@ -518,7 +525,7 @@ export function OrderedItemsScreen({
     return done;
   };
   const awaitingPrice = live.filter((item) => item.weight_pending).length;
-  const billReady = live.length > 0 && notAtTable === 0 && awaitingPrice === 0;
+  const billReady = live.length > 0 && awaitingPrice === 0;
   const counts = stageCounts(items);
   const toConfirm = itemsToConfirmServed(live);
   // Filtering only earns a row when the items sit in more than one stage.
@@ -571,16 +578,9 @@ export function OrderedItemsScreen({
                 title={t('printBill')}
                 disabled={printing}
                 onClick={async () => {
-                  // Until every item is at the table and priced, the button says what is still missing.
+                  // A dish still waiting for its price cannot be billed yet.
                   if (!billReady) {
-                    toast.error(
-                      [
-                        notAtTable > 0 && t('printBillNotAtTable', { count: notAtTable }),
-                        awaitingPrice > 0 && t('printBillAwaitingPrice', { count: awaitingPrice }),
-                      ]
-                        .filter(Boolean)
-                        .join('\n'),
-                    );
+                    toast.error(t('printBillAwaitingPrice', { count: awaitingPrice }));
                     return;
                   }
                   setPrinting(true);

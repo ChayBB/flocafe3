@@ -7881,7 +7881,7 @@ router.patch(
   },
 );
 
-/** Confirms one ready or served item reached the table; runs inside the caller's transaction. */
+/** Confirms one live item reached the table, whatever the kitchen shows; runs inside the caller's transaction. */
 function confirmItemServed(
   db: ReturnType<typeof getDatabase>,
   orderId: string,
@@ -7895,13 +7895,15 @@ function confirmItemServed(
   // A take-away item is confirmed while the kitchen still packs it, so the bill can print alongside.
   const takeawayInKitchen =
     item.service_change === 'takeaway' && ['pending', 'preparing'].includes(item.status);
-  if (item.status !== 'served' && item.status !== 'ready' && !takeawayInKitchen) {
-    throw Object.assign(new Error('Only ready or served items can be confirmed at the table'), {
+  const outOfStock =
+    Boolean(item.out_of_stock_at) && ['pending', 'preparing'].includes(item.status);
+  if ((isTerminalItemStatus(item.status) && item.status !== 'served') || outOfStock) {
+    throw Object.assign(new Error('Only live items can be confirmed at the table'), {
       statusCode: 409,
     });
   }
-  // Taking a ready dish to the table serves it, so staff need not wait for the kitchen to mark it.
-  if (item.status === 'ready') {
+  // Staff see the dish at the table, so it is served even if the kitchen has not marked it yet.
+  if (['pending', 'preparing', 'ready'].includes(item.status) && !takeawayInKitchen) {
     db.prepare("UPDATE order_items SET status = 'served', updated_at = ? WHERE id = ?").run(
       now(),
       itemId,
@@ -8044,7 +8046,6 @@ router.post(
             | { name: string }
             | undefined
         )?.name ?? null;
-      let serveConfirmRequested = false;
       const order = withTxn(() => {
         const current = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
         if (!current) throw Object.assign(new Error('Order not found'), { statusCode: 404 });
@@ -8057,35 +8058,14 @@ router.post(
             code: 'weight_pending',
           });
         }
-        const { hasLiveItems, hasUnconfirmedItems } = getOrderServeConfirmation(db, orderId);
+        const { hasLiveItems } = getOrderServeConfirmation(db, orderId);
         if (!hasLiveItems) {
           throw Object.assign(new Error('Confirm every item is served before printing the bill'), {
             statusCode: 409,
             code: 'served_unconfirmed',
           });
         }
-        // Only a table's order is served at a table; a take-away or delivery bill prints for the cashier at once.
-        const needsServeConfirmation = !cashierPrint || current.type === 'dine_in';
-        if (needsServeConfirmation && hasUnconfirmedItems) {
-          if (!cashierPrint) {
-            throw Object.assign(
-              new Error('Confirm every item is served before printing the bill'),
-              {
-                statusCode: 409,
-                code: 'served_unconfirmed',
-              },
-            );
-          }
-          // The cashier's attempt flags the table on the Server App until service staff confirm it.
-          if (!current.serve_confirm_requested_at) {
-            db.prepare(
-              `UPDATE orders SET serve_confirm_requested_at = ?, serve_confirm_requested_by_name = ?,
-                 updated_at = ? WHERE id = ?`,
-            ).run(now(), actorName(), now(), orderId);
-          }
-          serveConfirmRequested = true;
-          return null;
-        }
+        // Staff and the cashier print a bill whenever they choose; serving need not be confirmed first.
         if (preflight) return current;
         // A reprint keeps the first request time, so the wait keeps counting from it.
         if (!current.bill_requested_at || current.bill_payment_received_at) {
@@ -8105,13 +8085,6 @@ router.post(
         }
         return db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
       });
-      if (serveConfirmRequested) {
-        notifyOrderUpdated();
-        return res.status(409).json({
-          error: 'Confirm every item is served before printing the bill',
-          code: 'served_unconfirmed',
-        });
-      }
       if (!preflight) notifyOrderUpdated();
       res.json({ order });
     } catch (err) {

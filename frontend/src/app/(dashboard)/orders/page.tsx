@@ -1397,7 +1397,7 @@ export default function OrdersPage() {
     ? (orders.find((o) => o.id === paymentBill.order_id) ?? paymentBill.order)
     : undefined;
 
-  // An unpaid bill prints before payment; a table must have every item confirmed served first.
+  // An unpaid bill prints before payment; the backend check records the bill request.
   const passesBillPrintGate = async (order: Order) => {
     if (!needsBillPrintBeforePayment(order)) return true;
     const check = await checkCashierBillPrint(order.id);

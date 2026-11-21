@@ -87,7 +87,7 @@ async function main() {
     });
 
   try {
-    // The bill waits for every live item to be priced and confirmed at the table.
+    // The bill waits for every live item to be priced; service staff need not confirm serving first.
     db.prepare('UPDATE order_items SET served_confirmed_at = ? WHERE id IN (?, ?)').run(
       now(),
       coffee,
@@ -99,25 +99,11 @@ async function main() {
     db.prepare(
       'UPDATE order_items SET weight_pending = 0, served_confirmed_at = NULL WHERE id = ?',
     ).run(fish);
-    const unconfirmed = await billRequest();
-    assertEqualOrThrow(
-      unconfirmed.status,
-      409,
-      'an item not yet confirmed at the table blocks the bill',
-    );
-    assertEqualOrThrow(
-      unconfirmed.data.code,
-      'served_unconfirmed',
-      'the refusal says serving is unconfirmed',
-    );
-    assertEqualOrThrow(orderRow().bill_requested_at, null, 'a refused request records nothing');
-    db.prepare('UPDATE order_items SET served_confirmed_at = ? WHERE id = ?').run(now(), fish);
-
     const request = await billRequest();
     assertEqualOrThrow(
       request.status,
       200,
-      `a server asks for the bill (${JSON.stringify(request.data)})`,
+      `a server asks for the bill before every dish is confirmed at the table (${JSON.stringify(request.data)})`,
     );
     const first = orderRow();
     assertOrThrow(Boolean(first.bill_requested_at), 'the request time is recorded');
@@ -264,7 +250,7 @@ async function main() {
     const cashierOrderId = (
       db.prepare("SELECT id FROM orders WHERE order_number = 'ORD-BILL-2'").get() as any
     ).id;
-    const cashierCoffee = insertItem.run(cashierOrderId, 'Coffee', 0, now(), now()).lastInsertRowid;
+    insertItem.run(cashierOrderId, 'Coffee', 0, now(), now());
     const cashierRequest = (headers: Record<string, string>, extra: Record<string, unknown> = {}) =>
       api(baseUrl, `/api/orders/${cashierOrderId}/bill-request`, {
         method: 'POST',
@@ -280,39 +266,14 @@ async function main() {
       'only staff who take payments print as cashier',
     );
 
-    // An unconfirmed table blocks the cashier's print and flags the table for service staff.
-    const unconfirmedPrint = await cashierRequest(cashierAuth, { preflight: true });
-    assertEqualOrThrow(
-      unconfirmedPrint.status,
-      409,
-      'the cashier waits for the serve confirmation',
-    );
-    assertEqualOrThrow(unconfirmedPrint.data.code, 'served_unconfirmed', 'the refusal names it');
-    assertOrThrow(
-      Boolean(cashierOrder().serve_confirm_requested_at),
-      'the table is flagged for the Server App',
-    );
-    assertEqualOrThrow(
-      cashierOrder().serve_confirm_requested_by_name,
-      'Cashier',
-      'the flag names the cashier who asked',
-    );
-    assertEqualOrThrow(cashierOrder().bill_requested_at, null, 'nothing is printed yet');
-    const confirmed = await api(
-      baseUrl,
-      `/api/orders/${cashierOrderId}/items/${cashierCoffee}/confirm-served`,
-      { method: 'PATCH', body: {}, headers: serverAuth },
-    );
-    assertEqualOrThrow(confirmed.status, 200, 'service staff confirm the item');
-    assertEqualOrThrow(
-      cashierOrder().serve_confirm_requested_at,
-      null,
-      'confirming every item clears the flag',
-    );
-
     const preflight = await cashierRequest(cashierAuth, { preflight: true });
     assertEqualOrThrow(preflight.status, 200, 'the confirmed table may print');
     assertEqualOrThrow(cashierOrder().bill_requested_at, null, 'a preflight records nothing');
+    assertEqualOrThrow(
+      cashierOrder().serve_confirm_requested_at,
+      null,
+      'the table is not flagged for a serve confirmation',
+    );
     const cashierPrint = await cashierRequest(cashierAuth);
     assertEqualOrThrow(cashierPrint.status, 200, 'the printed bill is recorded');
     const printed = cashierOrder();
