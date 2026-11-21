@@ -215,7 +215,7 @@ function inviteView(token: string) {
     }
     try {
       current = (await api<{ user: User }>('/invite/accept', { token, password: password.value })).user;
-      history.replaceState(null, '', '/portal/');
+      history.replaceState(null, '', location.pathname);
       render();
     } catch (failure) {
       showError(error, failure);

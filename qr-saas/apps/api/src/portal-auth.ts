@@ -66,14 +66,15 @@ export async function endSession(sql: Sql, request: Request) {
 }
 
 /** A one-time link to set (or reset) the password; earlier unused links for the user stop working. */
-export async function createInvite(sql: Sql, userId: string, publicOrigin: string) {
+export async function createInvite(sql: Sql, userId: string, publicOrigin: string, role: 'admin' | 'owner') {
   const secret = token();
   await sql.begin(async (tx) => {
     await tx`DELETE FROM portal_invites WHERE user_id = ${userId} AND used_at IS NULL`;
     await tx`INSERT INTO portal_invites(token_hash, user_id, expires_at)
       VALUES (${sha256(secret)}, ${userId}, now() + make_interval(days => ${INVITE_DAYS}))`;
   });
-  return `${publicOrigin.replace(/\/+$/, '')}/portal/#invite=${secret}`;
+  const page = role === 'owner' ? '/customer/login' : '/admin/login';
+  return `${publicOrigin.replace(/\/+$/, '')}${page}#invite=${secret}`;
 }
 
 /** Sets the password from an invite, signs out the user's other sessions and returns the user. */

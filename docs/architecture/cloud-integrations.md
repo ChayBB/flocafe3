@@ -743,8 +743,10 @@ accepted or rejected credentials observed by a poll or connection test. Both tra
 use HTTPS polling, and WebSocket is shown as unavailable.
 
 **Pairing.** A POS that has not been set up shows only a pairing-code field. A Cloud administrator
-issues an 8-character code from the Cloud portal (`/portal`), `qr-saas/scripts/new-branch.ts`, or
-`POST /api/v1/admin/pairing-codes`. The code is valid once for 30 minutes, and issuing a new code for a
+issues an 8-character code from the Cloud portal, `qr-saas/scripts/new-branch.ts`, or
+`POST /api/v1/admin/pairing-codes`. Administrators sign in to the portal at `/admin/login` and shop
+owners at `/customer/login`; the old `/portal` address redirects to `/admin/login`, and each invite
+link opens the sign-in page for that account's role. The code is valid once for 30 minutes, and issuing a new code for a
 branch cancels its unused code. `POST /api/qr-cloud/pair` (`settings.manage`) sends the code without a
 bearer token to `POST /api/v1/connectors/pair`. The Cloud allows 10 attempts per client address
 every 10 minutes and stores only a hash of the code. It returns a token with all four connector

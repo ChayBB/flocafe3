@@ -19,7 +19,9 @@ const html = () => new Response(page, { headers: { ...HEADERS, 'content-type': '
 /** The portal is one static page plus one bundled script, served by the API itself. */
 export function portalAssets() {
   return new Elysia()
-    .get('/portal', html)
+    .get('/portal', () => Response.redirect('/admin/login', 301))
+    .get('/admin', html)
+    .get('/admin/login', html)
     .get('/customer', html)
     .get('/customer/login', html)
     .get('/portal/app.js', () => new Response(script, { headers: { ...HEADERS, 'content-type': 'text/javascript; charset=utf-8' } }))

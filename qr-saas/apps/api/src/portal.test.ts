@@ -28,7 +28,7 @@ test.skipIf(!databaseUrl || !redisUrl)(
       const bootstrap = Bun.spawnSync([process.execPath, 'run', 'scripts/create-admin.ts', 'Admin@Example.test', 'Cloud admin'], { env });
       expect(bootstrap.exitCode).toBe(0);
       const adminInvite = /#invite=([A-Za-z0-9_-]+)/.exec(bootstrap.stdout.toString())![1];
-      expect(bootstrap.stdout.toString()).toContain('https://portal.example.test/portal/#invite=');
+      expect(bootstrap.stdout.toString()).toContain('https://portal.example.test/admin/login#invite=');
 
       api = Bun.spawn([process.execPath, 'run', 'apps/api/src/index.ts'], {
         env: { ...env, REDIS_URL: redisUrl!, PORT: '0', ADMIN_BOOTSTRAP_TOKEN: 'fixture-admin-portal-only-0123456789', ALLOW_LEGACY_CONNECTOR_TOKEN: 'false' },
@@ -70,7 +70,10 @@ test.skipIf(!databaseUrl || !redisUrl)(
       };
       const sessionOf = (reply: Reply) => /flo_portal=([^;]*)/.exec(reply.cookie ?? '')![1];
 
-      const page = await fetch(`${base}/portal/`);
+      const legacy = await fetch(`${base}/portal/`, { redirect: 'manual' });
+      expect(legacy.status).toBe(301);
+      expect(legacy.headers.get('location')).toBe('/admin/login');
+      const page = await fetch(`${base}/admin/login`);
       expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
       expect(await page.text()).toContain('/portal/app.js');
       expect((await fetch(`${base}/portal/app.js`)).status).toBe(200);
@@ -116,6 +119,7 @@ test.skipIf(!databaseUrl || !redisUrl)(
       expect(invited.status).toBe(200);
       expect((await call('/api/v1/portal/admin/users', { session: admin, body: { email: 'owner@kuknop.test', display_name: 'Nop', role: 'owner', tenant_id: north.tenant_id } })).status).toBe(409);
       expect((await call('/api/v1/portal/admin/users', { session: admin, body: { email: 'x@y.test', display_name: 'X', role: 'owner' } })).body.code).toBe('shop_required');
+      expect(invited.body.invite_url).toContain('/customer/login#invite=');
       const ownerToken = /#invite=([A-Za-z0-9_-]+)/.exec(invited.body.invite_url)![1];
       const owner = sessionOf(await call('/api/v1/portal/invite/accept', { body: { token: ownerToken, password: 'owner password 1' } }));
       const own = await call('/api/v1/portal/owner/shop', { session: owner });

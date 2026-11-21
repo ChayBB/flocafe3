@@ -13,7 +13,7 @@ try {
   const id = existing?.id ?? (await sql`
     INSERT INTO portal_users(email, display_name, role) VALUES (${email.toLowerCase()}, ${name}, 'admin') RETURNING id`)[0].id;
   await sql`UPDATE portal_users SET disabled_at = NULL WHERE id = ${id}`;
-  const link = await createInvite(sql, id, process.env.PORTAL_PUBLIC_ORIGIN ?? 'https://order.aiwittaya.com');
+  const link = await createInvite(sql, id, process.env.PORTAL_PUBLIC_ORIGIN ?? 'https://order.aiwittaya.com', 'admin');
   console.log(`Administrator ${email}: open this link once within 7 days to set the password.\n${link}`);
 } finally {
   await sql.end();

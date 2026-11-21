@@ -178,7 +178,7 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
       });
       if (created === null) return fail(404, 'shop_not_found');
       if (!created.length) return fail(409, 'email_exists');
-      const inviteUrl = await createInvite(sql, created[0].id, publicOrigin);
+      const inviteUrl = await createInvite(sql, created[0].id, publicOrigin, body.role);
       await audit(sql, { userId: user.id, action: 'user_invited', tenantId, detail: { email, role: body.role } });
       return json({ user_id: created[0].id, invite_url: inviteUrl });
     }, { body: t.Object({
@@ -190,9 +190,9 @@ export function portal(options: { sql: Sql; publicOrigin: string }) {
     .post('/api/v1/portal/admin/users/:userId/invite', async ({ request, params }) => {
       const user = await guard(request, 'admin');
       if (user instanceof Response) return user;
-      const [target] = await sql`SELECT id, tenant_id, email FROM portal_users WHERE id = ${params.userId} AND disabled_at IS NULL`;
+      const [target] = await sql`SELECT id, tenant_id, email, role FROM portal_users WHERE id = ${params.userId} AND disabled_at IS NULL`;
       if (!target) return fail(404, 'user_not_found');
-      const inviteUrl = await createInvite(sql, target.id, publicOrigin);
+      const inviteUrl = await createInvite(sql, target.id, publicOrigin, target.role);
       await audit(sql, { userId: user.id, action: 'user_reinvited', tenantId: target.tenant_id, detail: { email: target.email } });
       return json({ invite_url: inviteUrl });
     }, { params: t.Object({ userId: Uuid }) })
