@@ -1,5 +1,6 @@
 'use client';
 
+import { classifyTransportFailure } from '@/lib/transport-failure';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X,
@@ -1330,17 +1331,7 @@ export default function PaymentModal({
         setWalletBalance(await fetchWalletBalance(attempt.customerId));
       }
       if (!response) {
-        const code = (error as { code?: unknown } | null)?.code;
-        const failureClass =
-          code === 'ECONNABORTED' || code === 'ETIMEDOUT'
-            ? 'timeout'
-            : code === 'ENOTFOUND' || code === 'EAI_AGAIN'
-              ? 'dns'
-              : code === 'ECONNREFUSED'
-                ? 'connection_refused'
-                : typeof navigator !== 'undefined' && !navigator.onLine
-                  ? 'offline'
-                  : 'unreachable';
+        const failureClass = classifyTransportFailure(error);
         void captureClientOperationFailure({
           operation: 'payment.create',
           phase: 'transport',

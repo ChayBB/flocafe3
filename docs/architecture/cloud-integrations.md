@@ -270,6 +270,12 @@ onto another terminal brings its seed, so both terminals share a device id.
   (`http_route`), `http_status`, `duration_ms`, `db_ms`, the statement count (`db_queries`),
   `occurrences`, and the slowest statement (`slowest_query_ms`, `slowest_query`). Every such request
   writes one `console.warn` line, whether or not telemetry is on.
+- The error-report card counts `diagnostics_prompt_shown` each time it appears and
+  `diagnostics_prompt_accepted` only after Send reports saves `diagnostics_consent` and
+  `diagnostics_transmission_enabled`, under the same usage consent as every other usage event. While
+  cloud deletion blocks consent (`cloud_deletion_blocked`), the prompt stays suppressed, `shown`
+  does not record or emit, and `accepted` returns `409` (`cloud_deletion_pending`). The device-side
+  counters, not these events, enforce the ask cap.
 - The renderer sends at most one `$pageview` per screen per staff member every 30 minutes
   (`shared/posthog-screen-views.ts`); views inside the window are folded into the next pageview's
   `repeat_views`. A screen is the route path with id-like segments removed, plus `settings_tab` on
@@ -290,6 +296,19 @@ sent when that check is on, at every sharing level. When the check is off, the
 exception stays on the machine. The client itself is disabled only at `off` with diagnostics
 transmission also off. `sendAnonymousDiagnosticReport` is unchanged and still requires
 both checks.
+
+**Failures follow the same check.** Two diagnostics events leave PostHog's exception stream and
+follow transmission. `printer_failed` carries the failure class, connection type, job kind, release,
+OS, install source, and correlation id, plus the scrubbed error text, and never the queue name.
+`operation_failed` reuses each sealed v2 report queued in `store_diagnostics_outbox` (grouped by
+capture point, outcome, validated facts, release, and hour window, and split across report-count
+bounds or subsequent flushes): one event per sealed report, carrying `reason_code`, `operation`,
+`stage`, `outcome`, `classification`, `count`, `capture_point`, the report's `app_version` and
+`platform`, and the report's validated `facts`. It carries no correlation id and no free text, and
+a printer capture point (`fc.backend.printer.*`) is left out because `printer_failed` already covers
+it. The event uses `report_id` as its PostHog `uuid`, so a resend after a restart deduplicates to
+the same event. The report flush runs only while a diagnostics transport is set up (anonymous
+telemetry or a cloud account), so with neither there is no `operation_failed`.
 
 | Capture point                             | Source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -537,6 +556,21 @@ Issuing a pairing code is the endpoint that returns the stale claim message desc
 its failure is reported as HTTP 409 for an unregistered store and HTTP 502 for any other cloud
 failure, so a connectivity problem is distinguishable from a registration problem.
 
+**Live relay reports.** `CloudSyncService.runCommand()` in
+[`main/services/cloud-sync.ts`](../../main/services/cloud-sync.ts) serves five live report commands
+for RevFlo (`report.dashboard`, `report.hourly`, `report.sales`, `report.items`, `report.payments`),
+emitting `meta.report_contract_version: 1` payloads on `meta.basis: 'daily-sales-export'`. Store
+`currency`, optional `currency_symbol`, `fraction_digits`, and `timezone` come from
+`resolveRegionalSnapshot()` (see [regional settings](regional-settings.md)), and day bounds use
+`business_day_start_time` (see [business time](business-time.md)). Single-day views (`dashboard`,
+`hourly`) accept `date` or `range` (`today` or `yesterday`); range views (`sales`, `items`,
+`payments`) accept `range` (`today`, `yesterday`, `last7` default, `last30`) or paired `from`/`to`
+dates up to 370 inclusive days (`MAX_COMMAND_RANGE_DAYS`), plus `group_by` (`day`, `week`, `month`)
+on `sales` and `sort_by` (`revenue`, `qty`) and `limit` (`1` to `100`, default `50`) on `items`.
+`dashboard`, `sales`, `items`, and `payments` share `buildDailySalesExportDataset()` (see
+[daily sales export](../reference/daily-sales-export.md)), while `hourly` aggregates paid `bills`
+and `refunds` across the day's `[start, end)` UTC window bucketed by store-local hour.
+
 ## QR ordering relay
 
 A QR ordering relay lets customers order from a table QR over mobile data without the shop
@@ -755,7 +789,8 @@ merchant gets a distinct answer for "saved, will send later" and "not accepted".
 A ticket may carry a `log_tail` string holding the tail of the current session's log file.
 
 - **Cap.** `LOG_TAIL_MAX_BYTES` is 200,000. The tail is cut from the end, keeping the most recent
-  bytes, in both the IPC handler and the route.
+  bytes, in both the IPC handler and the route. In the POS one-click help flow, the client bounds
+  the attached log tail to 16,384 UTF-16 code units (`SUPPORT_LOG_TAIL_MAX_CHARS`) when opted in.
 - **Window.** `LOG_TAIL_MAX_AGE_MS` is 7 days. The cut is made at the first line whose timestamp
   falls inside the window, not at a byte offset, so a quiet store's log is not cut mid-record. The
   byte cap is the backstop when the windowed content is still large.
@@ -763,11 +798,10 @@ A ticket may carry a `log_tail` string holding the tail of the current session's
   string. `logTail` is `undefined` when the request body has no non-blank `log_tail`.
 - **Where it is persisted.** In the outbox row's `payload`, alongside the ticket's other fields,
   and sent by `queueSupportTicket()` as the `log_tail` property.
-
-**There is no test covering `log_tail`.** `grep -rn "log_tail\|get-log-tail" tests/` returns
-nothing: the 200,000-byte cap, the 7-day window, and the absent-not-null semantics are unenforced
-by the suite, and a change to any of them would not be caught. This is a coverage gap, not a
-statement that the behaviour is wrong.
+- **Redaction.** Both the `get-log-tail` IPC handler and `POST /api/support-ticket` pass the tail
+  through `sanitizeLogTail()` in [`main/lib/log-sanitizer.ts`](../../main/lib/log-sanitizer.ts) to
+  redact bearer JWTs, `Authorization` headers, PIN/password/API-key/secret fields, and OAuth tokens
+  while preserving stack traces, timestamps, and error codes.
 
 ### Linking a ticket to a known operation failure
 
@@ -794,6 +828,14 @@ tuple contains the server-owned reason, operation, stage, classification, outcom
 and validated facts; callers cannot supply or override those fields. Invalid or unregistered
 context is rejected without queuing a ticket. `client_ticket_id` remains the independent replay key,
 so retrying the same ticket does not replace its original correlation or operation context.
+
+For hardware printer dispatch failures, `operation_failure` captures
+(`fc.backend.printer.{receipt,kot}.{queue,timeout}`) carry validated `kind`, `connection_type`, and
+`failure_class` facts only when returned with a trusted backend correlation ID and approved capture
+stage. Client-side printer errors without backend dispatch failure context omit `operation_failure`
+while preserving sanitized diagnostics in the ticket body. Expected validation rejections (such as
+insufficient stock, closed cash days, or required cash sessions) surface actionable guidance in the
+POS and are classified as operational guidance rather than defects.
 
 Tickets without `operation_failure` retain the existing manual-help contract. The optional
 structured context does not add raw automatic logs or change the permission required to submit a
@@ -826,5 +868,6 @@ npm run test:support-ticket
 npm run test:qr-relay
 npm run test:cloud-account-status
 npm run test:cloud-live-orders-batching
+npm run test:cloud-live-reports
 npm run test:recovery-cloud   # includes tests/cloud-deletion-recovery.test.ts
 ```

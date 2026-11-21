@@ -175,7 +175,10 @@ export function GeneralSettingsTab({
   return (
     <SettingsTabShell>
       {/* Store Details - editable for admin, readonly otherwise */}
-      <div className="lg:col-span-2 bg-card rounded-xl border border-border p-6">
+      <div
+        data-setting-section="store-details"
+        className="lg:col-span-2 bg-card rounded-xl border border-border p-6"
+      >
         <div className="flex items-center gap-2 mb-4">
           <Building2 size={20} className="text-muted-foreground" />
           <h2 className="font-semibold text-foreground">{t('storeDetails')}</h2>
@@ -206,7 +209,7 @@ export function GeneralSettingsTab({
             )}
           </div>
           {/* Country, Timezone, Currency in single line with individual headings */}
-          <div className="md:col-span-2 space-y-2">
+          <div data-setting-section="store-currency" className="md:col-span-2 space-y-2 rounded-lg">
             {/* Headings */}
             <div className="grid grid-cols-3 gap-2">
               <label className="text-sm text-muted-foreground">{t('country')}</label>
@@ -310,7 +313,10 @@ export function GeneralSettingsTab({
           </div>
 
           {/* Business Day Start Time */}
-          <div className="md:col-span-2 space-y-1.5">
+          <div
+            data-setting-section="store-business-day"
+            className="md:col-span-2 space-y-1.5 rounded-lg"
+          >
             <label htmlFor="business-day-start-time" className="text-sm text-muted-foreground">
               {t('businessDayStartTime')}
             </label>
@@ -400,7 +406,7 @@ export function GeneralSettingsTab({
               </p>
             )}
           </div>
-          <div>
+          <div data-setting-section="store-tax-id" className="rounded-lg">
             <label className="block text-sm text-muted-foreground mb-1">{t('taxRegistered')}</label>
             {isAdmin ? (
               <select
@@ -511,7 +517,7 @@ export function GeneralSettingsTab({
             <p className="text-xs text-muted-foreground mt-1">{t('instagramHint')}</p>
           </div>
 
-          <div className="md:col-span-2">
+          <div data-setting-section="store-logo" className="md:col-span-2 rounded-lg">
             <StoreBrandingCard
               readOnly={!isAdmin}
               onReceiptLogoChange={(logo, raster) => {
@@ -526,7 +532,10 @@ export function GeneralSettingsTab({
       </div>
 
       {/* Number Formats */}
-      <div className="bg-card rounded-xl border border-border p-6">
+      <div
+        data-setting-section="order-number-format"
+        className="bg-card rounded-xl border border-border p-6"
+      >
         <div className="flex items-center gap-2 mb-4">
           <Hash size={20} className="text-muted-foreground" />
           <h2 className="font-semibold text-foreground">{t('orderNumberFormat')}</h2>
@@ -590,6 +599,7 @@ export function GeneralSettingsTab({
               <Toggle
                 value={orderNumberForm.includeDate}
                 label={t('orderNumberIncludeDate')}
+                disabled={!isAdmin}
                 onChange={
                   isAdmin
                     ? (v) => {
@@ -609,6 +619,7 @@ export function GeneralSettingsTab({
             <Toggle
               value={orderNumberForm.resetDaily}
               label={t('orderNumberResetDaily')}
+              disabled={!isAdmin}
               onChange={
                 isAdmin
                   ? (v) => {
@@ -757,6 +768,7 @@ export function GeneralSettingsTab({
                 <Toggle
                   value={orderNumberForm.invoiceIncludePeriod}
                   label={t('invoiceNumberIncludePeriod')}
+                  disabled={!isAdmin}
                   onChange={
                     isAdmin
                       ? (v) => {
@@ -773,7 +785,10 @@ export function GeneralSettingsTab({
       </div>
 
       {/* Subscription */}
-      <div className="bg-card rounded-xl border border-border p-6">
+      <div
+        data-setting-section="subscription"
+        className="bg-card rounded-xl border border-border p-6"
+      >
         <div className="flex items-center gap-2 mb-4">
           <CreditCard size={20} className="text-muted-foreground" />
           <h2 className="font-semibold text-foreground">{t('subscription')}</h2>
@@ -799,7 +814,9 @@ export function GeneralSettingsTab({
             <p className="text-sm text-muted-foreground mb-1">{t('languages')}</p>
             <select
               value={language}
+              disabled={!isAdmin}
               onChange={(e) => {
+                if (!isAdmin) return;
                 const lang = e.target.value as Language;
                 const prev = usePosSettingsStore.getState().language;
                 const requestId = ++languageRequestId.current;
@@ -814,7 +831,7 @@ export function GeneralSettingsTab({
                   }
                 });
               }}
-              className="block w-full rounded-md border-border shadow-sm focus:border-brand focus:ring-brand sm:text-sm px-3 py-2 border"
+              className="block w-full rounded-md border-border shadow-sm focus:border-brand focus:ring-brand sm:text-sm px-3 py-2 border disabled:bg-muted disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {SELECTABLE_LANGUAGES.map((lang) => (
                 <option key={lang} value={lang}>

@@ -352,11 +352,13 @@ async function main() {
   result = await request(app)
     .put(`/api/staff/${digitsId}`)
     .set(managerAuth)
-    .send({ password: '12' });
+    .send({ password: '9035' });
+  assertEqual(result.status, 403, 'a manager needs staff.credentials.reset to reset a password');
+  result = await request(app).put(`/api/staff/${digitsId}`).set(ownerAuth).send({ password: '12' });
   assertEqual(result.status, 400, 'an operational password reset must be 4 digits');
   result = await request(app)
     .put(`/api/staff/${digitsId}`)
-    .set(managerAuth)
+    .set(ownerAuth)
     .send({ password: '9035' });
   assertEqual(result.status, 200, 'an operational password can be reset to 4 digits');
   result = await request(app)

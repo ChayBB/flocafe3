@@ -1,7 +1,7 @@
 import { test, expect, request as playwrightRequest } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs';
-import { E2E_PASSWORD, getE2eToken, setLanguage } from './helpers/test-auth';
+import { E2E_PASSWORD, getE2eToken, loginWithPassword, setLanguage } from './helpers/test-auth';
 import { E2E_BASE_URL as BASE } from './helpers/urls';
 
 const SCREENSHOTS_DIR =
@@ -61,11 +61,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
   });
 
   test.beforeEach(async ({ page }) => {
-    await page.goto(`${BASE}/auth/login`);
-    await page.locator('#email').fill('manager@flo.local');
-    await page.locator('#password').fill(E2E_PASSWORD);
-    await page.locator('button[type="submit"]').click();
-    await page.waitForURL((url) => !url.pathname.includes('/auth/login'), { timeout: 20_000 });
+    await loginWithPassword(page, 'manager@flo.local');
     await setLanguage(page, 'en');
     await page.goto(`${BASE}/pos`);
     await expect(page.getByTestId('pos-product-grid')).toBeVisible();
@@ -242,11 +238,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
     // Price override is owner-only, so switch the session from manager to owner.
     await page.goto(`${BASE}/auth/login`);
     await page.evaluate(() => localStorage.clear());
-    await page.reload();
-    await page.locator('#email').fill('owner@flo.local');
-    await page.locator('#password').fill(E2E_PASSWORD);
-    await page.locator('button[type="submit"]').click();
-    await page.waitForURL((url) => !url.pathname.includes('/auth/login'), { timeout: 20_000 });
+    await loginWithPassword(page, 'owner@flo.local');
     await setLanguage(page, 'en');
     await page.goto(`${BASE}/pos`);
     await expect(page.getByTestId('pos-product-grid')).toBeVisible();
@@ -810,11 +802,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
 
     // Server role lacks both printers.manage and dashboard.view -> redirected from both /print-test and /order-history-demo to /orders
     await page.evaluate(() => localStorage.clear());
-    await page.goto(`${BASE}/auth/login`);
-    await page.locator('#email').fill('server@flo.local');
-    await page.locator('#password').fill(E2E_PASSWORD);
-    await page.locator('button[type="submit"]').click();
-    await page.waitForURL((u) => !u.pathname.includes('/auth/login'), { timeout: 20_000 });
+    await loginWithPassword(page, 'server@flo.local');
 
     await page.goto(`${BASE}/print-test`);
     await page.waitForURL('**/orders**', { timeout: 10_000 });
@@ -828,11 +816,7 @@ test.describe('POS Keyboard Shortcuts & Rapid Cashier Ergonomics', () => {
 
     // Owner has dashboard.view -> can open /order-history-demo
     await page.evaluate(() => localStorage.clear());
-    await page.goto(`${BASE}/auth/login`);
-    await page.locator('#email').fill('owner@flo.local');
-    await page.locator('#password').fill(E2E_PASSWORD);
-    await page.locator('button[type="submit"]').click();
-    await page.waitForURL((u) => !u.pathname.includes('/auth/login'), { timeout: 20_000 });
+    await loginWithPassword(page, 'owner@flo.local');
 
     await page.goto(`${BASE}/order-history-demo`);
     await page.waitForLoadState('networkidle');

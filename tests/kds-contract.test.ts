@@ -34,6 +34,7 @@ const { kdsRoutes } = require('../main/routes/kds');
 const { orderItemRoutes } = require('../main/routes/order-items');
 const { orderRoutes } = require('../main/routes/orders');
 const { refundRoutes } = require('../main/routes/refunds');
+const { settingsRoutes } = require('../main/routes/settings');
 
 async function main() {
   const db = initTestDb();
@@ -174,6 +175,7 @@ async function main() {
     '/api/order-items': orderItemRoutes,
     '/api/orders': orderRoutes,
     '/api/refunds': refundRoutes,
+    '/api/settings': settingsRoutes,
   });
   try {
     const orders = await request(app).get('/api/kds/orders').set(authHeader);
@@ -1176,18 +1178,116 @@ async function main() {
         .prepare('SELECT id FROM order_items WHERE order_id = ?')
         .get(prepaidCompletedOrderId) as any
     ).id;
+    let prepaidCookingStartedAt: string | null = null;
     for (const st of ['preparing', 'ready', 'served']) {
       const prepRes = await request(app)
         .patch(`/api/order-items/${prepaidItemId}/status`)
         .set(authHeader)
         .send({ status: st });
       assertEqualOrThrow(prepRes.status, 200, `prepaid completed item -> ${st} succeeds`);
+      const prepaidState = readOrderState(prepaidCompletedOrderId);
       assertEqualOrThrow(
-        readOrderState(prepaidCompletedOrderId).status,
+        prepaidState.status,
         'completed',
         `completed order status is never mutated when item moves to ${st}`,
       );
+      if (st === 'preparing') {
+        assertOrThrow(
+          prepaidState.cooking_started_at !== null,
+          'prepaid completed order stamps cooking_started_at when KDS item reaches preparing',
+        );
+        prepaidCookingStartedAt = prepaidState.cooking_started_at;
+        assertEqualOrThrow(prepaidState.ready_at, null, 'preparing keeps ready_at null');
+        assertEqualOrThrow(prepaidState.served_at, null, 'preparing keeps served_at null');
+      }
+      if (st === 'ready') {
+        assertEqualOrThrow(
+          prepaidState.cooking_started_at,
+          prepaidCookingStartedAt,
+          'ready preserves cooking_started_at on completed order',
+        );
+        assertOrThrow(
+          prepaidState.ready_at !== null,
+          'prepaid completed order stamps ready_at when KDS item reaches ready',
+        );
+        assertEqualOrThrow(prepaidState.served_at, null, 'ready keeps served_at null');
+      }
+      if (st === 'served') {
+        assertEqualOrThrow(
+          prepaidState.cooking_started_at,
+          prepaidCookingStartedAt,
+          'served preserves cooking_started_at on completed order',
+        );
+        assertOrThrow(
+          prepaidState.served_at !== null,
+          'prepaid completed order stamps served_at when KDS item reaches served',
+        );
+      }
     }
+
+    const prematureReadyStamp = '2020-01-01 00:00:00';
+    db.prepare('UPDATE orders SET ready_at = ? WHERE id = ?').run(
+      prematureReadyStamp,
+      prepaidCompletedOrderId,
+    );
+    const requeuePrepRes = await request(app)
+      .patch(`/api/order-items/${prepaidItemId}/status`)
+      .set(authHeader)
+      .send({ status: 'preparing' });
+    assertEqualOrThrow(requeuePrepRes.status, 200, 'completed item requeue -> preparing succeeds');
+    const afterRequeuePrep = readOrderState(prepaidCompletedOrderId);
+    assertEqualOrThrow(
+      afterRequeuePrep.status,
+      'completed',
+      'requeue to preparing keeps completed order status intact',
+    );
+    assertEqualOrThrow(
+      afterRequeuePrep.cooking_started_at,
+      prepaidCookingStartedAt,
+      'requeue to preparing preserves original cooking_started_at',
+    );
+    assertEqualOrThrow(
+      afterRequeuePrep.ready_at,
+      null,
+      'requeue to preparing clears premature ready_at on completed order',
+    );
+    assertEqualOrThrow(
+      afterRequeuePrep.served_at,
+      null,
+      'requeue to preparing clears stale served_at on completed order',
+    );
+
+    const reReadyRes = await request(app)
+      .patch(`/api/order-items/${prepaidItemId}/status`)
+      .set(authHeader)
+      .send({ status: 'ready' });
+    assertEqualOrThrow(reReadyRes.status, 200, 'completed item re-ready succeeds');
+    const afterReReady = readOrderState(prepaidCompletedOrderId);
+    assertOrThrow(
+      afterReReady.ready_at !== null && afterReReady.ready_at !== prematureReadyStamp,
+      'finishing requeued item stamps fresh ready_at instead of keeping premature timestamp',
+    );
+
+    const completedRequeuePendingRes = await request(app)
+      .patch(`/api/order-items/${prepaidItemId}/status`)
+      .set(authHeader)
+      .send({ status: 'pending' });
+    assertEqualOrThrow(
+      completedRequeuePendingRes.status,
+      200,
+      'completed item requeue -> pending succeeds',
+    );
+    const afterCompletedRequeuePending = readOrderState(prepaidCompletedOrderId);
+    assertEqualOrThrow(
+      afterCompletedRequeuePending.ready_at,
+      null,
+      'requeue to pending clears stale ready_at on completed order',
+    );
+    assertEqualOrThrow(
+      afterCompletedRequeuePending.served_at,
+      null,
+      'requeue to pending clears stale served_at on completed order',
+    );
 
     // KDS disabled preserves manual parent-status workflow without automatic item reconciliation
     db.prepare(
@@ -1253,6 +1353,66 @@ async function main() {
       (db.prepare('SELECT status FROM order_items WHERE id = ?').get(barItemId) as any).status,
       'preparing',
       'orphaned update does not commit a status change',
+    );
+
+    // KDS default view: fresh install seeds 'kanban', preserves existing 'tabs', and persists view changes
+    const initialKdsViewRow = db
+      .prepare("SELECT value FROM settings WHERE key = 'kds_default_view'")
+      .get() as { value: string } | undefined;
+    assertEqualOrThrow(
+      initialKdsViewRow?.value,
+      'kanban',
+      'fresh DB migration v26 seeds kds_default_view = kanban',
+    );
+    const chefGetKdsSettings = await request(app).get('/api/settings/kds').set(chefAuth);
+    assertEqualOrThrow(
+      chefGetKdsSettings.status,
+      200,
+      'chef with kitchen.use can read GET /api/settings/kds',
+    );
+    assertEqualOrThrow(
+      chefGetKdsSettings.body.kds_default_view,
+      'kanban',
+      'GET /api/settings/kds returns kanban on fresh install',
+    );
+
+    const chefPutKdsView = await request(app)
+      .put('/api/kds/view')
+      .set(chefAuth)
+      .send({ kds_default_view: 'tabs' });
+    assertEqualOrThrow(
+      chefPutKdsView.status,
+      200,
+      'chef can persist KDS view via PUT /api/kds/view',
+    );
+    assertEqualOrThrow(
+      chefPutKdsView.body.kds_default_view,
+      'tabs',
+      'PUT /api/kds/view returns updated tabs view',
+    );
+    const afterChefPut = await request(app).get('/api/settings/kds').set(authHeader);
+    assertEqualOrThrow(
+      afterChefPut.body.kds_default_view,
+      'tabs',
+      'existing installation with kds_default_view = tabs preserves tabs',
+    );
+
+    const invalidKdsView = await request(app)
+      .put('/api/kds/view')
+      .set(chefAuth)
+      .send({ kds_default_view: 'grid' });
+    assertEqualOrThrow(
+      invalidKdsView.status,
+      400,
+      'PUT /api/kds/view rejects invalid view values with 400',
+    );
+
+    db.prepare("DELETE FROM settings WHERE key = 'kds_default_view'").run();
+    const unsetFallbackRes = await request(app).get('/api/settings/kds').set(authHeader);
+    assertEqualOrThrow(
+      unsetFallbackRes.body.kds_default_view,
+      'kanban',
+      'GET /api/settings/kds falls back to kanban when kds_default_view is unset',
     );
   } finally {
     closeDatabase();

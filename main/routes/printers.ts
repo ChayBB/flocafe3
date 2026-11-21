@@ -42,7 +42,16 @@ import {
   prepareReceipt,
   escPosToText,
   printMenuDocument,
+  validateNetworkPrinterTarget,
 } from '../printers/thermal';
+import {
+  discoverHandler,
+  invalidatePrinterDetectCache,
+  printerStatusHandler,
+  testPrintCause,
+  testPrintFailureClass,
+  isPhysicalFault,
+} from './printer-diagnostics';
 import {
   buildDeliverySlipPrintData,
   type DeliverySlipOrderRow,
@@ -71,6 +80,7 @@ import {
   capabilitiesForPrinter,
   isValidPrinterProfileId,
 } from '../printers/profiles';
+import { findDbProfileById } from '../printers/capability-db';
 import { hasPermission, requirePermission, requireAnyPermission } from '../services/authorization';
 import { getOrderServeConfirmation } from '../services/orders';
 import { getOpenSession, listOpenSessions } from '../services/shift-session-gate';
@@ -158,7 +168,12 @@ function validatePrinterFields(body: any, existing?: any): string | null {
     body.profile_id !== undefined &&
     body.profile_id !== null &&
     body.profile_id !== '' &&
-    !isValidPrinterProfileId(body.profile_id)
+    !isValidPrinterProfileId(body.profile_id) &&
+    !(
+      existing?.profile_id &&
+      body.profile_id === existing.profile_id &&
+      Boolean(findDbProfileById(body.profile_id))
+    )
   ) {
     return 'profile_id must be a supported printer profile ID';
   }
@@ -166,11 +181,21 @@ function validatePrinterFields(body: any, existing?: any): string | null {
   const connectionType =
     body.connection_type !== undefined ? body.connection_type : existing?.connection_type;
   const ipAddress = body.ip_address !== undefined ? body.ip_address : existing?.ip_address;
+  const effectivePort = body.port !== undefined ? body.port : (existing?.port ?? 9100);
   if (
     connectionType === 'network' &&
     (typeof ipAddress !== 'string' || ipAddress.trim().length === 0)
   ) {
     return 'ip_address is required for network printers';
+  }
+  if (
+    connectionType === 'network' &&
+    typeof ipAddress === 'string' &&
+    ipAddress.trim().length > 0 &&
+    isValidPort(effectivePort)
+  ) {
+    const targetError = validateNetworkPrinterTarget(ipAddress, effectivePort);
+    if (targetError) return targetError;
   }
   return null;
 }
@@ -301,6 +326,7 @@ router.get(
   requirePermission('printers.manage'),
   asyncHandler(async (req: Request, res: Response) => {
     try {
+      invalidatePrinterDetectCache();
       const printers = await detectConnectedPrinters(getHttpRequestSignal(req));
       console.log('[Printer] Detected printers:', printers);
       res.json({ printers });
@@ -322,6 +348,12 @@ router.get(
 router.get('/supported', requirePermission('printers.manage'), (_req: Request, res: Response) => {
   res.json({ printers: getSupportedPrinterProfiles() });
 });
+
+// GET /api/printers/discover — LAN scan; must stay above /:id
+router.get('/discover', requirePermission('printers.manage'), asyncHandler(discoverHandler));
+
+// GET /api/printers/:id/status
+router.get('/:id/status', requirePermission('printers.manage'), asyncHandler(printerStatusHandler));
 
 // GET /api/printers/:id
 // GET /api/printers/unprinted-kots — kitchen tickets that failed to print and still need attention.
@@ -383,13 +415,36 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
 
     const db = getDatabase();
     const id = randomUUID();
+    const model =
+      typeof req.body.model === 'string' && req.body.model.trim().length > 0
+        ? req.body.model.trim()
+        : undefined;
     const normalizedProfileId =
       typeof profile_id === 'string' && profile_id.trim().length > 0 ? profile_id.trim() : null;
     const resolvedProfile = resolvePrinterProfile({
       name,
+      model,
       profile_id: normalizedProfileId,
     });
+    let persistedProfileId = normalizedProfileId;
+    if (
+      !persistedProfileId &&
+      model &&
+      resolvedProfile.id !== 'generic-escpos-80' &&
+      resolvedProfile.id !== 'generic-escpos-58'
+    ) {
+      const nameOnlyProfile = resolvePrinterProfile({ name });
+      if (nameOnlyProfile.id !== resolvedProfile.id) {
+        persistedProfileId = resolvedProfile.id;
+      }
+    }
     const resolvedPaperWidth = paper_width ?? resolvedProfile.defaultPaperWidth ?? 'cols-42';
+    const normalizedIp =
+      connection_type === 'network' &&
+      typeof ip_address === 'string' &&
+      ip_address.trim().length > 0
+        ? ip_address.trim()
+        : null;
 
     db.transaction(() => {
       const existingPrinters = db.prepare('SELECT COUNT(*) as count FROM printers').get() as any;
@@ -404,11 +459,11 @@ router.post('/', requirePermission('printers.manage'), (req: Request, res: Respo
         name,
         deviceName || null,
         connection_type,
-        ip_address ?? null,
+        normalizedIp,
         port ?? 9100,
         resolvedPaperWidth,
         text_size ?? 'normal',
-        normalizedProfileId,
+        persistedProfileId,
         shouldBeDefault ? 1 : 0,
         cash_drawer_pulse_enabled === true ? 1 : 0,
         now(),
@@ -457,7 +512,12 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
     db.transaction(() => {
       const updatedConnectionType =
         connection_type !== undefined ? connection_type : existing.connection_type;
-      const updatedIpAddress = ip_address !== undefined ? ip_address : existing.ip_address;
+      const rawUpdatedIp = ip_address !== undefined ? ip_address : existing.ip_address;
+      const trimmedUpdatedIp =
+        typeof rawUpdatedIp === 'string' && rawUpdatedIp.trim().length > 0
+          ? rawUpdatedIp.trim()
+          : null;
+      const updatedIpAddress = updatedConnectionType === 'network' ? trimmedUpdatedIp : null;
       const updatedProfileId =
         profile_id !== undefined
           ? typeof profile_id === 'string' && profile_id.trim().length > 0
@@ -474,7 +534,7 @@ router.put('/:id', requirePermission('printers.manage'), (req: Request, res: Res
         name !== undefined ? name : existing.name,
         deviceName ?? null,
         updatedConnectionType,
-        updatedIpAddress === undefined ? null : updatedIpAddress,
+        updatedIpAddress,
         port !== undefined ? port : existing.port,
         paper_width !== undefined ? paper_width : existing.paper_width,
         text_size !== undefined ? text_size : existing.text_size,
@@ -607,7 +667,7 @@ router.post(
         capabilities,
         { rasterProbe: req.body?.rasterProbe === true },
       );
-      let result: { ok: boolean; detail?: string } = { ok: false };
+      let result: { ok: boolean; detail?: string; failureClass?: string } = { ok: false };
 
       switch (printer.connection_type) {
         case 'network':
@@ -622,19 +682,25 @@ router.post(
           break;
         case 'usb':
           result = await printViaUSB(testData, osPrinterName(printer), getHttpRequestSignal(req));
+          invalidatePrinterDetectCache();
           break;
         case 'webusb':
           // WebUSB is handled entirely in the browser; return the bytes for the frontend to send
           return res.json({ success: true, webusb: true, bytes: Array.from(testData) });
       }
 
-      if (result.ok) {
+      // A network printer that answers with a fault that drops bytes did not print.
+      const cause = await testPrintCause(printer, getHttpRequestSignal(req));
+
+      if (result.ok && !isPhysicalFault(cause)) {
         res.json({ success: true });
       } else {
         // Surface the specific printer failure reason rather than a generic message.
         res.status(502).json({
           error: result.detail || 'Printer did not respond or print failed',
           detail: result.detail,
+          failure_class: testPrintFailureClass(result, cause),
+          cause,
         });
       }
     } catch (error: any) {
@@ -770,7 +836,7 @@ router.post(
         timezone,
         capabilities,
       );
-      let result: { ok: boolean; detail?: string } = { ok: false };
+      let result: { ok: boolean; detail?: string; failureClass?: string } = { ok: false };
 
       switch (printer.connection_type) {
         case 'network':
@@ -785,6 +851,7 @@ router.post(
           break;
         case 'usb':
           result = await printViaUSB(testData, osPrinterName(printer), getHttpRequestSignal(req));
+          invalidatePrinterDetectCache();
           break;
         case 'webusb':
           return res.json({
@@ -797,14 +864,20 @@ router.post(
           return res.status(400).json({ error: 'Unsupported printer connection type' });
       }
 
-      if (result.ok) {
+      const cause = await testPrintCause(printer, getHttpRequestSignal(req));
+
+      if (result.ok && !isPhysicalFault(cause)) {
         res.json({ success: true });
       } else {
         console.error(
           '[Printer] Active test print failed:',
-          result.detail || 'Printer did not respond or print failed',
+          result.detail || cause || 'Printer did not respond or print failed',
         );
-        res.status(502).json({ error: 'Test print failed' });
+        res.status(502).json({
+          error: 'Test print failed',
+          failure_class: testPrintFailureClass(result, cause),
+          cause,
+        });
       }
     } catch (error: unknown) {
       res.locals.postHogError = error;
@@ -1266,6 +1339,7 @@ router.post(
         show_tax_breakdown: settings.bill_show_tax_breakdown !== 'false',
         show_customer_name: settings.bill_show_customer_name !== 'false',
         show_table_number: settings.bill_show_table_number !== 'false',
+        show_large_order_number: settings.bill_show_large_order_number !== 'false',
         show_logo: settings.bill_show_logo === 'true',
         receipt_logo: settings.receipt_logo || '',
         receipt_logo_raster: settings.receipt_logo_raster || '',
@@ -1326,10 +1400,19 @@ router.post(
       if (result.ok) {
         res.json({ success: true, warnings: result.warnings || [] });
       } else {
+        const rawConnectionType = (printer as { connection_type?: unknown } | null | undefined)
+          ?.connection_type;
+        const connectionType =
+          rawConnectionType === 'network' ||
+          rawConnectionType === 'usb' ||
+          rawConnectionType === 'webusb'
+            ? rawConnectionType
+            : 'unknown';
         res.status(502).json({
           error: result.detail || 'Print failed. Check printer connection and settings.',
           detail: result.detail,
           failure_class: result.failureClass,
+          connection_type: connectionType,
           code: result.code,
           correlation_id: result.correlationId,
           stage: result.stage,
@@ -1645,12 +1728,22 @@ export async function printOrderKot(
     if (success) {
       return { status: 200, body: { success: true, warnings } };
     } else {
+      const failedPrinter = [...stationOutcomes.values()].find(
+        (outcome) => outcome.failure,
+      )?.printer;
+      const connectionType =
+        failedPrinter?.connection_type === 'network' ||
+        failedPrinter?.connection_type === 'usb' ||
+        failedPrinter?.connection_type === 'webusb'
+          ? failedPrinter.connection_type
+          : 'unknown';
       return {
         status: 502,
         body: {
           error: failure?.detail || 'KOT print failed. Check printer connection.',
           detail: failure?.detail,
           failure_class: failure?.failureClass,
+          connection_type: connectionType,
           code: failure?.code,
           correlation_id: failure?.correlationId,
           stage: failure?.stage,
@@ -1801,10 +1894,17 @@ router.post(
       if (result.ok) {
         return res.json({ success: true, warnings: result.warnings || [] });
       }
+      const connectionType =
+        (printer as any)?.connection_type === 'network' ||
+        (printer as any)?.connection_type === 'usb' ||
+        (printer as any)?.connection_type === 'webusb'
+          ? (printer as any).connection_type
+          : 'unknown';
       return res.status(502).json({
         error: result.detail || 'Delivery slip print failed. Check printer connection.',
         detail: result.detail,
         failure_class: result.failureClass,
+        connection_type: connectionType,
         code: result.code,
         correlation_id: result.correlationId,
         stage: result.stage,
@@ -2169,6 +2269,8 @@ export async function autoPrintReleasedOrderKot(
         .get(order.customer_id) as { name: string } | undefined;
       if (customer) order.customer = { name: customer.name };
     }
+    order.show_large_order_number =
+      tenantSettingValue(db, 'bill_show_large_order_number') !== 'false';
 
     const kotLanguage = resolveTenantKotLanguage(db);
     const useUnicode = tenantSettingValue(db, 'printer_use_unicode') === 'true';

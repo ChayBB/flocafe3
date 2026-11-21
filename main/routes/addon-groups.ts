@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import expressRateLimit from 'express-rate-limit';
+import { isAllowedPrivateIp } from '../middleware/security';
 import { getDatabase, now, withTxn, getSettingValue } from '../db';
 import { randomUUID } from 'crypto';
 import { hasPermission, requirePermission } from '../services/authorization';
@@ -41,12 +42,21 @@ const addonGroupReadRateLimit = expressRateLimit({
   limit: 120,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
 });
+const configuredAddonGroupWriteLimit = Number.parseInt(
+  process.env.FLO_ADDON_GROUP_WRITE_RATE_LIMIT_MAX || '',
+  10,
+);
 const addonGroupWriteRateLimit = expressRateLimit({
   windowMs: 60 * 1000,
-  limit: 60,
+  limit:
+    Number.isFinite(configuredAddonGroupWriteLimit) && configuredAddonGroupWriteLimit > 0
+      ? configuredAddonGroupWriteLimit
+      : 60,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
 });
 
 type FieldErrors = Record<string, string[]>;

@@ -29,6 +29,8 @@ test('payment can retry without a manager PIN after kitchen delivery completes',
   await page.locator('#email').fill('manager@flo.local');
   await page.locator('#password').fill('E2ePass123!');
   await page.locator('button[type="submit"]').click();
+  await page.waitForURL((url) => !url.pathname.startsWith('/auth/login'), { timeout: 20000 });
+  await page.waitForFunction(() => !!localStorage.getItem('token'));
   await setLanguage(page, 'en');
 
   const token = await page.evaluate(() => localStorage.getItem('token'));
@@ -143,6 +145,8 @@ test('zero-balance dine-in checkout can settle from the payment modal after kitc
   await page.locator('#email').fill('manager@flo.local');
   await page.locator('#password').fill('E2ePass123!');
   await page.locator('button[type="submit"]').click();
+  await page.waitForURL((url) => !url.pathname.startsWith('/auth/login'), { timeout: 20000 });
+  await page.waitForFunction(() => !!localStorage.getItem('token'));
   await setLanguage(page, 'en');
 
   const token = await page.evaluate(() => localStorage.getItem('token'));

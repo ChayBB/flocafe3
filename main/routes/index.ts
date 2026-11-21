@@ -21,6 +21,7 @@ import { kitchenRoutes } from './kitchen';
 import { customerRoutes, parseCustomer, getWalletBalance } from './customers';
 import { staffRoutes } from './staff';
 import { settingsRoutes } from './settings';
+import { diagnosticsPromptRoutes } from './diagnostics-prompt';
 import { paymentMethodRoutes } from './payment-methods';
 import { reportRoutes } from './reports';
 import { kdsRoutes } from './kds';
@@ -57,6 +58,7 @@ import { attendanceRoutes } from './attendance';
 import { billRequestRoutes } from './bill-requests';
 import { guestAlertRoutes } from './guest-alerts';
 import { invalidateGuestMenuOnCatalogWrite } from '../lib/guest-menu-cache';
+import { isAllowedPrivateIp } from '../middleware/security';
 
 // Distinguish unregistered store error from cloud connectivity failure.
 function isUnregisteredCloudError(error: any): boolean {
@@ -79,6 +81,7 @@ const inlineCustomerLookupRateLimit = expressRateLimit({
   limit: 120,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
 });
 
 export function registerRoutes(app: Express): void {
@@ -138,6 +141,8 @@ export function registerRoutes(app: Express): void {
   app.use('/api/bill-requests', billRequestRoutes);
   app.use('/api/guest-alerts', guestAlertRoutes);
   app.use('/api/users', staffRoutes); // same router, dual-mounted
+  // Registered before the settings wildcard, which would otherwise swallow it.
+  app.use('/api/settings/diagnostics-prompt', diagnosticsPromptRoutes);
   app.use('/api/settings', settingsRoutes);
   app.use('/api/payment-methods', paymentMethodRoutes);
   app.use('/api/reports', reportRoutes);

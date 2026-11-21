@@ -1,3 +1,6 @@
+import { ORDER_CREATE_DISPLAY_CODES } from './order-create-display-codes';
+import { PRINTER_DIAGNOSTIC_FACT_RULES } from '../printers/print-failure-facts';
+
 export type OperationOutcome = 'not_applied' | 'applied' | 'partial' | 'unknown' | 'not_applicable';
 export type OperationFailureClass = 'expected_rejection' | 'unexpected_failure';
 
@@ -27,10 +30,24 @@ export type OperationFailure = {
 };
 
 const NO_FACTS = {} as const;
+export const STOCK_SCOPES = ['product', 'variant', 'addon'] as const;
+export const STOCK_SHORTFALLS = ['out_of_stock', 'partial'] as const;
+export const PERSISTENCE_FAILURE_CLASSES = [
+  'busy_or_locked',
+  'constraint',
+  'read_only',
+  'disk_full',
+  'io_error',
+  'schema_or_migration',
+  'unknown',
+] as const;
+export type PersistenceFailureClass = (typeof PERSISTENCE_FAILURE_CLASSES)[number];
 const NETWORK_FAILURE_CLASSES = [
   'timeout',
   'dns',
   'connection_refused',
+  'connection_reset',
+  'aborted',
   'offline',
   'unreachable',
   'invalid_response',
@@ -296,6 +313,27 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     stage: 'validation',
     classification: 'expected_rejection',
     outcomes: ['not_applied'],
+    facts: {
+      stock_scope: { type: 'enum', values: STOCK_SCOPES },
+      stock_shortfall: { type: 'enum', values: STOCK_SHORTFALLS },
+    },
+  },
+  {
+    capture_point: 'fc.backend.order.create.addon_group_validation',
+    reason_code: 'order.addon_selection_required',
+    operation: 'order.create',
+    stage: 'validation',
+    classification: 'expected_rejection',
+    outcomes: ['not_applied'],
+    facts: NO_FACTS,
+  },
+  {
+    capture_point: 'fc.backend.order.create.addon_item_validation',
+    reason_code: 'order.addon_unavailable',
+    operation: 'order.create',
+    stage: 'validation',
+    classification: 'expected_rejection',
+    outcomes: ['not_applied'],
     facts: NO_FACTS,
   },
   {
@@ -305,7 +343,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     stage: 'validation',
     classification: 'expected_rejection',
     outcomes: ['not_applied'],
-    facts: NO_FACTS,
+    facts: { display_code: { type: 'enum', values: ORDER_CREATE_DISPLAY_CODES } },
   },
   {
     capture_point: 'fc.backend.order.create.persistence',
@@ -314,7 +352,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     stage: 'persistence',
     classification: 'unexpected_failure',
     outcomes: ['not_applied', 'partial', 'unknown'],
-    facts: NO_FACTS,
+    facts: { failure_class: { type: 'enum', values: PERSISTENCE_FAILURE_CLASSES } },
   },
   {
     capture_point: 'fc.backend.order.create.completion',
@@ -827,7 +865,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     stage: 'persistence',
     classification: 'unexpected_failure',
     outcomes: ['not_applied', 'partial', 'unknown'],
-    facts: NO_FACTS,
+    facts: { failure_class: { type: 'enum', values: PERSISTENCE_FAILURE_CLASSES } },
   },
   {
     capture_point: 'fc.backend.bill.generate.validation',
@@ -857,6 +895,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     facts: {
       failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
       connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
       kind: { type: 'enum', values: ['receipt'], required: true },
     },
   },
@@ -870,6 +909,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     facts: {
       failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
       connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
       kind: { type: 'enum', values: ['kot'], required: true },
     },
   },
@@ -883,6 +923,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     facts: {
       failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
       connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
       kind: { type: 'enum', values: ['receipt'], required: true },
     },
   },
@@ -896,6 +937,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     facts: {
       failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
       connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
       kind: { type: 'enum', values: ['kot'], required: true },
     },
   },
@@ -909,6 +951,7 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     facts: {
       failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
       connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
       kind: { type: 'enum', values: ['delivery_slip'], required: true },
     },
   },
@@ -922,7 +965,36 @@ export const OPERATION_FAILURE_REGISTRY: readonly OperationFailureDefinition[] =
     facts: {
       failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
       connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
       kind: { type: 'enum', values: ['delivery_slip'], required: true },
+    },
+  },
+  {
+    capture_point: 'fc.backend.printer.payment_ticket.queue',
+    reason_code: 'printer.queue_failed',
+    operation: 'printer.print',
+    stage: 'printing',
+    classification: 'unexpected_failure',
+    outcomes: ['not_applied', 'partial', 'unknown'],
+    facts: {
+      failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
+      connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
+      kind: { type: 'enum', values: ['payment_ticket'], required: true },
+    },
+  },
+  {
+    capture_point: 'fc.backend.printer.payment_ticket.timeout',
+    reason_code: 'printer.timeout',
+    operation: 'printer.print',
+    stage: 'printing',
+    classification: 'unexpected_failure',
+    outcomes: ['not_applied', 'partial', 'unknown'],
+    facts: {
+      failure_class: { type: 'enum', values: PRINT_FAILURE_CLASSES },
+      connection_type: { type: 'enum', values: PRINT_CONNECTION_TYPES },
+      ...PRINTER_DIAGNOSTIC_FACT_RULES,
+      kind: { type: 'enum', values: ['payment_ticket'], required: true },
     },
   },
   {
@@ -1395,6 +1467,133 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+const SQLITE_SCHEMA_MESSAGE_RE = /\b(?:no such (?:table|column)\b|has no column named\b)/i;
+
+function classifyPersistenceCode(rawCode: string): PersistenceFailureClass {
+  const code = rawCode.trim().toUpperCase();
+  if (
+    code === 'SQLITE_BUSY' ||
+    code.startsWith('SQLITE_BUSY_') ||
+    code === 'SQLITE_LOCKED' ||
+    code.startsWith('SQLITE_LOCKED_')
+  ) {
+    return 'busy_or_locked';
+  }
+  if (code === 'SQLITE_CONSTRAINT' || code.startsWith('SQLITE_CONSTRAINT_')) {
+    return 'constraint';
+  }
+  if (
+    code === 'SQLITE_READONLY' ||
+    code.startsWith('SQLITE_READONLY_') ||
+    code === 'EACCES' ||
+    code === 'EPERM' ||
+    code === 'EROFS'
+  ) {
+    return 'read_only';
+  }
+  if (code === 'SQLITE_FULL' || code.startsWith('SQLITE_FULL_') || code === 'ENOSPC') {
+    return 'disk_full';
+  }
+  if (
+    code === 'SQLITE_IOERR' ||
+    code.startsWith('SQLITE_IOERR_') ||
+    code === 'SQLITE_CORRUPT' ||
+    code.startsWith('SQLITE_CORRUPT_') ||
+    code === 'SQLITE_CANTOPEN' ||
+    code.startsWith('SQLITE_CANTOPEN_') ||
+    code === 'SQLITE_NOTADB' ||
+    code.startsWith('SQLITE_NOTADB_') ||
+    code === 'EIO'
+  ) {
+    return 'io_error';
+  }
+  if (
+    code === 'SQLITE_SCHEMA' ||
+    code.startsWith('SQLITE_SCHEMA_') ||
+    code === 'SQLITE_MISMATCH' ||
+    code.startsWith('SQLITE_MISMATCH_')
+  ) {
+    return 'schema_or_migration';
+  }
+  return 'unknown';
+}
+
+function classifyCodelessPersistenceMessage(rawMessage: string): PersistenceFailureClass {
+  const message = rawMessage.slice(0, 512);
+  if (SQLITE_SCHEMA_MESSAGE_RE.test(message)) {
+    return 'schema_or_migration';
+  }
+  if (/\bdatabase (?:table )?is locked\b/i.test(message)) {
+    return 'busy_or_locked';
+  }
+  if (/\b(?:unique|foreign key|not null|check|primary key) constraint failed\b/i.test(message)) {
+    return 'constraint';
+  }
+  if (/\battempt to write a readonly database\b/i.test(message)) {
+    return 'read_only';
+  }
+  if (/\bdatabase or disk is full\b/i.test(message)) {
+    return 'disk_full';
+  }
+  if (/\bdisk i\/o error\b/i.test(message)) {
+    return 'io_error';
+  }
+  return 'unknown';
+}
+
+/** Maps a SQLite/storage exception to a closed persistence failure_class without exposing raw error text. */
+export function classifySqlitePersistenceFailure(error: unknown): PersistenceFailureClass {
+  try {
+    const visited = new Set<unknown>();
+    let current: unknown = error;
+    let firstMessage: string | null = null;
+
+    for (let depth = 0; depth < 5 && current && typeof current === 'object'; depth += 1) {
+      if (visited.has(current)) break;
+      visited.add(current);
+      const record = current as {
+        code?: unknown;
+        errno?: unknown;
+        message?: unknown;
+        cause?: unknown;
+      };
+      const rawCode =
+        typeof record.code === 'string' && record.code.trim().length > 0
+          ? record.code
+          : typeof record.errno === 'string' && record.errno.trim().length > 0
+            ? record.errno
+            : null;
+      if (rawCode !== null) {
+        const classified = classifyPersistenceCode(rawCode);
+        if (
+          classified === 'unknown' &&
+          rawCode.trim().toUpperCase() === 'SQLITE_ERROR' &&
+          typeof record.message === 'string' &&
+          SQLITE_SCHEMA_MESSAGE_RE.test(record.message.slice(0, 512))
+        ) {
+          return 'schema_or_migration';
+        }
+        return classified;
+      }
+      if (
+        firstMessage === null &&
+        typeof record.message === 'string' &&
+        record.message.length > 0
+      ) {
+        firstMessage = record.message;
+      }
+      current = record.cause;
+    }
+
+    if (firstMessage !== null) {
+      return classifyCodelessPersistenceMessage(firstMessage);
+    }
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /** Produces only the registered tuple and approved bounded facts, or null for any mismatch. */

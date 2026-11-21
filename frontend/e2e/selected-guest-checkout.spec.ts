@@ -3,6 +3,7 @@ import {
   E2E_OPERATIONAL_PASSWORD,
   E2E_PASSWORD,
   getE2eToken,
+  loginWithPassword,
   readOrdersLayout,
   setOrdersLayout,
   setLanguage,
@@ -94,10 +95,7 @@ async function login(
   syncLanguage = true,
   password = E2E_PASSWORD,
 ): Promise<void> {
-  await page.goto(`${BASE}/auth/login`);
-  await page.locator('#email').fill(email);
-  await page.locator('#password').fill(password);
-  await page.locator('button[type="submit"]').click();
+  await loginWithPassword(page, email, password);
   await page.waitForURL('**/pos/**', { timeout: 20000 });
   if (syncLanguage) await setLanguage(page, 'en');
 }
@@ -845,6 +843,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     await login(page);
     // Checkout generates the bill, so a payment can be recorded against it.
     await openOrderCheckout(page, order);
+    await expect(page.getByRole('button', { name: 'Cash', exact: true })).toBeVisible();
     const [sourceBill] = await readOrderBills(request, order.id);
     const payment = await request.post(`${BASE}/api/bills/${sourceBill.id}/payments`, {
       headers: { ...managerHeaders, 'Idempotency-Key': `e2e-split-partial-${Date.now()}` },
@@ -914,6 +913,7 @@ test.describe('split-check availability and eligibility messaging', () => {
     const order = await createThreeGuestTable(request, 'Split fresh fractional projection');
     await login(page);
     await openOrderCheckout(page, order);
+    await expect(page.getByRole('button', { name: 'Cash', exact: true })).toBeVisible();
     const [sourceBill] = await readOrderBills(request, order.id);
     await page.route(`**/api/bills/${sourceBill.id}`, async (route) => {
       const response = await route.fetch();

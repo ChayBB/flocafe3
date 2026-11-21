@@ -45,7 +45,9 @@ function createStandaloneApi() {
   api.interceptors.response.use(
     (response) => response,
     (error) => {
-      if (error.response?.status === 401) {
+      const sentAuth = error.config?.headers?.Authorization;
+      const currentToken = localStorage.getItem('token');
+      if (error.response?.status === 401 && currentToken && sentAuth === `Bearer ${currentToken}`) {
         localStorage.removeItem('token');
         window.location.reload();
       }
@@ -63,12 +65,15 @@ export default function KdsStandalonePage() {
   // Standalone KDS server endpoint routes overriding dashboard defaults.
   const standaloneEndpoints = {
     login: '/api/auth/login',
+    pinUsers: '/api/auth/pin-users',
+    pinLogin: '/api/auth/pin-login',
     me: '/api/auth/me',
     logout: '/api/auth/logout',
     orders: '/api/kds/orders',
     itemStatus: '/api/kds/items/:itemId/status',
     stations: '/api/kds/stations',
     unprintedKots: '/api/kds/unprinted-kots',
+    view: '/api/kds/view',
   };
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const { kdsDefaultView } = useServerKdsInfo(origin);

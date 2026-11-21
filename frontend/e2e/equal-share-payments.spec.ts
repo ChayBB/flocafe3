@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 import {
   E2E_PASSWORD,
   getE2eToken,
+  loginWithPassword,
   readOrdersLayout,
   setOrdersLayout,
   setLanguage,
@@ -174,10 +175,7 @@ async function readOrder(request: APIRequestContext, orderId: number) {
 }
 
 async function login(page: Page): Promise<void> {
-  await page.goto(`${BASE}/auth/login`);
-  await page.locator('#email').fill('manager@flo.local');
-  await page.locator('#password').fill(E2E_PASSWORD);
-  await page.locator('button[type="submit"]').click();
+  await loginWithPassword(page, 'manager@flo.local');
   await page.waitForURL('**/pos/**', { timeout: 20000 });
   await setLanguage(page, 'en');
 }

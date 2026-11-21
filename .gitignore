@@ -39,6 +39,7 @@ build/flo.provisionprofile
 
 .next/
 brain/
+.xerj/
 
 # Private code-review reports and remediation notes — never commit
 code-review/
@@ -63,3 +64,4 @@ server-app-bundle.zip
 /shared-run*.log
 /shared-run*.err
 *.bak-*
+playwright-report/

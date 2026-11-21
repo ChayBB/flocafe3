@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
+import { isAllowedPrivateIp } from '../middleware/security';
 import {
   ACTIVE_RELEASED_KDS_ORDER_IDS_SQL,
   completeSettledReleasedOrderIfServed,
@@ -98,6 +100,33 @@ router.get('/speech', requireKdsEnabled, handleKdsSpeechEngine);
 router.post('/speech', requireKdsEnabled, handleKdsSpeech);
 router.post('/unprinted-kots/:id/reprint', requireKdsEnabled, handleKdsReprintKot);
 router.delete('/unprinted-kots/:id', requireKdsEnabled, handleKdsDismissKot);
+const kdsViewWriteRateLimit = expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
+});
+
+router.put('/view', kdsViewWriteRateLimit, requireKdsEnabled, (req: Request, res: Response) => {
+  try {
+    const view = req.body?.kds_default_view ?? req.body?.view;
+    if (!['tabs', 'kanban'].includes(view)) {
+      return res.status(400).json({ error: 'kds_default_view must be "tabs" or "kanban"' });
+    }
+    const db = getDatabase();
+    db.prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'kds_default_view',
+      view,
+      now(),
+    );
+    res.json({ kds_default_view: view });
+  } catch (error: any) {
+    res.locals.postHogError = error;
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 router.get('/orders', requireKdsEnabled, (req: Request, res: Response) => {
   try {

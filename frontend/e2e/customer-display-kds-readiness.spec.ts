@@ -1,16 +1,19 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import * as path from 'node:path';
 import { E2E_BASE_URL as BASE, E2E_KDS_BASE_URL as KDS_BASE } from './helpers/urls';
 import { E2E_PASSWORD, getE2eToken, setLanguage } from './helpers/test-auth';
 import { captureSettings, restoreSettings, writeSetting } from './helpers/kitchen-fixture';
 
 const CUSTOMER_DISPLAY_DEFAULTS = {
   statuses: ['pending', 'preparing', 'ready'],
+  order_types: ['takeaway'],
   refresh_seconds: 3,
   show_updated: true,
 };
 
 const FAST_POLL_CONFIG = {
   statuses: ['pending', 'preparing', 'ready'],
+  order_types: ['takeaway'],
   refresh_seconds: 2,
   show_updated: true,
 };
@@ -548,6 +551,252 @@ test.describe('Customer display KDS readiness across postpaid and prepaid takeaw
       await staffDisplayPage.close().catch(() => {});
       await pairedContext.close().catch(() => {});
       await kdsContext.close().catch(() => {});
+    }
+  });
+
+  test('filters customer display by order_types and advances paid takeaway order via KDS item completion without POS Orders prep buttons', async ({
+    page,
+    browser,
+    request,
+  }) => {
+    await writeSetting(request, 'billing_type', 'prepaid');
+    await writeSetting(request, 'kds_enabled', 'true');
+    await writeSetting(request, 'require_kitchen_delivered_before_settlement', 'false');
+
+    const { espressoId } = catalog;
+    await loginAsOwner(page);
+
+    // Verify Customer Display settings UI exposes Order types shown checkboxes and enforces at least one
+    await page.goto(`${BASE}/settings?tab=kds`);
+    await expect(page.getByRole('heading', { name: 'Customer display', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    const takeawayCheckbox = page.getByRole('checkbox', { name: 'Takeaway / Pickup' });
+    const dineInCheckbox = page.getByRole('checkbox', { name: 'Dine-in' });
+    const onlineCheckbox = page.getByRole('checkbox', { name: 'Online' });
+    const deliveryCheckbox = page.getByRole('checkbox', { name: 'Delivery' });
+    await expect(takeawayCheckbox).toBeChecked();
+    await expect(dineInCheckbox).not.toBeChecked();
+    await expect(onlineCheckbox).not.toBeChecked();
+    await expect(deliveryCheckbox).not.toBeChecked();
+
+    // Adversarial UI check: attempting to uncheck the last checked order type is blocked
+    await takeawayCheckbox.click();
+    await expect(takeawayCheckbox).toBeChecked();
+    await expect(page.getByText('Select at least one order type')).toBeVisible();
+
+    const evidenceDir = process.env.FLO_E2E_EVIDENCE_DIR;
+    if (evidenceDir) {
+      await page.screenshot({
+        path: path.join(evidenceDir, '01-settings-customer-display-order-types.png'),
+        fullPage: true,
+      });
+    }
+
+    const staffDisplayPage = await page.context().newPage();
+    await staffDisplayPage.setViewportSize({ width: 1440, height: 900 });
+    const pairedContext = await browser.newContext();
+    const pairedDisplayPage = await pairedContext.newPage();
+    await pairedDisplayPage.setViewportSize({ width: 1440, height: 900 });
+
+    try {
+      const tokenRes = await request.post(`${BASE}/api/settings/customer-display/tokens`, {
+        headers: ownerHeaders(),
+        data: { label: 'E2E KDS Ready Pickup TV' },
+      });
+      expect(tokenRes.status()).toBe(201);
+      const { token } = (await tokenRes.json()) as { token: string };
+
+      await staffDisplayPage.goto(`${BASE}/customer-display/`);
+      await pairedDisplayPage.goto(`${BASE}/customer-display/#token=${encodeURIComponent(token)}`);
+
+      for (const board of [staffDisplayPage, pairedDisplayPage]) {
+        await expect(board.getByTestId('customer-display-preparing-scroll')).toBeVisible({
+          timeout: 15_000,
+        });
+        await expect(board.getByTestId('customer-display-ready-scroll')).toBeVisible({
+          timeout: 15_000,
+        });
+      }
+
+      // Create an active delivery order and an active dine_in order; neither should appear under default takeaway-only filter
+      const deliveryOrderRes = await request.post(`${BASE}/api/orders`, {
+        headers: ownerHeaders(),
+        data: {
+          type: 'delivery',
+          delivery_address: '123 Main St',
+          items: [{ product_id: espressoId, quantity: 1 }],
+        },
+      });
+      expect(deliveryOrderRes.status()).toBe(201);
+      const deliveryOrder = (
+        (await deliveryOrderRes.json()) as { order: { id: number; order_number: string } }
+      ).order;
+      cleanupOrderIds.push(deliveryOrder.id);
+
+      const dineInOrderRes = await request.post(`${BASE}/api/orders`, {
+        headers: ownerHeaders(),
+        data: {
+          type: 'dine_in',
+          items: [{ product_id: espressoId, quantity: 1 }],
+        },
+      });
+      expect(dineInOrderRes.status()).toBe(201);
+      const dineInOrder = (
+        (await dineInOrderRes.json()) as { order: { id: number; order_number: string } }
+      ).order;
+      cleanupOrderIds.push(dineInOrder.id);
+
+      // Create and pay a Takeaway order
+      const takeawayOrderRes = await request.post(`${BASE}/api/orders`, {
+        headers: ownerHeaders(),
+        data: {
+          type: 'takeaway',
+          items: [{ product_id: espressoId, quantity: 1 }],
+        },
+      });
+      expect(takeawayOrderRes.status()).toBe(201);
+      const takeawayOrder = (
+        (await takeawayOrderRes.json()) as {
+          order: { id: number; order_number: string; items: Array<{ id: number }> };
+        }
+      ).order;
+      cleanupOrderIds.push(takeawayOrder.id);
+      const takeawayItemId = takeawayOrder.items[0].id;
+
+      const genBillRes = await request.post(`${BASE}/api/bills/generate`, {
+        headers: ownerHeaders(),
+        data: { order_id: takeawayOrder.id },
+      });
+      expect(genBillRes.ok()).toBeTruthy();
+      const bill = (
+        (await genBillRes.json()) as { bill: { id: number; bill_number: string; total: number } }
+      ).bill;
+
+      const payRes = await request.post(`${BASE}/api/bills/${bill.id}/payment`, {
+        headers: ownerHeaders(),
+        data: { amount: bill.total, method: 'cash' },
+      });
+      expect(payRes.ok()).toBeTruthy();
+      const displayNumber = bill.bill_number || takeawayOrder.order_number;
+
+      // Paid takeaway order appears in Preparing while KDS is enabled; delivery & dine_in stay excluded
+      for (const board of [staffDisplayPage, pairedDisplayPage]) {
+        await expect(board.getByTestId('customer-display-preparing-scroll')).toContainText(
+          displayNumber,
+          { timeout: 15_000 },
+        );
+        await expect(board.getByTestId('customer-display-preparing-scroll')).not.toContainText(
+          deliveryOrder.order_number,
+        );
+        await expect(board.getByTestId('customer-display-preparing-scroll')).not.toContainText(
+          dineInOrder.order_number,
+        );
+      }
+
+      // Enable Dine-in in Settings -> Customer Display and Save; verify dine_in order appears on both boards without reload
+      await dineInCheckbox.check();
+      const saveConfigPromise = page.waitForResponse(
+        (res) =>
+          res.request().method() === 'PUT' &&
+          new URL(res.url()).pathname === '/api/settings/customer-display',
+      );
+      const customerDisplayCard = page
+        .locator('div.bg-card')
+        .filter({ has: page.getByRole('heading', { name: 'Customer display', exact: true }) })
+        .first();
+      await customerDisplayCard.getByRole('button', { name: 'Save', exact: true }).click();
+      expect((await saveConfigPromise).status()).toBe(200);
+
+      for (const board of [staffDisplayPage, pairedDisplayPage]) {
+        await expect(board.getByTestId('customer-display-preparing-scroll')).toContainText(
+          dineInOrder.order_number,
+          { timeout: 15_000 },
+        );
+        await expect(board.getByTestId('customer-display-preparing-scroll')).toContainText(
+          displayNumber,
+        );
+        await expect(board.getByTestId('customer-display-preparing-scroll')).not.toContainText(
+          deliveryOrder.order_number,
+        );
+      }
+
+      if (evidenceDir) {
+        await pairedDisplayPage.screenshot({
+          path: path.join(evidenceDir, '02-customer-display-dine-in-enabled.png'),
+        });
+      }
+
+      // Restore Takeaway-only filter via Settings UI and verify dine_in order leaves the boards without reload
+      await dineInCheckbox.uncheck();
+      const restoreConfigPromise = page.waitForResponse(
+        (res) =>
+          res.request().method() === 'PUT' &&
+          new URL(res.url()).pathname === '/api/settings/customer-display',
+      );
+      await customerDisplayCard.getByRole('button', { name: 'Save', exact: true }).click();
+      expect((await restoreConfigPromise).status()).toBe(200);
+
+      for (const board of [staffDisplayPage, pairedDisplayPage]) {
+        await expect(board.getByTestId('customer-display-preparing-scroll')).not.toContainText(
+          dineInOrder.order_number,
+          { timeout: 15_000 },
+        );
+        await expect(board.getByTestId('customer-display-preparing-scroll')).toContainText(
+          displayNumber,
+        );
+      }
+
+      // Open POS /orders page and verify Mark Ready / Picked Up controls are NOT present on POS Orders
+      await page.goto(`${BASE}/orders`);
+      await expect(page.getByText(`#${takeawayOrder.order_number}`).first()).toBeVisible({
+        timeout: 15_000,
+      });
+      await page.getByText(`#${takeawayOrder.order_number}`).first().click();
+      await expect(page.getByTestId(`order-mark-ready-${takeawayOrder.id}`)).toHaveCount(0);
+      await expect(page.getByTestId(`order-detail-mark-ready-${takeawayOrder.id}`)).toHaveCount(0);
+      await expect(page.getByTestId(`order-mark-picked-up-${takeawayOrder.id}`)).toHaveCount(0);
+      await expect(page.getByTestId(`order-detail-mark-picked-up-${takeawayOrder.id}`)).toHaveCount(
+        0,
+      );
+
+      // Advance KDS item to ready -> moves order to Ready for pickup on both boards
+      const readyRes = await request.patch(`${BASE}/api/order-items/${takeawayItemId}/status`, {
+        headers: ownerHeaders(),
+        data: { status: 'ready' },
+      });
+      expect(readyRes.status()).toBe(200);
+
+      for (const board of [staffDisplayPage, pairedDisplayPage]) {
+        await expect(board.getByTestId('customer-display-ready-scroll')).toContainText(
+          displayNumber,
+          { timeout: 15_000 },
+        );
+        await expect(board.getByTestId('customer-display-preparing-scroll')).not.toContainText(
+          displayNumber,
+        );
+      }
+
+      // Advance KDS item to served -> clears order from both Customer Display boards
+      const servedRes = await request.patch(`${BASE}/api/order-items/${takeawayItemId}/status`, {
+        headers: ownerHeaders(),
+        data: { status: 'served' },
+      });
+      expect(servedRes.status()).toBe(200);
+
+      for (const board of [staffDisplayPage, pairedDisplayPage]) {
+        await expect(board.getByTestId('customer-display-preparing-scroll')).not.toContainText(
+          displayNumber,
+          { timeout: 15_000 },
+        );
+        await expect(board.getByTestId('customer-display-ready-scroll')).not.toContainText(
+          displayNumber,
+          { timeout: 15_000 },
+        );
+      }
+    } finally {
+      await staffDisplayPage.close().catch(() => {});
+      await pairedContext.close().catch(() => {});
     }
   });
 });

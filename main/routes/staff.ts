@@ -2,7 +2,7 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
-import { getDatabase, now } from '../db';
+import { getDatabase, nextTokensValidAfterTimestamp, now } from '../db';
 import { validatePassword, authRateLimit, invalidateUserAuthCache } from '../middleware/security';
 import { PASSWORD_POLICY_MESSAGE } from '../../shared/password-policy';
 import { hasPermission, requireAnyPermission, requirePermission } from '../services/authorization';
@@ -13,7 +13,7 @@ import {
 import { cloudSync } from '../services/cloud-sync';
 import { syncPostHogIdentity } from '../services/posthog';
 import { serializeOperationFailure } from '../lib/operation-failure';
-import { isValidEmail } from './auth';
+import { isValidEmail, signFreshSessionToken } from './auth';
 import { ROLE_ACCESS, ROLE_KEYS, OPERATIONAL_ROLES, hasRole } from '../../shared/role-permissions';
 import { GUEST_USER_ID } from '../lib/guest-order';
 
@@ -472,6 +472,16 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
         .json({ error: 'This account cannot modify privileged staff accounts' });
     }
 
+    const resettingCredentials =
+      (password !== undefined && password !== null && password !== '') || pin !== undefined;
+    if (resettingCredentials && !hasPermission(requesterId, 'staff.credentials.reset')) {
+      return res.status(403).json({
+        error: 'Insufficient permissions',
+        code: 'permission_denied',
+        permission: 'staff.credentials.reset',
+      });
+    }
+
     if (role !== undefined) {
       if (!VALID_ROLES.includes(role)) {
         captureStaffValidation('fc.backend.staff.update.validation', 'role_invalid');
@@ -572,7 +582,9 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
 
     // Revoke outstanding sessions only when credentials actually change.
     const credentialsChanged = passwordChanged || pinChanged || staffCodeChanged;
-    const tokensValidAfter = credentialsChanged ? now() : member.tokens_valid_after;
+    const tokensValidAfter = credentialsChanged
+      ? nextTokensValidAfterTimestamp()
+      : member.tokens_valid_after;
 
     const demotesActiveOwner =
       member.role === 'owner' && member.is_active === 1 && targetRole !== 'owner';
@@ -646,9 +658,14 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
 
     const updated = db
       .prepare(`SELECT ${STAFF_SELECT_FIELDS} FROM users WHERE id = ?`)
-      .get(req.params.id);
+      .get(req.params.id) as any;
 
-    res.json({ staff: updated });
+    const freshSelfToken =
+      credentialsChanged && updated && String(requesterId) === String(req.params.id)
+        ? signFreshSessionToken(updated, ((req as any).user as Record<string, unknown>) || {})
+        : undefined;
+
+    res.json({ staff: updated, ...(freshSelfToken ? { token: freshSelfToken } : {}) });
   } catch (error: any) {
     res.locals.postHogError = error;
     if (error instanceof AdministrationUnreachableError) {
@@ -676,6 +693,7 @@ router.post('/:id/deactivate', requireStaffWrite, (req: Request, res: Response) 
     }
 
     const changedAt = now();
+    const tokensValidAfter = nextTokensValidAfterTimestamp();
     assertAdministrationReachable(db, {
       kind: 'user_state',
       userId: String(req.params.id),
@@ -690,7 +708,7 @@ router.post('/:id/deactivate', requireStaffWrite, (req: Request, res: Response) 
         WHERE id = ? AND is_active = 1
           AND (role != 'owner' OR (SELECT COUNT(*) FROM users WHERE role = 'owner' AND is_active = 1) > 1)
       `)
-        .run(changedAt, changedAt, req.params.id);
+        .run(tokensValidAfter, changedAt, req.params.id);
       if (updateResult.changes > 0 && member.role === 'owner') {
         ownerEmailSynced = syncRegisteredOwnerEmail(db);
       }

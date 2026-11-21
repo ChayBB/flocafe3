@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import expressRateLimit from 'express-rate-limit';
+import { isAllowedPrivateIp } from '../middleware/security';
 import { randomUUID } from 'crypto';
 import { getDatabase, now, getSettingValue } from '../db';
 import { requirePermission } from '../services/authorization';
@@ -38,12 +39,21 @@ const customerReadRateLimit = expressRateLimit({
   limit: 120,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
 });
+const configuredCustomerWriteLimit = Number.parseInt(
+  process.env.FLO_CUSTOMER_WRITE_RATE_LIMIT_MAX || '',
+  10,
+);
 const customerWriteRateLimit = expressRateLimit({
   windowMs: 60 * 1000,
-  limit: 60,
+  limit:
+    Number.isFinite(configuredCustomerWriteLimit) && configuredCustomerWriteLimit > 0
+      ? configuredCustomerWriteLimit
+      : 60,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
 });
 
 function captureCustomerValidation(

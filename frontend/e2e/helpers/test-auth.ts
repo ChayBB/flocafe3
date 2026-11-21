@@ -12,6 +12,20 @@ function base64Url(data: string | Buffer): string {
   return Buffer.from(data).toString('base64url');
 }
 
+let lastE2eWallMs = 0;
+let lastE2eLogicalMs = 0;
+
+function nextE2eTokenIatSeconds(): number {
+  const wallMs = Date.now() + 5;
+  let nextMs = wallMs < lastE2eWallMs - 1000 ? wallMs : Math.max(wallMs, lastE2eLogicalMs + 1);
+  if (nextMs % 1000 === 0) {
+    nextMs += 1;
+  }
+  lastE2eWallMs = wallMs;
+  lastE2eLogicalMs = nextMs;
+  return nextMs / 1000;
+}
+
 /**
  * Generates an authoritative test JWT for E2E setup and teardown tasks
  * without requiring UI interaction or hardcoded network login requests.
@@ -21,14 +35,15 @@ export function getE2eToken(
   email = 'owner@flo.local',
   role = 'owner',
 ): string {
+  const iat = nextE2eTokenIatSeconds();
   const header = base64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = base64Url(
     JSON.stringify({
       userId,
       email,
       role,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 3600,
+      iat,
+      exp: Math.floor(iat) + 3600,
     }),
   );
   const signature = base64Url(
@@ -132,4 +147,61 @@ export async function setLanguage(page: Page, value: string, base = E2E_BASE_URL
       } catch {}
     }, value)
     .catch(() => {});
+}
+
+/**
+ * Signs in via email/password even when active PIN users cause /auth/login to
+ * default to Quick Sign-In mode and hide the password form.
+ */
+export async function loginWithPassword(
+  page: Page,
+  email: string,
+  password = E2E_PASSWORD,
+  base = E2E_BASE_URL,
+): Promise<void> {
+  const pinUsersFetched = page
+    .waitForResponse(
+      (res) => {
+        try {
+          return new URL(res.url()).pathname === '/api/auth/pin-users';
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 15_000 },
+    )
+    .catch(() => null);
+
+  await page.goto(`${base}/auth/login`);
+  const pinRes = await pinUsersFetched;
+  const hasPinUsers = pinRes?.ok()
+    ? ((await pinRes.json().catch(() => null))?.users?.length ?? 0) > 0
+    : false;
+
+  const passwordTab = page.getByTestId('signin-mode-password');
+  if (hasPinUsers || (await passwordTab.isVisible().catch(() => false))) {
+    await passwordTab.click();
+  }
+
+  const emailInput = page.locator('#email');
+  if (
+    !(await emailInput.isVisible().catch(() => false)) &&
+    (await passwordTab.isVisible().catch(() => false))
+  ) {
+    await passwordTab.click();
+  }
+  await expect(emailInput).toBeVisible({ timeout: 10_000 });
+  try {
+    await emailInput.fill(email, { timeout: 5_000 });
+  } catch (err) {
+    if (await passwordTab.isVisible().catch(() => false)) {
+      await passwordTab.click();
+      await emailInput.fill(email);
+    } else {
+      throw err;
+    }
+  }
+  await page.locator('#password').fill(password);
+  await page.locator('button[type="submit"]').click();
+  await page.waitForURL((url) => !url.pathname.includes('/auth/login'), { timeout: 20_000 });
 }

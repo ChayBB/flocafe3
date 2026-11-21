@@ -22,9 +22,17 @@ import {
   isServerAppEnabled,
   isGuestQrOrderingEnabled,
   isServerBillPrintingEnabled,
+  recordAuthAudit,
   revokeDatabaseMaintenanceHandoff,
 } from './db';
 import { getJWTSecret } from './security/jwt-secret';
+import { asyncHandler } from './middleware/async-handler';
+import {
+  authenticatePinLogin,
+  handlePasswordChange,
+  handlePinChange,
+  tokenExpSeconds,
+} from './routes/auth';
 import {
   authRateLimit,
   loginAuthRateLimit,
@@ -36,6 +44,7 @@ import {
   corsOptions,
   isTokenRevoked,
   isTokenStale,
+  nextTokenIatSeconds,
   rateLimit,
   revokeToken,
 } from './middleware/security';
@@ -509,12 +518,14 @@ export function startServerApp(): Promise<void> {
             return res.status(409).json({ error: 'regional_not_configured' });
           throw error;
         }
+        const iat = nextTokenIatSeconds();
         const token = jwt.sign(
           {
             userId: user.id,
             email: user.email,
             role: user.role,
             jti: randomUUID(),
+            iat,
             exp: nextDailyResetEpochSeconds(new Date(), sessionTimeZone),
           },
           getJWTSecret(),
@@ -528,6 +539,7 @@ export function startServerApp(): Promise<void> {
             name: user.name,
             email: user.email,
             role: user.role,
+            has_pin: Boolean(user.pin_hash),
             permission_ids: [...(resolveEffectivePermissions(user.id)?.permissionIds ?? [])],
             authorization_revision: effectivePermissionRevision(user.id),
           },
@@ -538,6 +550,143 @@ export function startServerApp(): Promise<void> {
       }
     });
 
+    app.get('/api/auth/pin-users', authRateLimit({ max: 600 }), (_req: Request, res: Response) => {
+      if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });
+      try {
+        const db = getDatabase();
+        const rows = db
+          .prepare(
+            `SELECT id, name, role
+             FROM users
+             WHERE is_active = 1 AND pin_hash IS NOT NULL
+             ORDER BY CASE role
+               WHEN 'owner' THEN 1
+               WHEN 'manager' THEN 2
+               WHEN 'cashier' THEN 3
+               WHEN 'server' THEN 4
+               WHEN 'chef' THEN 5
+               ELSE 6
+             END, name COLLATE NOCASE ASC`,
+          )
+          .all() as Array<{ id: string; name: string; role: string }>;
+
+        const eligible = rows.filter((row) => hasPermission(row.id, 'server-app.use'));
+
+        res.json({
+          users: eligible.map((row) => ({
+            id: String(row.id),
+            name: String(row.name),
+            role: String(row.role),
+          })),
+        });
+      } catch (error: unknown) {
+        console.error('[Server App] PIN users error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    });
+
+    app.post(
+      '/api/auth/pin-login',
+      authRateLimit({
+        max: 600,
+        skipSuccessfulRequests: true,
+        onRateLimited: (req: Request) => {
+          const ip = req.ip || req.socket.remoteAddress || 'unknown';
+          const rawUserId = req.body?.user_id;
+          const userId =
+            typeof rawUserId === 'string' && rawUserId.trim() ? rawUserId.trim() : null;
+          recordAuthAudit(getDatabase(), {
+            userId,
+            eventType: 'pin_login',
+            outcome: 'rate_limited',
+            ipAddress: ip,
+            details: { reason: 'endpoint_rate_limited', service: 'server-app' },
+          });
+        },
+      }),
+      async (req: Request, res: Response) => {
+        if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });
+        try {
+          const ip = req.ip || req.socket.remoteAddress || 'unknown';
+          const { user_id, pin, remember_me, rememberMe } = req.body || {};
+          const userId = typeof user_id === 'string' ? user_id.trim() : '';
+          const rawPin = typeof pin === 'string' || typeof pin === 'number' ? String(pin) : '';
+
+          const db = getDatabase();
+          if (!userId || !rawPin) {
+            recordAuthAudit(db, {
+              userId: userId || null,
+              eventType: 'pin_login',
+              outcome: 'failure',
+              ipAddress: ip,
+              details: {
+                service: 'server-app',
+                reason:
+                  !userId && !rawPin
+                    ? 'missing_credentials'
+                    : !userId
+                      ? 'missing_user_id'
+                      : 'missing_pin',
+              },
+            });
+            return res.status(400).json({ error: 'user_id and pin are required' });
+          }
+
+          const remember = !!(remember_me ?? rememberMe);
+          const result = await authenticatePinLogin({
+            db,
+            userId,
+            rawPin,
+            ip,
+            remember,
+            service: 'server-app',
+            authorizeUser: (currentDb, currentUser) => {
+              if (!hasPermission(currentUser.id, 'server-app.use')) {
+                recordAuthAudit(currentDb, {
+                  userId: currentUser.id,
+                  eventType: 'pin_login',
+                  outcome: 'failure',
+                  ipAddress: ip,
+                  details: { service: 'server-app', reason: 'permission_denied' },
+                });
+                return {
+                  ok: false,
+                  status: 403,
+                  body: {
+                    error: 'Access denied. Only server, manager, or owner accounts allowed.',
+                    code: 'permission_denied',
+                  },
+                };
+              }
+              return { ok: true, extra: undefined };
+            },
+          });
+
+          if (result.status !== 200) {
+            return res.status(result.status).json(result.body);
+          }
+
+          const { token, user } = result;
+
+          res.json({
+            access_token: token,
+            user: {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              has_pin: Boolean(user.pin_hash),
+              permission_ids: [...(resolveEffectivePermissions(user.id)?.permissionIds ?? [])],
+              authorization_revision: effectivePermissionRevision(user.id),
+            },
+          });
+        } catch (error: unknown) {
+          console.error('[Server App] PIN login error:', error);
+          res.status(500).json({ error: 'Internal server error' });
+        }
+      },
+    );
+
     app.get(
       '/api/auth/me',
       serverAppApiRateLimit,
@@ -545,17 +694,37 @@ export function startServerApp(): Promise<void> {
       (req: Request, res: Response) => {
         const user = (req as any).user as ServerAppUser;
         const row = getDatabase()
-          .prepare('SELECT id, name, email, role FROM users WHERE id = ? AND is_active = 1')
+          .prepare(
+            'SELECT id, name, email, role, pin_hash FROM users WHERE id = ? AND is_active = 1',
+          )
           .get(user.userId) as any;
         if (!row) return res.status(401).json({ error: 'Invalid token' });
         res.json({
           user: {
-            ...row,
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            role: row.role,
+            has_pin: Boolean(row.pin_hash),
             permission_ids: [...(resolveEffectivePermissions(row.id)?.permissionIds ?? [])],
             authorization_revision: effectivePermissionRevision(row.id),
           },
         });
       },
+    );
+
+    app.post(
+      '/api/auth/password/change',
+      authRateLimit(),
+      requireServerAppAuth,
+      asyncHandler(handlePasswordChange),
+    );
+
+    app.post(
+      '/api/auth/pin/change',
+      authRateLimit(),
+      requireServerAppAuth,
+      asyncHandler(handlePinChange),
     );
 
     app.post(

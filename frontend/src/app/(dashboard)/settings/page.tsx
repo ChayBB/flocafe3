@@ -1,15 +1,21 @@
 'use client';
 
 import { KdsStationAccess } from '@/components/settings/KdsStationAccess';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useId, useLayoutEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
+import {
+  ACTIONABLE_CLOUD_DELETION_STATUSES,
+  notifyCloudAccountStatusChanged,
+  useCloudAttentionStore,
+} from '@/store/cloud-attention';
 import {
   usePosSettingsStore,
   normalizeAutoLockMinutesValue,
   type BillTemplate,
 } from '@/store/pos-settings';
+import { clearKdsThemeOverride } from '@/lib/i18n/server-language';
 import { useThemeMode, isThemeVariant, type ThemeMode, type ThemeVariant } from '@/store/theme';
 
 const THEME_VARIANTS: readonly ThemeVariant[] = ['1', '2', '3'];
@@ -52,6 +58,8 @@ import {
   SunMoon,
   ArrowUpDown,
   LayoutPanelTop,
+  Search,
+  X,
 } from 'lucide-react';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -116,8 +124,20 @@ import { Ltr } from '@/components/layout/Ltr';
 import { useFormatDate } from '@/hooks/useFormatDate';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { tenantCan } from '@/lib/permissions';
+import { searchSettingsCatalog, type SettingsSearchResult } from '@/lib/settings-search';
 
-const CLOUD_ACCOUNT_STATUS_CHANGED_EVENT = 'flo:cloud-account-status-changed';
+const HIGHLIGHT_CLASSES = ['ring-2', 'ring-brand', 'ring-offset-2', 'transition-all'] as const;
+
+const INITIAL_CLOUD_STATUS = {
+  cloud_registration_status: 'unregistered',
+  cloud_services_disabled_by_user: false,
+  cloud_connected: false,
+  cloud_relay_mode: 'disconnected',
+  cloud_last_heartbeat: null as string | null,
+  cloud_last_error: null as string | null,
+  cloud_deletion_status: '',
+};
+
 const GOOGLE_DRIVE_JOB_POLL_INTERVAL_MS = 500;
 const GOOGLE_DRIVE_JOB_STATUS_RETRY_WINDOW_MS = 30_000;
 // Must match RESTORE_CONFIRMATION in main/routes/database.ts.
@@ -147,11 +167,6 @@ async function fetchGoogleDriveJob(jobId: string) {
       await new Promise((resolve) => window.setTimeout(resolve, delay));
     }
   }
-}
-
-function notifyCloudAccountStatusChanged(): void {
-  if (typeof window !== 'undefined')
-    window.dispatchEvent(new Event(CLOUD_ACCOUNT_STATUS_CHANGED_EVENT));
 }
 
 const CLASSIC_PREVIEW = `   STORE NAME
@@ -248,36 +263,46 @@ function SettingsNavItem({
   attention?: boolean;
 }) {
   const isActive = active === value;
+  const attentionDescId = useId();
   return (
-    <button
-      onClick={() => onClick(value)}
-      className={[
-        'flex items-center w-full min-w-0 text-start text-sm rounded-md py-1.5 transition-colors',
-        indent ? 'ps-5 pe-2 border-s-2 ms-1 text-xs md:ms-0' : 'px-3',
-        isActive
-          ? 'bg-brand/10 text-brand font-semibold' + (indent ? ' border-brand' : '')
-          : 'text-muted-foreground hover:bg-muted hover:text-foreground' +
-            (indent ? ' border-transparent' : ''),
-      ].join(' ')}
-    >
-      <span className="min-w-0 truncate">{label}</span>
+    <>
+      <button
+        onClick={() => onClick(value)}
+        aria-describedby={attention ? attentionDescId : undefined}
+        className={[
+          'flex items-center shrink-0 md:shrink w-auto md:w-full min-w-0 whitespace-nowrap md:whitespace-normal text-start text-sm rounded-md py-1.5 transition-colors',
+          indent ? 'ps-5 pe-2 border-s-2 ms-1 text-xs md:ms-0' : 'px-3',
+          isActive
+            ? 'bg-brand/10 text-brand font-semibold' + (indent ? ' border-brand' : '')
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground' +
+              (indent ? ' border-transparent' : ''),
+        ].join(' ')}
+      >
+        <span className="min-w-0 truncate">{label}</span>
+        {attention && (
+          <span
+            data-testid={`settings-nav-attention-${value}`}
+            aria-hidden="true"
+            className="ms-1.5 md:ms-auto shrink-0 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+          >
+            1
+          </span>
+        )}
+      </button>
       {attention && (
-        <span
-          className="ms-auto rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white"
-          aria-label="Action required"
-        >
-          1
+        <span id={attentionDescId} className="sr-only">
+          Action required
         </span>
       )}
-    </button>
+    </>
   );
 }
 
-function KdsDefaultViewCard() {
+function KdsDefaultViewCard({ canManage = true }: { canManage?: boolean } = {}) {
   const t = useTranslations('settings');
   const tCommon = useTranslations('common');
-  const [view, setView] = useState<'tabs' | 'kanban'>('tabs');
-  const [savedView, setSavedView] = useState<'tabs' | 'kanban'>('tabs');
+  const [view, setView] = useState<'tabs' | 'kanban'>('kanban');
+  const [savedView, setSavedView] = useState<'tabs' | 'kanban'>('kanban');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -286,7 +311,7 @@ function KdsDefaultViewCard() {
       .get('/settings/kds', { signal: controller.signal })
       .then((res) => {
         if (controller.signal.aborted) return;
-        const v = res.data?.kds_default_view === 'kanban' ? 'kanban' : 'tabs';
+        const v = res.data?.kds_default_view === 'tabs' ? 'tabs' : 'kanban';
         setView(v);
         setSavedView(v);
       })
@@ -297,12 +322,19 @@ function KdsDefaultViewCard() {
   const dirty = view !== savedView;
 
   async function save() {
+    if (!canManage) return;
     setSaving(true);
     try {
       const { data } = await api.put('/settings/kds', { kds_default_view: view });
-      const next = data?.kds_default_view === 'kanban' ? 'kanban' : 'tabs';
+      const next = data?.kds_default_view === 'tabs' ? 'tabs' : 'kanban';
       setSavedView(next);
       setView(next);
+      try {
+        window.localStorage.setItem('kds_view_override', next);
+        window.dispatchEvent(new Event('kds_view_override_changed'));
+      } catch {
+        // Ignore localStorage failures in restricted browser contexts.
+      }
       toast.success(t('kdsViewSaved'));
     } catch {
       toast.error(t('kdsViewSaveFailed'));
@@ -312,7 +344,10 @@ function KdsDefaultViewCard() {
   }
 
   return (
-    <div className="bg-card rounded-xl border border-border p-6">
+    <div
+      data-setting-section="kds-default-view"
+      className="bg-card rounded-xl border border-border p-6"
+    >
       <div className="flex items-center gap-2 mb-4">
         <Monitor size={20} className="text-muted-foreground" />
         <h2 className="font-semibold text-foreground">{t('kdsDefaultView')}</h2>
@@ -322,30 +357,50 @@ function KdsDefaultViewCard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <button
           type="button"
-          onClick={() => setView('tabs')}
-          className={`text-start rounded-lg border-2 px-4 py-3 transition ${
+          disabled={!canManage}
+          onClick={() => {
+            if (!canManage) return;
+            setView('tabs');
+          }}
+          className={`text-start rounded-lg border-2 px-4 py-3 transition disabled:opacity-60 disabled:cursor-not-allowed ${
             view === 'tabs'
               ? 'border-brand bg-brand/5'
               : 'border-border hover:border-gray-300 dark:border-border'
           }`}
         >
           <div className="flex items-center gap-2 mb-1">
-            <input type="radio" readOnly checked={view === 'tabs'} className="text-brand" />
+            <input
+              type="radio"
+              readOnly
+              disabled={!canManage}
+              checked={view === 'tabs'}
+              className="text-brand disabled:cursor-not-allowed"
+            />
             <span className="font-medium text-foreground">{t('kdsDefaultViewTabs')}</span>
           </div>
           <p className="text-xs text-muted-foreground ms-6">{t('kdsDefaultViewTabsHint')}</p>
         </button>
         <button
           type="button"
-          onClick={() => setView('kanban')}
-          className={`text-start rounded-lg border-2 px-4 py-3 transition ${
+          disabled={!canManage}
+          onClick={() => {
+            if (!canManage) return;
+            setView('kanban');
+          }}
+          className={`text-start rounded-lg border-2 px-4 py-3 transition disabled:opacity-60 disabled:cursor-not-allowed ${
             view === 'kanban'
               ? 'border-brand bg-brand/5'
               : 'border-border hover:border-gray-300 dark:border-border'
           }`}
         >
           <div className="flex items-center gap-2 mb-1">
-            <input type="radio" readOnly checked={view === 'kanban'} className="text-brand" />
+            <input
+              type="radio"
+              readOnly
+              disabled={!canManage}
+              checked={view === 'kanban'}
+              className="text-brand disabled:cursor-not-allowed"
+            />
             <span className="font-medium text-foreground">{t('kdsDefaultViewKanban')}</span>
           </div>
           <p className="text-xs text-muted-foreground ms-6">{t('kdsDefaultViewKanbanHint')}</p>
@@ -356,8 +411,8 @@ function KdsDefaultViewCard() {
         <button
           type="button"
           onClick={save}
-          disabled={!dirty || saving}
-          className="px-4 py-2 bg-brand text-white rounded-lg hover:opacity-90 disabled:opacity-50 font-medium text-sm"
+          disabled={!canManage || !dirty || saving}
+          className="px-4 py-2 bg-brand text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium text-sm"
         >
           {saving ? tCommon('saving') : tCommon('save')}
         </button>
@@ -379,15 +434,36 @@ export default function SettingsPage() {
   const tRestore = useTranslations('restore');
   const tUpdate = useTranslations('update');
   const tWhatsappSettings = useTranslations('whatsapp.settings');
+  const tCustomerDisplay = useTranslations('customerDisplay');
+  const tTax = useTranslations('tax');
+  const tQrMenu = useTranslations('qrMenu');
   const { formatDate, formatTime, formatDateTime } = useFormatDate();
   const isAdmin = tenantCan(currentTenant, 'settings.manage');
   const isOwner = tenantCan(currentTenant, 'cloud.account.manage');
+  const canManageRefundPolicy = currentTenant?.role === 'owner' && isAdmin;
+  const canManageCounters = currentTenant?.role === 'owner' && isAdmin;
   const canManageDatabase = tenantCan(currentTenant, 'database.manage');
   const canManageTaxPacks = tenantCan(currentTenant, 'tax-packs.manage');
+  const canManageTaxConfiguration = tenantCan(currentTenant, 'tax-configuration.manage');
   const canViewTaxConfiguration = tenantCan(currentTenant, 'tax-packs.view-test');
   const canManageMobileAccess = tenantCan(currentTenant, 'mobile-access.manage');
+  const canManageCloud = tenantCan(currentTenant, 'cloud.manage');
   const canManageGoogleDrive = tenantCan(currentTenant, 'google-drive.manage');
-  const canManageQrMenu = tenantCan(currentTenant, 'catalog.manage') || canManageGoogleDrive;
+  const canManageCatalog = tenantCan(currentTenant, 'catalog.manage');
+  const canManageQrMenu = canManageCatalog || canManageGoogleDrive;
+  const canManagePrinters = tenantCan(currentTenant, 'printers.manage');
+  const canManagePaymentMethods = tenantCan(currentTenant, 'payment-methods.manage');
+  const canManageKitchenStations = tenantCan(currentTenant, 'kitchen.stations.manage');
+  const canManageKdsView = isAdmin || tenantCan(currentTenant, 'kitchen.use');
+  const canManageWhatsapp = tenantCan(currentTenant, 'whatsapp.manage');
+  const canUseWhatsapp = tenantCan(currentTenant, 'whatsapp.use');
+  const cloudAttentionTenantId = useCloudAttentionStore((s) => s.tenantId);
+  const storeEmailNeedsAttention = useCloudAttentionStore((s) => s.emailNeedsAttention);
+  const storeDeletionNeedsAttention = useCloudAttentionStore((s) => s.deletionNeedsAttention);
+  const syncCloudAttentionAccount = useCloudAttentionStore((s) => s.syncAccount);
+  const syncCloudAttentionStatus = useCloudAttentionStore((s) => s.syncCloudStatus);
+  const hasStoreAttentionForTenant =
+    currentTenant?.id != null && cloudAttentionTenantId === currentTenant.id;
   const { confirm, ConfirmDialog } = useConfirm();
 
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(false);
@@ -452,7 +528,17 @@ export default function SettingsPage() {
     requireKitchenDelivered?: boolean;
   }>({ tenantId: currentTenant?.id ?? null });
   const getActiveTenantId = () =>
-    useAuthStore.getState()?.currentTenant?.id ?? currentTenantIdRef.current;
+    typeof useAuthStore.getState === 'function'
+      ? (useAuthStore.getState()?.currentTenant?.id ?? null)
+      : currentTenantIdRef.current;
+  const isOwnerForTenant = (tenantId: number | null) => {
+    if (tenantId === null) return false;
+    if (typeof useAuthStore.getState === 'function') {
+      const activeTenant = useAuthStore.getState()?.currentTenant;
+      return activeTenant?.id === tenantId && tenantCan(activeTenant, 'cloud.account.manage');
+    }
+    return currentTenantIdRef.current === tenantId && isOwner;
+  };
   const syncTenantTracking = (tenantId: number | null) => {
     if (currentTenantIdRef.current !== tenantId) {
       currentTenantIdRef.current = tenantId;
@@ -463,6 +549,24 @@ export default function SettingsPage() {
       confirmedKitchenVersions.current.clear();
       failedKitchenSaveVersions.current.clear();
       confirmedKitchenSettings.current = { tenantId };
+      printingHydratedRef.current = false;
+      printingHydrationTenant.current = null;
+      setPrintingHydrated(false);
+      setPrintingHydrationFailed(false);
+      setZReportLanguagePolicyLoaded(false);
+      setRefundPolicyHydrated(false);
+      loadedSettingsTabs.current.clear();
+      cloudHydrationTenant.current = tenantId;
+      cloudHydrationGeneration.current += 1;
+      cloudHydrated.current = false;
+      cloudHydrationSucceeded.current = false;
+      cloudHydrationPromise.current = null;
+      cloudRegistrationStatus.current = 'unregistered';
+      setCloudAccount(null);
+      setCloudAccountLoadFailed(false);
+      cloudAccountRequestGeneration.current += 1;
+      setCloudStatus(INITIAL_CLOUD_STATUS);
+      setCloudPrivacyHydrated(false);
     }
   };
   const markHydrationTouched = (field: string) => {
@@ -494,12 +598,12 @@ export default function SettingsPage() {
     schemaVersion: null,
   });
   const [healthCheckOpen, setHealthCheckOpen] = useState(
-    () => searchParams?.get('action') === 'health-check',
+    () => canManageDatabase && searchParams?.get('action') === 'health-check',
   );
   const [healthReport, setHealthReport] = useState<HealthCheckReport | null>(null);
   const [applyingFixes, setApplyingFixes] = useState(false);
   const [initializeDbOpen, setInitializeDbOpen] = useState(
-    () => searchParams?.get('action') === 'initialize-db',
+    () => canManageDatabase && searchParams?.get('action') === 'initialize-db',
   );
   const [currencyResetTarget, setCurrencyResetTarget] = useState('');
   const [shakeSaveBar, setShakeSaveBar] = useState(false);
@@ -532,7 +636,7 @@ export default function SettingsPage() {
 
   // Optimistically updates theme store and rolls back on API failure.
   const saveThemeMode = async (next: ThemeMode) => {
-    if (savingTheme) return;
+    if (!isAdmin || savingTheme) return;
     const previous = lastCommitted.current;
     const seq = ++saveSeq.current;
     userTouched.current = true;
@@ -541,6 +645,7 @@ export default function SettingsPage() {
     setThemeMode(next);
     try {
       await api.put('/settings/theme_mode', { value: next });
+      clearKdsThemeOverride();
       lastCommitted.current = next;
     } catch {
       setThemeMode(previous);
@@ -609,6 +714,206 @@ export default function SettingsPage() {
     router.replace(query ? `/settings?${query}` : '/settings');
   };
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [selectedSearchIndex, setSelectedSearchIndex] = useState(0);
+  const [pendingHighlightSection, setPendingHighlightSection] = useState<{
+    id: string;
+    fallbackId?: string;
+    tab: string;
+  } | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const searchListboxRef = useRef<HTMLDivElement | null>(null);
+  const shouldScrollSearchOptionRef = useRef(false);
+  const highlightTimeoutRef = useRef<number | null>(null);
+  const highlightedElementRef = useRef<HTMLElement | null>(null);
+
+  const searchResults = searchQuery.trim()
+    ? searchSettingsCatalog(
+        searchQuery,
+        {
+          settings: t,
+          pos: tPos,
+          customerDisplay: tCustomerDisplay,
+          tax: tTax,
+          qrMenu: tQrMenu,
+          update: tUpdate,
+          productAnalytics: tAnalytics,
+        },
+        {
+          isAdmin,
+          isOwner,
+          canViewTaxConfiguration,
+          canManageQrMenu,
+          canManageMobileAccess,
+          canManageDatabase,
+        },
+      )
+    : [];
+  const activeSearchIndex =
+    searchResults.length > 0 ? Math.min(selectedSearchIndex, searchResults.length - 1) : 0;
+  const activeSearchOptionId =
+    searchQuery.trim() && searchOpen && searchResults[activeSearchIndex]
+      ? `settings-search-option-${searchResults[activeSearchIndex].id}`
+      : undefined;
+
+  const handleSelectSearchResult = (result: SettingsSearchResult) => {
+    handleSettingsTabChange(result.tab);
+    setSearchQuery('');
+    setSearchOpen(false);
+    setSelectedSearchIndex(0);
+    setPendingHighlightSection({
+      id: result.id,
+      fallbackId: result.entry.fallbackSectionId,
+      tab: result.tab,
+    });
+  };
+
+  useEffect(() => {
+    if (!shouldScrollSearchOptionRef.current || !activeSearchOptionId) return;
+    shouldScrollSearchOptionRef.current = false;
+    const listbox = searchListboxRef.current;
+    if (!listbox) return;
+    const optionEl = document.getElementById(activeSearchOptionId);
+    if (!optionEl || !listbox.contains(optionEl)) return;
+    const listboxRect = listbox.getBoundingClientRect();
+    const optionRect = optionEl.getBoundingClientRect();
+    if (optionRect.bottom > listboxRect.bottom) {
+      listbox.scrollTop += optionRect.bottom - listboxRect.bottom;
+    } else if (optionRect.top < listboxRect.top) {
+      listbox.scrollTop -= listboxRect.top - optionRect.top;
+    }
+  }, [activeSearchOptionId]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const isCmdOrCtrlK =
+        (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k';
+      const isSlash = !event.metaKey && !event.ctrlKey && !event.altKey && event.key === '/';
+
+      if (!isCmdOrCtrlK && !isSlash) return;
+
+      const activeEl = document.activeElement as HTMLElement | null;
+      const tagName = activeEl?.tagName;
+      const isEditable =
+        tagName === 'INPUT' ||
+        tagName === 'TEXTAREA' ||
+        tagName === 'SELECT' ||
+        Boolean(activeEl?.isContentEditable);
+
+      if (isSlash && isEditable) return;
+      if (
+        document.querySelector(
+          '[role="dialog"]:not([aria-hidden="true"]), [role="alertdialog"]:not([aria-hidden="true"])',
+        )
+      )
+        return;
+
+      event.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+      setSearchOpen(true);
+    };
+
+    const handlePointerDownOutside = (event: MouseEvent) => {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(event.target as Node)
+      ) {
+        setSearchOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    document.addEventListener('mousedown', handlePointerDownOutside);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+      document.removeEventListener('mousedown', handlePointerDownOutside);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current);
+      }
+      if (highlightedElementRef.current) {
+        highlightedElementRef.current.classList.remove(...HIGHLIGHT_CLASSES);
+        highlightedElementRef.current.removeAttribute('data-setting-highlighted');
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingHighlightSection || activeTab !== pendingHighlightSection.tab) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: number | null = null;
+
+    const clearPreviousHighlight = () => {
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = null;
+      }
+      if (highlightedElementRef.current) {
+        highlightedElementRef.current.classList.remove(...HIGHLIGHT_CLASSES);
+        highlightedElementRef.current.removeAttribute('data-setting-highlighted');
+        highlightedElementRef.current = null;
+      }
+    };
+
+    const tryHighlight = () => {
+      if (cancelled) return;
+      const primary = document.querySelector<HTMLElement>(
+        `[data-setting-section="${pendingHighlightSection.id}"]`,
+      );
+      const target =
+        primary ??
+        (pendingHighlightSection.fallbackId && attempts >= 4
+          ? document.querySelector<HTMLElement>(
+              `[data-setting-section="${pendingHighlightSection.fallbackId}"]`,
+            )
+          : null);
+
+      if (target) {
+        clearPreviousHighlight();
+        setPendingHighlightSection(null);
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add(...HIGHLIGHT_CLASSES);
+        target.setAttribute('data-setting-highlighted', 'true');
+        highlightedElementRef.current = target;
+        highlightTimeoutRef.current = window.setTimeout(() => {
+          target.classList.remove(...HIGHLIGHT_CLASSES);
+          target.removeAttribute('data-setting-highlighted');
+          if (highlightedElementRef.current === target) {
+            highlightedElementRef.current = null;
+          }
+          highlightTimeoutRef.current = null;
+        }, 2000);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts < 30) {
+        retryTimer = window.setTimeout(tryHighlight, 50);
+      } else {
+        setPendingHighlightSection(null);
+      }
+    };
+
+    const rafId = window.requestAnimationFrame(tryHighlight);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(rafId);
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [activeTab, pendingHighlightSection]);
+
   // Unified PIN gate: 'set' opens the set/change-PIN dialog; 'backup'/'backup-custom'/
   // 'import'/'restore' open a verify prompt and, on success, run the pending action.
   const [pinGate, setPinGate] = useState<PinGate>(null);
@@ -646,29 +951,68 @@ export default function SettingsPage() {
   } | null>(null);
   const [cloudAccountBusy, setCloudAccountBusy] = useState(false);
   const [cloudAccountLoadFailed, setCloudAccountLoadFailed] = useState(false);
+  const cloudAccountRequestGeneration = useRef(0);
   const [refreshingDeletionStatus, setRefreshingDeletionStatus] = useState(false);
   const cloudAccountAvailable =
     !cloudAccountLoadFailed && cloudAccount?.cloud_account_available !== false;
   const cloudDeletionStatus = cloudAccount?.deletion_request?.status || '';
   const cloudDeletionPending = cloudDeletionStatus === 'pending';
-  const cloudDeletionNeedsResolution = ['pending', 'processing', 'failed'].includes(
-    cloudDeletionStatus,
-  );
+  const cloudDeletionNeedsResolution = (
+    ACTIONABLE_CLOUD_DELETION_STATUSES as readonly string[]
+  ).includes(cloudDeletionStatus);
   const cloudDeletionCanCancel =
     ['pending', 'processing'].includes(cloudDeletionStatus) &&
     Boolean(cloudAccount?.deletion_request?.id);
 
   const fetchCloudAccount = async (signal?: AbortSignal): Promise<boolean> => {
+    const tenantId = getActiveTenantId();
+    if (tenantId === null) return false;
+    const requestGeneration = ++cloudAccountRequestGeneration.current;
     try {
       const { data } = await api.get('/settings/cloud/account', signal ? { signal } : undefined);
-      if (signal?.aborted) return false;
+      if (signal?.aborted || getActiveTenantId() !== tenantId) return false;
+      if (requestGeneration !== cloudAccountRequestGeneration.current) return true;
       setCloudAccount(data);
       setCloudAccountLoadFailed(false);
+      if (isOwnerForTenant(tenantId)) syncCloudAttentionAccount(tenantId, data, false);
       return true;
     } catch (error) {
-      if (isRequestCancelled(error)) return false;
+      if (isRequestCancelled(error) || getActiveTenantId() !== tenantId) return false;
+      if (requestGeneration !== cloudAccountRequestGeneration.current) return false;
       setCloudAccountLoadFailed(true);
+      if (isOwnerForTenant(tenantId)) syncCloudAttentionAccount(tenantId, null, true);
       return false;
+    }
+  };
+
+  const updateCloudAccountPreference = async (patch: {
+    product_updates?: boolean;
+    marketing?: boolean;
+  }) => {
+    const tenantId = getActiveTenantId();
+    if (tenantId === null) return;
+    const requestGeneration = ++cloudAccountRequestGeneration.current;
+    setCloudAccountBusy(true);
+    try {
+      const { data } = await api.put('/settings/cloud/account/preferences', patch);
+      if (
+        getActiveTenantId() !== tenantId ||
+        requestGeneration !== cloudAccountRequestGeneration.current
+      ) {
+        return;
+      }
+      const next = cloudAccount ? { ...cloudAccount, ...data } : data;
+      setCloudAccount(next);
+      if (isOwnerForTenant(tenantId)) syncCloudAttentionAccount(tenantId, next, false);
+    } catch {
+      if (
+        getActiveTenantId() === tenantId &&
+        requestGeneration === cloudAccountRequestGeneration.current
+      ) {
+        toast.error(t('couldNotSavePreference'));
+      }
+    } finally {
+      setCloudAccountBusy(false);
     }
   };
 
@@ -689,7 +1033,7 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (requestedAction !== 'master-pin') return;
+    if (requestedAction !== 'master-pin' || !canManageDatabase) return;
     const controller = new AbortController();
     let active = true;
     // oxlint-disable-next-line react-hooks/set-state-in-effect
@@ -700,7 +1044,7 @@ export default function SettingsPage() {
       active = false;
       controller.abort();
     };
-  }, [fetchMasterPinStatus, requestedAction]);
+  }, [canManageDatabase, fetchMasterPinStatus, requestedAction]);
 
   const fetchBackups = async (signal?: AbortSignal): Promise<boolean> => {
     const abortSignal = signal instanceof AbortSignal ? signal : undefined;
@@ -757,6 +1101,7 @@ export default function SettingsPage() {
   };
 
   const runHealthCheck = async () => {
+    if (!canManageDatabase) return;
     setHealthCheckOpen(true);
     try {
       const { data } = await api.get('/db-tools/health-check');
@@ -768,6 +1113,7 @@ export default function SettingsPage() {
   };
 
   const applySafeFixes = async () => {
+    if (!canManageDatabase) return;
     setApplyingFixes(true);
     try {
       const { data } = await api.post('/db-tools/apply-safe-fixes', {});
@@ -914,28 +1260,36 @@ export default function SettingsPage() {
     }
 
     if (pinGate.mode === 'delete-cloud') {
+      const tenantId = getActiveTenantId();
       try {
         await api.post('/settings/cloud/delete-data', {
           master_pin: pin,
           confirmation: 'DELETE CLOUD DATA',
         });
+        if (tenantId === null || getActiveTenantId() !== tenantId) return { success: false };
         toast.success(t('cloudDeletionSubmitted'));
         await Promise.all([fetchCloudAccount(), refreshCloudStatus()]);
+        if (getActiveTenantId() !== tenantId) return { success: false };
         notifyCloudAccountStatusChanged();
         setPinGate(null);
         return { success: true };
       } catch {
-        await Promise.all([fetchCloudAccount(), refreshCloudStatus()]);
-        notifyCloudAccountStatusChanged();
+        if (tenantId !== null && getActiveTenantId() === tenantId) {
+          await Promise.all([fetchCloudAccount(), refreshCloudStatus()]);
+          if (getActiveTenantId() === tenantId) notifyCloudAccountStatusChanged();
+        }
         return { success: false, error: t('cloudDeletionFailed') };
       }
     }
 
     if (pinGate.mode === 'cancel-cloud-deletion') {
+      const tenantId = getActiveTenantId();
       try {
         await api.post('/settings/cloud/delete-data/cancel', { master_pin: pin });
+        if (tenantId === null || getActiveTenantId() !== tenantId) return { success: false };
         toast.success(t('cloudDeletionCancelled'));
         await Promise.all([fetchCloudAccount(), refreshCloudStatus()]);
+        if (getActiveTenantId() !== tenantId) return { success: false };
         notifyCloudAccountStatusChanged();
         setPinGate(null);
         return { success: true };
@@ -1255,7 +1609,11 @@ export default function SettingsPage() {
       if (signal?.aborted) return false;
       setStationCategories(res.data.categories || []);
       return true;
-    } catch {
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 403) {
+        setStationCategories([]);
+        return true;
+      }
       return false;
     }
   };
@@ -1265,11 +1623,16 @@ export default function SettingsPage() {
       if (signal?.aborted) return false;
       setStationStaff(res.data.staff || []);
       return true;
-    } catch {
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 403) {
+        setStationStaff([]);
+        return true;
+      }
       return false;
     }
   };
   const fetchStationUsers = async (stationId: string, signal?: AbortSignal) => {
+    if (!canManageKitchenStations) return;
     try {
       const res = await api.get(`/kitchen-stations/${stationId}`, signal ? { signal } : undefined);
       if (!signal?.aborted) {
@@ -1284,12 +1647,14 @@ export default function SettingsPage() {
   };
 
   const openAddStation = () => {
+    if (!canManageKitchenStations) return;
     setEditingStationId(null);
     setStationForm({ name: '', category_ids: [], printer_id: '', chef_user_ids: [] });
     setShowStationForm(true);
   };
 
   const openEditStation = async (station: KitchenStation) => {
+    if (!canManageKitchenStations) return;
     setEditingStationId(station.id);
     let categoryIds: string[] = [];
     try {
@@ -1322,6 +1687,7 @@ export default function SettingsPage() {
   };
 
   const toggleStationFormValue = (field: 'category_ids', value: string) => {
+    if (!canManageKitchenStations) return;
     setStationForm((prev) => {
       const set = new Set(prev[field]);
       if (set.has(value)) set.delete(value);
@@ -1331,6 +1697,7 @@ export default function SettingsPage() {
   };
 
   const saveStation = async () => {
+    if (!canManageKitchenStations) return;
     if (!stationForm.name.trim()) {
       toast.error(t('stationNameRequired'));
       return;
@@ -1368,6 +1735,7 @@ export default function SettingsPage() {
   };
 
   const deleteStation = async (id: string) => {
+    if (!canManageKitchenStations) return;
     if (
       !(await confirm(t('stationDeleteConfirm'), {
         destructive: true,
@@ -1468,6 +1836,7 @@ export default function SettingsPage() {
     billShowCustomerPhone: posSettings.billShowCustomerPhone,
     billDeliveryShowCustomerPhoneAlways: posSettings.billDeliveryShowCustomerPhoneAlways,
     billShowTableNumber: posSettings.billShowTableNumber,
+    billShowLargeOrderNumber: posSettings.billShowLargeOrderNumber,
   });
   const [printingForm, setPrintingForm] = useState<PrintingForm>(initPrinting);
   const [savedPrinting, setSavedPrinting] = useState<PrintingForm>(initPrinting);
@@ -1493,9 +1862,18 @@ export default function SettingsPage() {
     });
   };
   const [zReportLanguagePolicyLoaded, setZReportLanguagePolicyLoaded] = useState(false);
+  const [printingHydrated, setPrintingHydrated] = useState(false);
+  const [printingHydrationFailed, setPrintingHydrationFailed] = useState(false);
+  const printingHydratedRef = useRef(false);
+  const printingHydrationTenant = useRef<number | null>(null);
   const [savingPrinting, setSavingPrinting] = useState(false);
   const printingSaveInFlight = useRef(false);
   const savePrinting = async (silent: boolean = false) => {
+    if (!canManagePrinters) return;
+    if (!printingHydratedRef.current || printingHydrationTenant.current !== getActiveTenantId()) {
+      if (!silent) toast.error(t('saveFailed'));
+      throw new Error('Printing settings are not hydrated');
+    }
     if (printingSaveInFlight.current) return;
     printingSaveInFlight.current = true;
     setSavingPrinting(true);
@@ -1561,6 +1939,7 @@ export default function SettingsPage() {
         bill_show_customer_phone: formSnapshot.billShowCustomerPhone,
         bill_delivery_show_customer_phone_always: formSnapshot.billDeliveryShowCustomerPhoneAlways,
         bill_show_table_number: formSnapshot.billShowTableNumber,
+        bill_show_large_order_number: formSnapshot.billShowLargeOrderNumber,
         ...(formSnapshot.cashDrawerPulseEnabled !== undefined
           ? {
               cash_drawer_pulse_enabled: formSnapshot.cashDrawerPulseEnabled,
@@ -1592,6 +1971,7 @@ export default function SettingsPage() {
         formSnapshot.billDeliveryShowCustomerPhoneAlways,
       );
       posSettings.setBillShowTableNumber(formSnapshot.billShowTableNumber);
+      posSettings.setBillShowLargeOrderNumber(formSnapshot.billShowLargeOrderNumber);
       setSavedPrinting(formSnapshot);
       if (!silent) toast.success(t('printingSettingsSaved'));
     } finally {
@@ -1618,6 +1998,7 @@ export default function SettingsPage() {
   const billFormRef = useRef(billForm);
   const [billTemplateCards, setBillTemplateCards] = useState<TemplateCard[]>(TEMPLATE_CARDS);
   const saveBillTemplate = async (silent: boolean = false) => {
+    if (!isAdmin) return;
     posSettings.setBillTemplate(billForm.billTemplate);
     posSettings.setBillTemplateSource(billForm.billTemplateSource);
     posSettings.setBillFooterMessage(billForm.billFooterMessage);
@@ -1675,15 +2056,7 @@ export default function SettingsPage() {
   });
   const [savedCloudSettings, setSavedCloudSettings] = useState(cloudSettings);
   const cloudSettingsRef = useRef(cloudSettings);
-  const [cloudStatus, setCloudStatus] = useState({
-    cloud_registration_status: 'unregistered',
-    cloud_services_disabled_by_user: false,
-    cloud_connected: false,
-    cloud_relay_mode: 'disconnected',
-    cloud_last_heartbeat: null as string | null,
-    cloud_last_error: null as string | null,
-    cloud_deletion_status: '',
-  });
+  const [cloudStatus, setCloudStatus] = useState(INITIAL_CLOUD_STATUS);
   const [cloudPrivacyHydrated, setCloudPrivacyHydrated] = useState(false);
 
   const [savingCloud, setSavingCloud] = useState(false);
@@ -1699,12 +2072,17 @@ export default function SettingsPage() {
   const cloudDeletionNeedsAction =
     !cloudDeletionFinal &&
     (cloudDeletionNeedsResolution ||
-      ['processing', 'failed'].includes(cloudStatus.cloud_deletion_status));
+      (ACTIONABLE_CLOUD_DELETION_STATUSES as readonly string[]).includes(
+        cloudStatus.cloud_deletion_status,
+      ));
 
   const refreshCloudStatus = async () => {
+    const tenantId = getActiveTenantId();
+    if (tenantId === null) return;
     try {
       const { data } = await api.get('/settings/cloud');
-      setCloudStatus({
+      if (getActiveTenantId() !== tenantId) return;
+      const nextCloudStatus = {
         cloud_registration_status: data.cloud_registration_status || 'unregistered',
         cloud_services_disabled_by_user: !!data.cloud_services_disabled_by_user,
         cloud_connected: !!data.cloud_connected,
@@ -1712,7 +2090,9 @@ export default function SettingsPage() {
         cloud_last_heartbeat: data.cloud_last_heartbeat || null,
         cloud_last_error: data.cloud_last_error || null,
         cloud_deletion_status: data.cloud_deletion_status || '',
-      });
+      };
+      setCloudStatus(nextCloudStatus);
+      if (isOwnerForTenant(tenantId)) syncCloudAttentionStatus(tenantId, nextCloudStatus);
       setCloudSettings((previous) => ({
         ...previous,
         cloud_sync_enabled: !!data.cloud_sync_enabled,
@@ -1731,14 +2111,20 @@ export default function SettingsPage() {
   };
 
   const refreshDeletionStatus = async () => {
+    const tenantId = getActiveTenantId();
+    if (tenantId === null) return;
     setRefreshingDeletionStatus(true);
     try {
       await api.get('/settings/cloud/delete-data/status');
+      if (getActiveTenantId() !== tenantId) return;
       await Promise.all([fetchCloudAccount(), refreshCloudStatus()]);
+      if (getActiveTenantId() !== tenantId) return;
       notifyCloudAccountStatusChanged();
       toast.success(t('cloudDeletionStatusRefreshed'));
     } catch {
-      toast.error(t('cloudDeletionStatusRefreshFailed'));
+      if (getActiveTenantId() === tenantId) {
+        toast.error(t('cloudDeletionStatusRefreshFailed'));
+      }
     } finally {
       setRefreshingDeletionStatus(false);
     }
@@ -1805,6 +2191,12 @@ export default function SettingsPage() {
   const [kotPrintingEnabledSetting, setKotPrintingEnabledSetting] = useState(true);
   const [scheduledOrdersEnabled, setScheduledOrdersEnabled] = useState(false);
   const [savingScheduledOrdersEnabled, setSavingScheduledOrdersEnabled] = useState(false);
+  const [refundManagerEnabled, setRefundManagerEnabled] = useState(true);
+  const [refundManagerWindow, setRefundManagerWindow] = useState<
+    '30m' | '1h' | '2h' | '4h' | 'same_business_day'
+  >('1h');
+  const [refundPolicyHydrated, setRefundPolicyHydrated] = useState(false);
+  const [savingRefundPolicy, setSavingRefundPolicy] = useState(false);
 
   const [savedOrderNumberForm, setSavedOrderNumberForm] = useState<OrderNumberForm>({
     prefix: 'ORD',
@@ -1929,6 +2321,7 @@ export default function SettingsPage() {
         billShowCustomerPhone: d.bill_show_customer_phone !== false,
         billDeliveryShowCustomerPhoneAlways: d.bill_delivery_show_customer_phone_always !== false,
         billShowTableNumber: d.bill_show_table_number !== false,
+        billShowLargeOrderNumber: d.bill_show_large_order_number !== false,
       };
       setPrintingForm((previous) => {
         const next = { ...previous, ...billDisplay };
@@ -2197,7 +2590,11 @@ export default function SettingsPage() {
       try {
         return await get(path);
       } catch (error) {
-        if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+        if (
+          axios.isAxiosError(error) &&
+          (error.response?.status === 404 || error.response?.status === 403)
+        )
+          return null;
         throw error;
       }
     };
@@ -2278,6 +2675,7 @@ export default function SettingsPage() {
           billShowCustomerPhone: d.bill_show_customer_phone !== false,
           billDeliveryShowCustomerPhoneAlways: d.bill_delivery_show_customer_phone_always !== false,
           billShowTableNumber: d.bill_show_table_number !== false,
+          billShowLargeOrderNumber: d.bill_show_large_order_number !== false,
         };
         mergeHydratedPrinting(billDisplay, printingAtHydrationStart, hydrationTouchSnapshot);
         setSavedPrinting((previous) => ({ ...previous, ...billDisplay }));
@@ -2299,7 +2697,7 @@ export default function SettingsPage() {
     const loadCloud = async (required = false) => {
       const cloudSettingsAtHydrationStart = { ...cloudSettingsRef.current };
       let registrationStatus = cloudRegistrationStatus.current;
-      const tenantId = currentTenant?.id ?? null;
+      const tenantId = tenantIdAtHydrationStart;
       if (cloudHydrationTenant.current !== tenantId) {
         cloudHydrationTenant.current = tenantId;
         cloudHydrationGeneration.current += 1;
@@ -2359,7 +2757,7 @@ export default function SettingsPage() {
               );
               setCloudSettings(mergedCloudSettings);
               setSavedCloudSettings(settings);
-              setCloudStatus({
+              const nextCloudStatus = {
                 cloud_registration_status: data.cloud_registration_status || 'unregistered',
                 cloud_services_disabled_by_user: !!data.cloud_services_disabled_by_user,
                 cloud_connected: !!data.cloud_connected,
@@ -2367,7 +2765,11 @@ export default function SettingsPage() {
                 cloud_last_heartbeat: data.cloud_last_heartbeat || null,
                 cloud_last_error: data.cloud_last_error || null,
                 cloud_deletion_status: data.cloud_deletion_status || '',
-              });
+              };
+              setCloudStatus(nextCloudStatus);
+              if (isOwnerForTenant(tenantId)) {
+                syncCloudAttentionStatus(tenantId, nextCloudStatus);
+              }
               cloudHydrationSucceeded.current = true;
               cloudHydrated.current = true;
             })();
@@ -2418,160 +2820,119 @@ export default function SettingsPage() {
     const loadPrinting = async (
       printingAtHydrationStart: PrintingForm,
       billFormAtHydrationStart: BillTemplateForm,
+      canReadBusiness: boolean,
+      canReadTemplates: boolean,
     ) => {
-      const [
-        autoPrintKotResponse,
-        useUnicodeResponse,
-        arabicShapingResponse,
-        trimResponse,
-        cashEnabledResponse,
-        cashMethodsResponse,
-        billLanguageResponse,
-        kotLanguageResponse,
-      ] = await Promise.all([
-        readOptional('/settings/auto_print_kot'),
-        readOptional('/settings/printer_use_unicode'),
-        readOptional('/settings/printer_arabic_shaping'),
-        readOptional('/settings/printer_trim_decimals'),
-        readOptional('/settings/cash_drawer_pulse_enabled'),
-        readOptional('/settings/cash_drawer_pulse_methods'),
-        readOptional('/settings/bill_language_policy'),
-        readOptional('/settings/kot_language_policy'),
-      ]);
-      if (!active()) return;
-
-      const autoPrintKotSetting = autoPrintKotResponse?.data?.setting;
-      if (
-        autoPrintKotSetting?.updated_at != null &&
-        (autoPrintKotSetting.value === 'true' || autoPrintKotSetting.value === 'false')
-      ) {
-        const enabled = autoPrintKotSetting.value === 'true';
-        posSettings.setAutoPrintKot(enabled);
-        mergeHydratedPrinting(
-          { autoPrintKot: enabled },
-          printingAtHydrationStart,
-          hydrationTouchSnapshot,
-        );
-        setSavedPrinting((p) => ({ ...p, autoPrintKot: enabled }));
-      }
-      const useUnicodeSetting = useUnicodeResponse?.data?.setting;
-      if (
-        useUnicodeSetting?.updated_at != null &&
-        (useUnicodeSetting.value === 'true' || useUnicodeSetting.value === 'false')
-      ) {
-        const enabled = useUnicodeSetting.value === 'true';
-        posSettings.setPrinterUseUnicode(enabled);
-        mergeHydratedPrinting(
-          { printerUseUnicode: enabled },
-          printingAtHydrationStart,
-          hydrationTouchSnapshot,
-        );
-        setSavedPrinting((p) => ({ ...p, printerUseUnicode: enabled }));
-      }
-      const arabicShapingSetting = arabicShapingResponse?.data?.setting;
-      if (
-        arabicShapingSetting?.updated_at != null &&
-        (arabicShapingSetting.value === 'true' || arabicShapingSetting.value === 'false')
-      ) {
-        const enabled = arabicShapingSetting.value === 'true';
-        posSettings.setPrinterArabicShaping(enabled);
-        mergeHydratedPrinting(
-          { printerArabicShaping: enabled },
-          printingAtHydrationStart,
-          hydrationTouchSnapshot,
-        );
-        setSavedPrinting((p) => ({ ...p, printerArabicShaping: enabled }));
+      let printingPayload: Record<string, unknown>;
+      try {
+        const res = await get('/settings/printing');
+        if (!active()) return;
+        printingPayload =
+          res?.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>) : {};
+      } catch (error) {
+        if (!isRequestCancelled(error) && active()) {
+          printingHydratedRef.current = false;
+          printingHydrationTenant.current = null;
+          setPrintingHydrated(false);
+          setPrintingHydrationFailed(true);
+        }
+        throw error;
       }
 
-      if (trimResponse) {
-        const enabled = trimResponse.data.setting?.value === 'true';
-        posSettings.setPrinterTrimDecimals(enabled);
-        mergeHydratedPrinting(
-          { printerTrimDecimals: enabled },
-          printingAtHydrationStart,
-          hydrationTouchSnapshot,
-        );
-        setSavedPrinting((p) => ({ ...p, printerTrimDecimals: enabled }));
-      }
-      if (cashEnabledResponse) {
-        const raw = cashEnabledResponse.data.setting?.value;
-        if (raw === 'true' || raw === 'false') {
-          const enabled = raw === 'true';
-          setSavedPrinting((p) => ({ ...p, cashDrawerPulseEnabled: enabled }));
-          // Missing rows intentionally remain undefined so thermal printing keeps
-          // its legacy per-printer fallback.
-          mergeHydratedPrinting(
-            { cashDrawerPulseEnabled: enabled },
-            printingAtHydrationStart,
-            hydrationTouchSnapshot,
-          );
+      const printingPatch: Partial<PrintingForm> = {};
+      const booleanFieldMap: Array<
+        [string, keyof PrintingForm, ((enabled: boolean) => void) | undefined]
+      > = [
+        ['auto_print_kot', 'autoPrintKot', posSettings.setAutoPrintKot],
+        ['printer_use_unicode', 'printerUseUnicode', posSettings.setPrinterUseUnicode],
+        ['printer_arabic_shaping', 'printerArabicShaping', posSettings.setPrinterArabicShaping],
+        ['printer_trim_decimals', 'printerTrimDecimals', posSettings.setPrinterTrimDecimals],
+        ['bill_show_logo', 'billShowLogo', posSettings.setBillShowLogo],
+        ['bill_show_name', 'billShowName', posSettings.setBillShowName],
+        ['bill_show_address', 'billShowAddress', posSettings.setBillShowAddress],
+        ['bill_show_phone', 'billShowPhone', posSettings.setBillShowPhone],
+        ['bill_show_tax_id', 'billShowTaxId', posSettings.setBillShowTaxId],
+        ['bill_show_tax_breakdown', 'billShowTaxBreakdown', posSettings.setBillShowTaxBreakdown],
+        ['bill_show_customer_name', 'billShowCustomerName', posSettings.setBillShowCustomerName],
+        ['bill_show_customer_phone', 'billShowCustomerPhone', posSettings.setBillShowCustomerPhone],
+        [
+          'bill_delivery_show_customer_phone_always',
+          'billDeliveryShowCustomerPhoneAlways',
+          posSettings.setBillDeliveryShowCustomerPhoneAlways,
+        ],
+        ['bill_show_table_number', 'billShowTableNumber', posSettings.setBillShowTableNumber],
+        [
+          'bill_show_large_order_number',
+          'billShowLargeOrderNumber',
+          posSettings.setBillShowLargeOrderNumber,
+        ],
+      ];
+      for (const [apiKey, formKey, setter] of booleanFieldMap) {
+        const value = printingPayload[apiKey];
+        if (typeof value === 'boolean') {
+          setter?.(value);
+          (printingPatch as Record<string, unknown>)[formKey] = value;
         }
       }
-      if (cashMethodsResponse) {
-        try {
-          const methods = JSON.parse(cashMethodsResponse.data.setting?.value || '[]');
-          if (Array.isArray(methods)) {
-            const valid = methods.filter(
-              (method: unknown): method is string => typeof method === 'string',
-            );
-            const normalized = methods.length > 0 && valid.length === 0 ? ['cash', 'card'] : valid;
-            mergeHydratedPrinting(
-              { cashDrawerPulseMethods: normalized },
-              printingAtHydrationStart,
-              hydrationTouchSnapshot,
-            );
-            setSavedPrinting((p) => ({ ...p, cashDrawerPulseMethods: normalized }));
-          }
-        } catch {
-          /* Use the safe defaults. */
-        }
+
+      if (typeof printingPayload.cash_drawer_pulse_enabled === 'boolean') {
+        printingPatch.cashDrawerPulseEnabled = printingPayload.cash_drawer_pulse_enabled;
       }
-      if (billLanguageResponse) {
-        const policy = parseStoredReceiptLanguagePolicy(billLanguageResponse.data?.setting?.value);
-        if (policy) {
-          posSettings.setBillLanguagePolicy(policy);
-          const formPatch = {
-            receiptPrimaryLanguage:
-              policy.primary.mode === 'fixed' ? policy.primary.language : 'inherit',
-            receiptSecondLanguage: policy.additional[0] ?? 'none',
-          };
-          mergeHydratedPrinting(formPatch, printingAtHydrationStart, hydrationTouchSnapshot);
-          setSavedPrinting((p) => ({ ...p, ...formPatch }));
-        }
+      if (Array.isArray(printingPayload.cash_drawer_pulse_methods)) {
+        const methods = printingPayload.cash_drawer_pulse_methods;
+        const valid = methods.filter((method): method is string => typeof method === 'string');
+        printingPatch.cashDrawerPulseMethods =
+          methods.length > 0 && valid.length === 0 ? ['cash', 'card'] : valid;
       }
-      if (kotLanguageResponse) {
-        const policy = parseStoredKotLanguagePolicy(kotLanguageResponse.data?.setting?.value);
-        if (policy) {
-          posSettings.setKotLanguagePolicy(policy);
-          const formPatch = {
-            kotLanguage: policy.primary.mode === 'fixed' ? policy.primary.language : 'inherit',
-          };
-          mergeHydratedPrinting(formPatch, printingAtHydrationStart, hydrationTouchSnapshot);
-          setSavedPrinting((p) => ({ ...p, ...formPatch }));
-        }
+
+      const billPolicy = parseStoredReceiptLanguagePolicy(printingPayload.bill_language_policy);
+      if (billPolicy) {
+        posSettings.setBillLanguagePolicy(billPolicy);
+        printingPatch.receiptPrimaryLanguage =
+          billPolicy.primary.mode === 'fixed' ? billPolicy.primary.language : 'inherit';
+        printingPatch.receiptSecondLanguage = billPolicy.additional[0] ?? 'none';
       }
-      const zReportResponse = await readOptional('/settings/z_report_language_policy');
-      if (!active()) return;
-      if (zReportResponse) {
-        const policy = parseStoredReceiptLanguagePolicy(zReportResponse.data?.setting?.value);
-        if (policy) {
-          const formPatch = {
-            zReportPrimaryLanguage:
-              policy.primary.mode === 'fixed' ? policy.primary.language : 'inherit',
-            zReportSecondLanguage: policy.additional[0] ?? 'none',
-          };
-          mergeHydratedPrinting(formPatch, printingAtHydrationStart, hydrationTouchSnapshot);
-          setSavedPrinting((p) => ({ ...p, ...formPatch }));
+      const kotPolicy = parseStoredKotLanguagePolicy(printingPayload.kot_language_policy);
+      if (kotPolicy) {
+        posSettings.setKotLanguagePolicy(kotPolicy);
+        printingPatch.kotLanguage =
+          kotPolicy.primary.mode === 'fixed' ? kotPolicy.primary.language : 'inherit';
+      }
+      if (Object.prototype.hasOwnProperty.call(printingPayload, 'z_report_language_policy')) {
+        if (printingPayload.z_report_language_policy === null) {
           setZReportLanguagePolicyLoaded(true);
+        } else {
+          const zReportPolicy = parseStoredReceiptLanguagePolicy(
+            printingPayload.z_report_language_policy,
+          );
+          if (zReportPolicy) {
+            printingPatch.zReportPrimaryLanguage =
+              zReportPolicy.primary.mode === 'fixed' ? zReportPolicy.primary.language : 'inherit';
+            printingPatch.zReportSecondLanguage = zReportPolicy.additional[0] ?? 'none';
+            setZReportLanguagePolicyLoaded(true);
+          }
         }
-      } else {
-        setZReportLanguagePolicyLoaded(true);
       }
+      if (!canReadBusiness && typeof printingPayload.kot_printing_enabled === 'boolean') {
+        applyHydratedKitchenSetting('kotPrintingEnabled', printingPayload.kot_printing_enabled);
+      }
+      if (!canReadBusiness && typeof printingPayload.kds_enabled === 'boolean') {
+        applyHydratedKitchenSetting('kdsEnabled', printingPayload.kds_enabled);
+      }
+
+      if (Object.keys(printingPatch).length > 0) {
+        mergeHydratedPrinting(printingPatch, printingAtHydrationStart, hydrationTouchSnapshot);
+        setSavedPrinting((p) => ({ ...p, ...printingPatch }));
+      }
+      printingHydratedRef.current = true;
+      printingHydrationTenant.current = tenantIdAtHydrationStart;
+      setPrintingHydrated(true);
+      setPrintingHydrationFailed(false);
 
       const [templatesResponse, templateResponse, footerResponse] = await Promise.all([
-        readOptional('/settings/bill-templates'),
-        readOptional('/settings/bill_template'),
-        readOptional('/settings/bill_footer_message'),
+        canReadTemplates ? readOptional('/settings/bill-templates') : Promise.resolve(null),
+        canReadBusiness ? readOptional('/settings/bill_template') : Promise.resolve(null),
+        canReadBusiness ? readOptional('/settings/bill_footer_message') : Promise.resolve(null),
       ]);
       if (!active()) return;
       const pluginCards: TemplateCard[] = (templatesResponse?.data?.plugins || []).map(
@@ -2720,31 +3081,48 @@ export default function SettingsPage() {
       if (tab === 'receipts-printers') {
         const printingAtHydrationStart = { ...printingFormRef.current };
         const billFormAtHydrationStart = { ...billFormRef.current };
-        await loadBusiness();
+        const canReadBusiness = tenantCan(currentTenant, 'settings.view');
+        const canReadTemplates = tenantCan(currentTenant, 'print-templates.view');
         await Promise.all([
+          canReadBusiness ? loadBusiness() : Promise.resolve(),
           fetchPrinters(signal),
-          loadPrinting(printingAtHydrationStart, billFormAtHydrationStart),
-          readOptional('/settings/kot_printing_enabled').then((res) => {
-            if (!active()) return;
-            applyHydratedKitchenSetting('kotPrintingEnabled', res?.data.setting?.value !== 'false');
-          }),
-          readOptional('/settings/kds_enabled').then((res) => {
-            if (!active()) return;
-            applyHydratedKitchenSetting('kdsEnabled', res?.data.setting?.value !== 'false');
-          }),
+          canManagePrinters || canReadBusiness
+            ? loadPrinting(
+                printingAtHydrationStart,
+                billFormAtHydrationStart,
+                canReadBusiness,
+                canReadTemplates,
+              )
+            : Promise.resolve(),
+          ...(canReadBusiness
+            ? [
+                readOptional('/settings/kot_printing_enabled').then((res) => {
+                  if (!active()) return;
+                  applyHydratedKitchenSetting(
+                    'kotPrintingEnabled',
+                    res?.data.setting?.value !== 'false',
+                  );
+                }),
+                readOptional('/settings/kds_enabled').then((res) => {
+                  if (!active()) return;
+                  applyHydratedKitchenSetting('kdsEnabled', res?.data.setting?.value !== 'false');
+                }),
+              ]
+            : []),
         ]);
         return;
       }
       if (tab === 'kitchen-stations') {
-        const { data } = await get('/settings/kds_enabled');
+        const kdsRes = await readOptional('/settings/kds_enabled');
         if (!active()) return;
-        applyHydratedKitchenSetting('kdsEnabled', data.setting?.value !== 'false');
+        applyHydratedKitchenSetting('kdsEnabled', kdsRes?.data.setting?.value !== 'false');
+        if (!canManageKitchenStations) return;
 
         const [stationsLoaded, categoriesLoaded, staffLoaded, printersLoaded] = await Promise.all([
           fetchStations(signal),
           fetchStationCategories(signal),
           fetchStationStaff(signal),
-          fetchPrinters(signal),
+          fetchPrinters(signal).then(() => true),
         ]);
         if (!stationsLoaded || !categoriesLoaded || !staffLoaded || !printersLoaded) {
           throw new Error('Kitchen station hydration failed');
@@ -2798,9 +3176,28 @@ export default function SettingsPage() {
         return;
       }
       if (tab === 'pos') {
-        const res = await readOptional('/settings/scheduled_orders_enabled');
+        const [res, refundsRes] = await Promise.all([
+          readOptional('/settings/scheduled_orders_enabled'),
+          readOptional('/settings/refunds'),
+        ]);
         if (active()) {
           setScheduledOrdersEnabled(res?.data?.setting?.value === 'true');
+          if (refundsRes?.data) {
+            if (!isHydrationTouched('refundManagerEnabled')) {
+              setRefundManagerEnabled(refundsRes.data.refund_manager_enabled !== false);
+            }
+            if (
+              !isHydrationTouched('refundManagerWindow') &&
+              (refundsRes.data.refund_manager_window === '30m' ||
+                refundsRes.data.refund_manager_window === '1h' ||
+                refundsRes.data.refund_manager_window === '2h' ||
+                refundsRes.data.refund_manager_window === '4h' ||
+                refundsRes.data.refund_manager_window === 'same_business_day')
+            ) {
+              setRefundManagerWindow(refundsRes.data.refund_manager_window);
+            }
+          }
+          setRefundPolicyHydrated(true);
         }
         return;
       }
@@ -2821,7 +3218,9 @@ export default function SettingsPage() {
         const loyaltyAtHydrationStart = { ...loyaltyFormRef.current };
         const [loyaltyResponse, candidatesResponse] = await Promise.all([
           get('/settings/loyalty'),
-          get('/products/loyalty/global-rate-candidates'),
+          canManageCatalog
+            ? get('/products/loyalty/global-rate-candidates')
+            : Promise.resolve({ data: { count: 0 } }),
         ]);
         if (!active()) return;
         const loadedLoyalty = {
@@ -2885,12 +3284,14 @@ export default function SettingsPage() {
           diagnosticsResponse ? diagnosticsResponse.data.setting?.value !== 'false' : true,
         );
         const [cloudLoaded, accountLoaded] = await Promise.all([
-          loadCloud(true)
-            .then(() => true)
-            .catch((error) => {
-              if (isRequestCancelled(error)) throw error;
-              return false;
-            }),
+          canManageCloud
+            ? loadCloud(true)
+                .then(() => true)
+                .catch((error) => {
+                  if (isRequestCancelled(error)) throw error;
+                  return false;
+                })
+            : Promise.resolve(true),
           isOwner ? fetchCloudAccount(signal) : Promise.resolve(true),
         ]);
         if (!cloudLoaded || !accountLoaded) throw new Error('Privacy hydration failed');
@@ -2898,12 +3299,13 @@ export default function SettingsPage() {
         return;
       }
       if (tab === 'data') {
+        if (!canManageDatabase) return;
         const [masterPinLoaded, backupsLoaded] = await Promise.all([
           fetchMasterPinStatus(signal),
           fetchBackups(signal),
         ]);
         if (!masterPinLoaded || !backupsLoaded) throw new Error('Data hydration failed');
-        if (isOwner) {
+        if (canManageGoogleDrive) {
           // Drive status stays optional: awaiting it would gate tab caching on a slow
           // integration call and re-request it on every revisit.
           void fetchGoogleDriveStatus(signal)
@@ -2933,7 +3335,7 @@ export default function SettingsPage() {
         return;
       }
       if (tab === 'mobile-access' || tab === 'orderflow') {
-        if (tab === 'mobile-access' && includeStatusOnly) {
+        if (tab === 'mobile-access' && includeStatusOnly && canManageMobileAccess) {
           try {
             const revfloResponse = await get('/more-apps/revflo');
             if (active()) setRevflo(revfloResponse.data.app || null);
@@ -2945,7 +3347,9 @@ export default function SettingsPage() {
           const { data } = await get('/settings/guest_qr_ordering_enabled');
           if (active()) setGuestQrOrderingEnabled(data.setting?.value !== 'false');
         }
-        await loadCloud(!includeStatusOnly);
+        if (canManageCloud || (tab === 'mobile-access' && canManageMobileAccess)) {
+          await loadCloud(!includeStatusOnly && canManageCloud);
+        }
       }
     } catch (error) {
       if (!isRequestCancelled(error) && active()) {
@@ -3030,7 +3434,7 @@ export default function SettingsPage() {
   }, [activeTab, currentTenant?.id]);
 
   useEffect(() => {
-    if (requestedAction !== 'health-check' || !currentTenant?.id) return;
+    if (requestedAction !== 'health-check' || !currentTenant?.id || !canManageDatabase) return;
     const key = `${currentTenant.id}:health-check`;
     if (healthCheckLoaded.current === key) return;
     const controller = new AbortController();
@@ -3048,12 +3452,13 @@ export default function SettingsPage() {
         }
       });
     return () => controller.abort();
-  }, [activeTab, currentTenant?.id, requestedAction, t]);
+  }, [activeTab, canManageDatabase, currentTenant?.id, requestedAction, t]);
 
   // Restore a backup file the operator picks from anywhere on disk. This is the
   // path a shop on Windows needs so nobody has to hand-copy flo.db over the live
   // database; the app closes and reopens the database itself.
   const handleRestoreFromFile = useCallback(async () => {
+    if (!canManageDatabase) return;
     if (!window.electronAPI?.pickRestoreFile) {
       toast.error(tCommon('notAvailable'));
       return;
@@ -3082,7 +3487,7 @@ export default function SettingsPage() {
         : undefined;
       toast.error(detail || t('restoreFailedGeneric'));
     }
-  }, [confirm, t, tCommon, tRestore]);
+  }, [canManageDatabase, confirm, t, tCommon, tRestore]);
 
   useEffect(() => {
     if (requestedAction !== 'restore-from-file') return;
@@ -3092,10 +3497,14 @@ export default function SettingsPage() {
     // operator cancels, so the next menu click lands on a different address and
     // fires the action again.
     router.replace(`/settings?tab=${activeTabRef.current || 'data'}`, { scroll: false });
+    if (!canManageDatabase) return;
     void handleRestoreFromFile();
-  }, [requestedAction, handleRestoreFromFile, router]);
+  }, [canManageDatabase, requestedAction, handleRestoreFromFile, router]);
 
   const saveCloud = async (silent = false) => {
+    if (!canManageCloud) return;
+    const tenantId = getActiveTenantId();
+    if (tenantId === null) return;
     setSavingCloud(true);
     try {
       const resumingStoppedCloud = cloudServicesStopped && cloudSettings.cloud_sync_enabled;
@@ -3105,10 +3514,11 @@ export default function SettingsPage() {
         cloud_reports_enabled: resumingStoppedCloud ? true : undefined,
         cloud_command_polling_enabled: resumingStoppedCloud ? true : undefined,
       });
+      if (getActiveTenantId() !== tenantId) return;
       const next = { ...cloudSettings, ...res.data };
       setCloudSettings(next);
       setSavedCloudSettings(next);
-      setCloudStatus({
+      const nextCloudStatus = {
         cloud_registration_status: res.data.cloud_registration_status || 'unregistered',
         cloud_services_disabled_by_user: !!res.data.cloud_services_disabled_by_user,
         cloud_connected: !!res.data.cloud_connected,
@@ -3116,12 +3526,15 @@ export default function SettingsPage() {
         cloud_last_heartbeat: res.data.cloud_last_heartbeat || null,
         cloud_last_error: res.data.cloud_last_error || null,
         cloud_deletion_status: res.data.cloud_deletion_status || '',
-      });
+      };
+      setCloudStatus(nextCloudStatus);
+      if (isOwnerForTenant(tenantId)) syncCloudAttentionStatus(tenantId, nextCloudStatus);
       await fetchCloudAccount();
+      if (getActiveTenantId() !== tenantId) return;
       notifyCloudAccountStatusChanged();
       if (!silent) toast.success(t('cloudSaved'));
     } catch (err) {
-      if (!silent) toast.error(t('cloudSaveFailed'));
+      if (!silent && getActiveTenantId() === tenantId) toast.error(t('cloudSaveFailed'));
       throw err;
     } finally {
       setSavingCloud(false);
@@ -3133,16 +3546,20 @@ export default function SettingsPage() {
   };
 
   const registerCloud = async (email: string) => {
+    if (!canManageCloud) return;
+    const tenantId = getActiveTenantId();
+    if (tenantId === null) return;
     setRegisteringCloud(true);
     try {
       const res = await api.post('/settings/cloud/register', { email });
+      if (getActiveTenantId() !== tenantId) return;
       const registrationStatus = res.data.cloud_registration_status || 'unregistered';
       cloudRegistrationStatus.current = registrationStatus;
       cloudHydrationGeneration.current += 1;
       cloudHydrated.current = false;
       cloudHydrationSucceeded.current = false;
       cloudHydrationPromise.current = null;
-      setCloudStatus({
+      const nextCloudStatus = {
         cloud_registration_status: registrationStatus,
         cloud_services_disabled_by_user: !!res.data.cloud_services_disabled_by_user,
         cloud_connected: !!res.data.cloud_connected,
@@ -3150,18 +3567,19 @@ export default function SettingsPage() {
         cloud_last_heartbeat: res.data.cloud_last_heartbeat || null,
         cloud_last_error: res.data.cloud_last_error || null,
         cloud_deletion_status: res.data.cloud_deletion_status || '',
-      });
+      };
+      setCloudStatus(nextCloudStatus);
+      if (isOwnerForTenant(tenantId)) syncCloudAttentionStatus(tenantId, nextCloudStatus);
       setCloudSettings((prev) => ({
         ...prev,
         cloud_api_key: res.data.cloud_api_key || prev.cloud_api_key,
         cloud_store_id: res.data.cloud_store_id || prev.cloud_store_id,
       }));
       await fetchCloudAccount();
+      if (getActiveTenantId() !== tenantId) return;
       notifyCloudAccountStatusChanged();
       if (registrationStatus === 'registered') {
-        const mobileAccessKeys = currentTenant?.id
-          ? [`${currentTenant.id}:mobile-access`, `${currentTenant.id}:mobile-access:status`]
-          : [];
+        const mobileAccessKeys = [`${tenantId}:mobile-access`, `${tenantId}:mobile-access:status`];
         mobileAccessKeys.forEach((key) => {
           settingsTabLoadControllers.current.get(key)?.abort();
           settingsTabLoadControllers.current.delete(key);
@@ -3180,17 +3598,22 @@ export default function SettingsPage() {
             controller.abort();
           }
         }
-        toast.success(t('cloudRegistrationSuccess'));
+        if (getActiveTenantId() === tenantId) {
+          toast.success(t('cloudRegistrationSuccess'));
+        }
       }
     } catch (error) {
       if (isRequestCancelled(error)) return;
-      toast.error(t('cloudRegistrationFailed'));
+      if (getActiveTenantId() === tenantId) {
+        toast.error(t('cloudRegistrationFailed'));
+      }
     } finally {
       setRegisteringCloud(false);
     }
   };
 
   const saveAnalyticsLevel = async (level: ProductAnalyticsLevel) => {
+    if (!isAdmin) return;
     const previous = analyticsLevel;
     setAnalyticsLevel(level);
     setSavingAnalytics(true);
@@ -3205,6 +3628,7 @@ export default function SettingsPage() {
   };
 
   const saveDiagnosticsConsent = async (enabled: boolean) => {
+    if (!isAdmin) return;
     const previous = diagnosticsConsent;
     setDiagnosticsConsent(enabled);
     setSavingDiagnosticsConsent(true);
@@ -3219,6 +3643,7 @@ export default function SettingsPage() {
   };
 
   const connectGoogleDrive = async () => {
+    if (!canManageGoogleDrive) return;
     const confirmationMessage = `${t('googleDrivePrivacyAcknowledgement')}\n\n⚠️ ${t('googleDrivePermissionNotice')}`;
     const acknowledged = await confirm(confirmationMessage, {
       title: t('googleDrivePrivacyWarningTitle'),
@@ -3240,7 +3665,7 @@ export default function SettingsPage() {
         allow_switch: true,
       });
       setGoogleDriveStatus((prev) => ({ ...prev, ...res.data }));
-      await fetchRemoteGoogleDriveBackups();
+      void fetchRemoteGoogleDriveBackups();
       toast.success(t('googleDriveConnectedSuccess'));
       fetchBackups();
     } catch (err: unknown) {
@@ -3537,6 +3962,7 @@ export default function SettingsPage() {
 
   // Saved immediately because turning KDS off invalidates pairing tokens server-side.
   const saveKdsEnabled = async (enabled: boolean) => {
+    if (!isAdmin) return;
     await saveKitchenSetting('kdsEnabled', enabled, true, '/settings/kds_enabled', {
       on: t('kdsEnabledOn'),
       off: t('kdsEnabledOff'),
@@ -3544,6 +3970,7 @@ export default function SettingsPage() {
   };
 
   const saveRequireKitchenDelivered = async (enabled: boolean) => {
+    if (!isAdmin) return;
     await saveKitchenSetting(
       'requireKitchenDelivered',
       enabled,
@@ -3565,6 +3992,7 @@ export default function SettingsPage() {
   };
 
   const saveServerAppEnabled = async (enabled: boolean) => {
+    if (!isAdmin) return;
     const previous = serverAppEnabledSetting;
     setServerAppEnabledSetting(enabled);
     setSavingServerAppEnabled(true);
@@ -3599,6 +4027,7 @@ export default function SettingsPage() {
   };
 
   const saveServerAppBillPrintingEnabled = async (enabled: boolean) => {
+    if (!isAdmin) return;
     const previous = serverAppBillPrintingEnabledSetting;
     setServerAppBillPrintingEnabledSetting(enabled);
     setSavingServerAppBillPrintingEnabled(true);
@@ -3618,6 +4047,7 @@ export default function SettingsPage() {
   };
 
   const saveKotPrintingEnabled = async (enabled: boolean) => {
+    if (!isAdmin) return;
     await saveKitchenSetting(
       'kotPrintingEnabled',
       enabled,
@@ -3631,6 +4061,7 @@ export default function SettingsPage() {
   };
 
   const saveScheduledOrdersEnabled = async (enabled: boolean) => {
+    if (!isAdmin) return;
     const previous = scheduledOrdersEnabled;
     setScheduledOrdersEnabled(enabled);
     setSavingScheduledOrdersEnabled(true);
@@ -3647,7 +4078,60 @@ export default function SettingsPage() {
     }
   };
 
+  const saveRefundManagerEnabled = async (enabled: boolean) => {
+    if (!canManageRefundPolicy) return;
+    const previous = refundManagerEnabled;
+    markHydrationTouched('refundManagerEnabled');
+    setRefundManagerEnabled(enabled);
+    setSavingRefundPolicy(true);
+    try {
+      const { data } = await api.put('/settings/refunds', {
+        refund_manager_enabled: enabled,
+      });
+      if (typeof data?.refund_manager_enabled === 'boolean') {
+        setRefundManagerEnabled(data.refund_manager_enabled);
+      }
+      toast.success(t('diagnosticsSettingSaved'));
+    } catch {
+      setRefundManagerEnabled(previous);
+      toast.error(t('saveFailed'));
+    } finally {
+      setSavingRefundPolicy(false);
+    }
+  };
+
+  const saveRefundManagerWindow = async (
+    nextWindow: '30m' | '1h' | '2h' | '4h' | 'same_business_day',
+  ) => {
+    if (!canManageRefundPolicy) return;
+    const previous = refundManagerWindow;
+    markHydrationTouched('refundManagerWindow');
+    setRefundManagerWindow(nextWindow);
+    setSavingRefundPolicy(true);
+    try {
+      const { data } = await api.put('/settings/refunds', {
+        refund_manager_window: nextWindow,
+      });
+      if (
+        data?.refund_manager_window === '30m' ||
+        data?.refund_manager_window === '1h' ||
+        data?.refund_manager_window === '2h' ||
+        data?.refund_manager_window === '4h' ||
+        data?.refund_manager_window === 'same_business_day'
+      ) {
+        setRefundManagerWindow(data.refund_manager_window);
+      }
+      toast.success(t('diagnosticsSettingSaved'));
+    } catch {
+      setRefundManagerWindow(previous);
+      toast.error(t('saveFailed'));
+    } finally {
+      setSavingRefundPolicy(false);
+    }
+  };
+
   const saveLoyalty = async (silent = false) => {
+    if (!isAdmin) return;
     setSavingLoyalty(true);
     try {
       const parsedRate = Math.min(100, Math.max(0, parseFloat(globalCashbackPercent) || 0));
@@ -3668,6 +4152,7 @@ export default function SettingsPage() {
   };
 
   const applyGlobalRateToProducts = async () => {
+    if (!canManageCatalog) return;
     setApplyingGlobalRate(true);
     try {
       const res = await api.post('/products/loyalty/apply-global-rate');
@@ -3682,6 +4167,7 @@ export default function SettingsPage() {
   };
 
   const saveDiscount = async (silent = false) => {
+    if (!isAdmin) return;
     setSavingDiscount(true);
     try {
       await api.put('/settings/discount', {
@@ -3704,6 +4190,7 @@ export default function SettingsPage() {
   };
 
   const saveBusinessInfo = async (silent = false) => {
+    if (!isAdmin) return;
     const norm = normalizeOptionalPhone(form.businessPhone, form.countryCode || '');
     if (!norm.valid) {
       toast.error(t('invalidPhoneFormat'));
@@ -3842,6 +4329,7 @@ export default function SettingsPage() {
   };
 
   const saveOrderNumbering = async (silent = false) => {
+    if (!isAdmin) return;
     const prefix = orderNumberForm.prefix.trim();
     if (prefix && !/^[A-Za-z0-9]{0,12}$/.test(prefix)) {
       toast.error(t('orderNumberPrefixInvalid'));
@@ -3887,16 +4375,34 @@ export default function SettingsPage() {
     resetPrinting();
     resetBillTemplate();
     resetCloud();
-    await resetBusiness();
+    if (isAdmin) {
+      await resetBusiness();
+    } else {
+      setForm(savedBusiness);
+      setLoyaltyEnabled(savedLoyaltyEnabled);
+      setGlobalCashbackPercent(savedGlobalCashbackPercent);
+      setDiscountMaxPct(savedDiscountMaxPct);
+      setDiscountMaxAmount(savedDiscountMaxAmount);
+      setDiscountMode(savedDiscountMode);
+      setDiscountRequiresApproval(savedDiscountRequiresApproval);
+      setOrderNumberForm(savedOrderNumberForm);
+    }
   };
 
   const saveAllSettings = async () => {
+    if (!isAdmin && !canManagePrinters && !canManageCloud) return;
     if (savingAllSettingsInFlight.current) return;
     savingAllSettingsInFlight.current = true;
     setSavingAllSettings(true);
     try {
+      const tabsToHydrate = [
+        ...(isAdmin ? ['store'] : []),
+        ...(isAdmin || canManagePrinters ? ['receipts-printers'] : []),
+        ...(isAdmin ? ['loyalty', 'discounts'] : []),
+        ...(canManageCloud ? ['mobile-access'] : []),
+      ];
       await Promise.all(
-        ['store', 'receipts-printers', 'loyalty', 'discounts', 'mobile-access'].map((tab) => {
+        tabsToHydrate.map((tab) => {
           const key = `${currentTenant?.id}:${tab}${tab === 'mobile-access' ? ':status' : ''}`;
           if (loadedSettingsTabs.current.has(key)) return Promise.resolve();
           return startSettingsTabLoad(tab, new AbortController(), false);
@@ -3916,19 +4422,23 @@ export default function SettingsPage() {
     if (saveAllHydrationRun === 0 || !savingAllSettingsInFlight.current) return;
     void (async () => {
       try {
-        if (!normalizeOptionalPhone(form.businessPhone, form.countryCode || '').valid) {
+        if (isAdmin && !normalizeOptionalPhone(form.businessPhone, form.countryCode || '').valid) {
           toast.error(t('invalidPhoneFormat'));
           return;
         }
         await Promise.all([
-          saveBusinessInfo(true),
-          saveLoyalty(true),
-          saveDiscount(true),
-          saveCloud(true),
-          saveOrderNumbering(true),
+          isAdmin ? saveBusinessInfo(true) : Promise.resolve(),
+          isAdmin ? saveLoyalty(true) : Promise.resolve(),
+          isAdmin ? saveDiscount(true) : Promise.resolve(),
+          canManageCloud ? saveCloud(true) : Promise.resolve(),
+          isAdmin ? saveOrderNumbering(true) : Promise.resolve(),
         ]);
-        await savePrinting(true);
-        await saveBillTemplate(true);
+        if (canManagePrinters) {
+          await savePrinting(true);
+        }
+        if (isAdmin) {
+          await saveBillTemplate(true);
+        }
         toast.success(t('allSaved'));
       } catch {
         toast.error(t('allSaveFailed'));
@@ -3981,21 +4491,27 @@ export default function SettingsPage() {
     });
   };
 
-  const isDirty =
-    JSON.stringify(form) !== JSON.stringify(savedBusiness) ||
-    JSON.stringify(printingForm) !== JSON.stringify(savedPrinting) ||
-    JSON.stringify(billForm) !== JSON.stringify(savedBillForm) ||
-    loyaltyEnabled !== savedLoyaltyEnabled ||
-    globalCashbackPercent !== savedGlobalCashbackPercent ||
-    discountMaxPct !== savedDiscountMaxPct ||
-    discountMaxAmount !== savedDiscountMaxAmount ||
-    discountMode !== savedDiscountMode ||
-    discountRequiresApproval !== savedDiscountRequiresApproval ||
-    JSON.stringify(cloudSettings) !== JSON.stringify(savedCloudSettings) ||
-    JSON.stringify(orderNumberForm) !== JSON.stringify(savedOrderNumberForm);
+  const adminDirty =
+    isAdmin &&
+    (JSON.stringify(form) !== JSON.stringify(savedBusiness) ||
+      JSON.stringify(billForm) !== JSON.stringify(savedBillForm) ||
+      loyaltyEnabled !== savedLoyaltyEnabled ||
+      globalCashbackPercent !== savedGlobalCashbackPercent ||
+      discountMaxPct !== savedDiscountMaxPct ||
+      discountMaxAmount !== savedDiscountMaxAmount ||
+      discountMode !== savedDiscountMode ||
+      discountRequiresApproval !== savedDiscountRequiresApproval ||
+      JSON.stringify(orderNumberForm) !== JSON.stringify(savedOrderNumberForm));
+  const printingDirty =
+    canManagePrinters &&
+    printingHydrated &&
+    JSON.stringify(printingForm) !== JSON.stringify(savedPrinting);
+  const cloudDirty =
+    canManageCloud && JSON.stringify(cloudSettings) !== JSON.stringify(savedCloudSettings);
+  const hasSaveableDirtyChanges = adminDirty || printingDirty || cloudDirty;
 
   useEffect(() => {
-    if (!isDirty) return;
+    if (!hasSaveableDirtyChanges) return;
 
     // Block browser reload/close
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -4017,6 +4533,7 @@ export default function SettingsPage() {
         e.stopPropagation();
         setShakeSaveBar(true);
         setTimeout(() => setShakeSaveBar(false), 500);
+        toast.error(t('unsavedChanges'), { id: 'unsaved-changes-nav' });
       }
     };
     document.addEventListener('click', handleClick, { capture: true });
@@ -4025,7 +4542,7 @@ export default function SettingsPage() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('click', handleClick, { capture: true });
     };
-  }, [isDirty]);
+  }, [hasSaveableDirtyChanges, t]);
 
   return (
     <div className="md:h-full md:min-h-0">
@@ -4040,6 +4557,144 @@ export default function SettingsPage() {
           <div className="flex items-center gap-3 mb-6 shrink-0">
             <Settings size={28} className="text-brand" />
             <h1 className="text-2xl font-bold text-foreground">{t('title')}</h1>
+          </div>
+
+          <div ref={searchContainerRef} className="relative mb-3 shrink-0 z-30 md:me-2">
+            <div className="relative flex items-center">
+              <Search
+                size={15}
+                aria-hidden="true"
+                className="pointer-events-none absolute start-2.5 text-muted-foreground"
+              />
+              <input
+                ref={searchInputRef}
+                type="search"
+                role="combobox"
+                aria-expanded={Boolean(searchQuery.trim() && searchOpen)}
+                aria-controls="settings-search-listbox"
+                aria-activedescendant={activeSearchOptionId}
+                aria-autocomplete="list"
+                aria-label={tCommon('search')}
+                data-testid="settings-search-input"
+                value={searchQuery}
+                placeholder={`${tCommon('search')}...`}
+                onFocus={() => setSearchOpen(true)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setSearchOpen(true);
+                  setSelectedSearchIndex(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setSearchOpen(true);
+                    if (searchResults.length > 0) {
+                      shouldScrollSearchOptionRef.current = true;
+                      setSelectedSearchIndex((prev) => (prev + 1) % searchResults.length);
+                    }
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setSearchOpen(true);
+                    if (searchResults.length > 0) {
+                      shouldScrollSearchOptionRef.current = true;
+                      setSelectedSearchIndex(
+                        (prev) => (prev - 1 + searchResults.length) % searchResults.length,
+                      );
+                    }
+                  } else if (e.key === 'Enter') {
+                    if (searchResults.length > 0) {
+                      e.preventDefault();
+                      handleSelectSearchResult(searchResults[activeSearchIndex]);
+                    }
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    if (searchQuery) {
+                      setSearchQuery('');
+                      setSelectedSearchIndex(0);
+                    }
+                    setSearchOpen(false);
+                    searchInputRef.current?.blur();
+                  }
+                }}
+                className="w-full rounded-lg border border-border bg-card ps-8 pe-7 py-1.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-brand focus:ring-1 focus:ring-brand [&::-webkit-search-cancel-button]:hidden"
+              />
+              {searchQuery ? (
+                <button
+                  type="button"
+                  data-testid="settings-search-clear"
+                  aria-label={tCommon('clear')}
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSelectedSearchIndex(0);
+                    searchInputRef.current?.focus();
+                  }}
+                  className="absolute end-1.5 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              ) : (
+                <kbd
+                  aria-hidden="true"
+                  className="pointer-events-none absolute end-2 hidden md:inline-flex items-center rounded border border-border bg-muted px-1 text-[10px] font-mono text-muted-foreground"
+                >
+                  /
+                </kbd>
+              )}
+            </div>
+
+            {searchQuery.trim() && searchOpen && (
+              <div
+                ref={searchListboxRef}
+                id="settings-search-listbox"
+                role="listbox"
+                data-testid="settings-search-results"
+                className="absolute start-0 top-full mt-1.5 max-h-96 w-full md:w-80 lg:w-96 overflow-y-auto rounded-xl border border-border bg-card p-1.5 shadow-xl"
+              >
+                {searchResults.length > 0 ? (
+                  searchResults.map((result, idx) => {
+                    const isSelected = idx === activeSearchIndex;
+                    return (
+                      <button
+                        key={result.id}
+                        id={`settings-search-option-${result.id}`}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        data-testid={`settings-search-result-${result.id}`}
+                        onMouseEnter={() => setSelectedSearchIndex(idx)}
+                        onClick={() => handleSelectSearchResult(result)}
+                        className={`flex w-full flex-col gap-1 rounded-lg px-3 py-2 text-start transition-colors ${
+                          isSelected
+                            ? 'bg-brand/10 text-foreground'
+                            : 'hover:bg-muted text-foreground'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-semibold text-foreground truncate">
+                            {result.title}
+                          </span>
+                          <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                            {result.breadcrumb}
+                          </span>
+                        </div>
+                        {result.hint && (
+                          <p className="text-xs text-muted-foreground line-clamp-2">
+                            {result.hint}
+                          </p>
+                        )}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p
+                    data-testid="settings-search-empty"
+                    className="px-3 py-4 text-center text-sm text-muted-foreground"
+                  >
+                    {tCommon('noResults')}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <nav className="flex md:flex-col gap-0.5 overflow-x-auto md:flex-1 md:min-h-0 md:overflow-x-hidden md:overflow-y-auto md:overscroll-contain border-b md:border-b-0 md:border-e border-border pb-2 md:pb-0 md:pe-2">
@@ -4203,8 +4858,11 @@ export default function SettingsPage() {
               active={activeTab}
               onClick={handleSettingsTabChange}
               attention={
-                cloudDeletionNeedsAction ||
-                (cloudAccountAvailable && Boolean(cloudAccount?.email && !cloudAccount?.verified))
+                isOwner &&
+                (hasStoreAttentionForTenant
+                  ? storeEmailNeedsAttention
+                  : cloudAccountAvailable &&
+                    Boolean(cloudAccount?.email && !cloudAccount?.verified))
               }
             />
             <SettingsNavItem
@@ -4212,6 +4870,12 @@ export default function SettingsPage() {
               value="privacy"
               active={activeTab}
               onClick={handleSettingsTabChange}
+              attention={
+                isOwner &&
+                (hasStoreAttentionForTenant
+                  ? storeDeletionNeedsAttention
+                  : cloudDeletionNeedsAction)
+              }
             />
             <SettingsNavItem
               label={t('tabUpdates')}
@@ -4229,7 +4893,7 @@ export default function SettingsPage() {
         </div>
 
         <div
-          className={`flex-1 min-w-0 md:h-full md:min-h-0 md:overflow-y-auto md:overscroll-contain pb-8 md:pb-12 ${isDirty ? 'pb-32 md:pb-32' : ''}`}
+          className={`flex-1 min-w-0 md:h-full md:min-h-0 md:overflow-y-auto md:overscroll-contain pb-8 md:pb-12 ${hasSaveableDirtyChanges ? 'pb-32 md:pb-32' : ''}`}
         >
           {!isAdmin && (
             <p
@@ -4261,13 +4925,19 @@ export default function SettingsPage() {
           </TabsContent>
 
           <TabsContent value="payments">
-            <PaymentMethodsSettings isAdmin={isAdmin} />
+            <PaymentMethodsSettings
+              isAdmin={isAdmin}
+              canManagePaymentMethods={canManagePaymentMethods}
+            />
           </TabsContent>
 
           {isAdmin && (
             <TabsContent value="appearance">
               <SettingsTabShell>
-                <div className="bg-card rounded-xl border border-border p-6">
+                <div
+                  data-setting-section="appearance-theme"
+                  className="bg-card rounded-xl border border-border p-6"
+                >
                   <div className="flex items-center gap-2 mb-4">
                     <SunMoon size={20} className="text-muted-foreground" />
                     <h2 className="font-semibold text-foreground">{t('themeTitle')}</h2>
@@ -4311,6 +4981,7 @@ export default function SettingsPage() {
                             disabled={savingTheme}
                             onClick={() => {
                               if (!active) onSelect();
+                              else clearKdsThemeOverride();
                             }}
                             className={`text-start rounded-lg border-2 px-4 py-3 transition ${
                               active
@@ -4336,7 +5007,10 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="bg-card rounded-xl border border-border p-6">
+                <div
+                  data-setting-section="orders-layout"
+                  className="bg-card rounded-xl border border-border p-6"
+                >
                   <div className="flex items-center gap-2 mb-4">
                     <LayoutPanelTop size={20} className="text-muted-foreground" />
                     <h2 className="font-semibold text-foreground">{t('ordersLayoutTitle')}</h2>
@@ -4394,7 +5068,10 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="bg-card rounded-xl border border-border p-6">
+                <div
+                  data-setting-section="pos-sorting"
+                  className="bg-card rounded-xl border border-border p-6"
+                >
                   <div className="flex items-center gap-2 mb-4">
                     <ArrowUpDown size={20} className="text-muted-foreground" />
                     <h2 className="font-semibold text-foreground">{t('posSortTitle')}</h2>
@@ -4458,14 +5135,21 @@ export default function SettingsPage() {
 
           {canViewTaxConfiguration && (
             <TabsContent value="tax">
-              <TaxConfigurationPanel isOwner={canManageTaxPacks} />
+              <TaxConfigurationPanel
+                isOwner={canManageTaxPacks}
+                canManageSettings={isAdmin}
+                canManageTaxConfiguration={canManageTaxConfiguration}
+              />
             </TabsContent>
           )}
 
           <TabsContent value="pos">
             <SettingsTabShell>
               {/* POS Display */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="pos-display"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Monitor size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('posDisplay')}</h2>
@@ -4478,7 +5162,9 @@ export default function SettingsPage() {
                   <Toggle
                     value={posSettings.showProductImages}
                     label={t('showProductImages')}
+                    disabled={!isAdmin}
                     onChange={(v) => {
+                      if (!isAdmin) return;
                       posSettings.setShowProductImages(v);
                       toast.success(v ? t('productImagesEnabled') : t('productImagesDisabled'), {
                         id: 'pos-local',
@@ -4489,7 +5175,10 @@ export default function SettingsPage() {
               </div>
 
               {/* POS Workflow */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="pos-workflow"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Users size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('posWorkflow')}</h2>
@@ -4503,7 +5192,9 @@ export default function SettingsPage() {
                     <Toggle
                       value={posSettings.customerMandatory}
                       label={t('customerMandatory')}
+                      disabled={!isAdmin}
                       onChange={(v) => {
+                        if (!isAdmin) return;
                         posSettings.setCustomerMandatory(v);
                         toast.success(
                           v ? t('customerMandatoryEnabled') : t('customerMandatoryDisabled'),
@@ -4521,7 +5212,9 @@ export default function SettingsPage() {
                     <Toggle
                       value={posSettings.enforcePhoneLength}
                       label={t('enforcePhoneLength')}
+                      disabled={!isAdmin}
                       onChange={(v) => {
+                        if (!isAdmin) return;
                         posSettings.setEnforcePhoneLength(v);
                         toast.success(
                           v ? t('enforcePhoneLengthEnabled') : t('enforcePhoneLengthDisabled'),
@@ -4530,7 +5223,10 @@ export default function SettingsPage() {
                       }}
                     />
                   </div>
-                  <div className="flex items-center justify-between gap-4 pt-2 border-t border-border">
+                  <div
+                    data-setting-section="pos-auto-lock"
+                    className="flex items-center justify-between gap-4 pt-2 border-t border-border rounded-lg"
+                  >
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-foreground">{t('autoLockLabel')}</p>
                       <p className="text-sm text-muted-foreground">{t('autoLockHint')}</p>
@@ -4564,7 +5260,10 @@ export default function SettingsPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="flex items-center justify-between pt-3 border-t border-border">
+                  <div
+                    data-setting-section="pos-scheduled-orders"
+                    className="flex items-center justify-between pt-3 border-t border-border rounded-lg"
+                  >
                     <div>
                       <p className="text-sm font-medium text-foreground">
                         {tPos('scheduledOrdersTitle')}
@@ -4584,6 +5283,75 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              <div className="bg-card rounded-xl border border-border p-6 space-y-5">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">
+                    {t('refundPolicyTitle')}
+                  </h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('refundPolicyHint')}</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        {t('refundManagerEnabled')}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {t('refundManagerEnabledHint')}
+                      </p>
+                    </div>
+                    <Toggle
+                      value={refundManagerEnabled}
+                      onChange={(val) => void saveRefundManagerEnabled(val)}
+                      label={t('refundManagerEnabled')}
+                      disabled={
+                        !canManageRefundPolicy || !refundPolicyHydrated || savingRefundPolicy
+                      }
+                      dataTestId="setting-refund-manager-enabled"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between pt-3 border-t border-border">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        {t('refundManagerWindow')}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {t('refundManagerWindowHint')}
+                      </p>
+                    </div>
+                    <select
+                      aria-label={t('refundManagerWindow')}
+                      data-testid="setting-refund-manager-window"
+                      disabled={
+                        !canManageRefundPolicy ||
+                        !refundPolicyHydrated ||
+                        !refundManagerEnabled ||
+                        savingRefundPolicy
+                      }
+                      value={refundManagerWindow}
+                      onChange={(e) =>
+                        void saveRefundManagerWindow(
+                          e.target.value as '30m' | '1h' | '2h' | '4h' | 'same_business_day',
+                        )
+                      }
+                      className="w-48 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand bg-card disabled:opacity-50"
+                    >
+                      <option value="30m">{t('refundWindow30m')}</option>
+                      <option value="1h">{t('refundWindow1h')}</option>
+                      <option value="2h">{t('refundWindow2h')}</option>
+                      <option value="4h">{t('refundWindow4h')}</option>
+                      <option value="same_business_day">{t('refundWindowSameDay')}</option>
+                    </select>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground pt-3 border-t border-border">
+                    {t('refundOwnerUnlimitedNote')}
+                  </p>
+                </div>
+              </div>
+
               <ChargesSettingsCard canManage={isAdmin} />
 
               <div className="bg-orange-50 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-800/40 rounded-xl p-4 text-sm text-orange-800 dark:text-orange-300">
@@ -4591,7 +5359,10 @@ export default function SettingsPage() {
               </div>
 
               {/* Add a cashier — pair another device onto the same POS over the local network */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="pos-pairing"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Smartphone size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('posPairing')}</h2>
@@ -4778,19 +5549,24 @@ export default function SettingsPage() {
 
           <TabsContent value="kitchen-stations">
             <SettingsTabShell>
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="kitchen-stations"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <ChefHat size={20} className="text-muted-foreground" />
                     <h2 className="font-semibold text-foreground">{t('kitchenStations')}</h2>
                   </div>
-                  <button
-                    onClick={openAddStation}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-brand text-white rounded-lg hover:opacity-90 font-medium"
-                  >
-                    <Plus size={14} />
-                    {t('addStation')}
-                  </button>
+                  {canManageKitchenStations && (
+                    <button
+                      onClick={openAddStation}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-brand text-white rounded-lg hover:opacity-90 font-medium"
+                    >
+                      <Plus size={14} />
+                      {t('addStation')}
+                    </button>
+                  )}
                 </div>
                 <p className="text-sm text-muted-foreground mb-5">{t('kitchenStationsHint')}</p>
 
@@ -4843,20 +5619,22 @@ export default function SettingsPage() {
                                   : t('stationNoChef')}
                               </p>
                             </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                onClick={() => openEditStation(station)}
-                                className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded"
-                              >
-                                {tCommon('edit')}
-                              </button>
-                              <button
-                                onClick={() => deleteStation(station.id)}
-                                className="p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
+                            {canManageKitchenStations && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  onClick={() => openEditStation(station)}
+                                  className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded"
+                                >
+                                  {tCommon('edit')}
+                                </button>
+                                <button
+                                  onClick={() => deleteStation(station.id)}
+                                  className="p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -4864,7 +5642,7 @@ export default function SettingsPage() {
                   )}
                 </div>
 
-                {showStationForm && (
+                {canManageKitchenStations && showStationForm && (
                   <Dialog open={showStationForm} onOpenChange={setShowStationForm}>
                     <DialogContent className="max-h-[90dvh] overflow-y-auto">
                       <DialogHeader>
@@ -5103,20 +5881,21 @@ export default function SettingsPage() {
             <QrMenuSettingsTab
               canConnectDrive={canManageGoogleDrive}
               connectingDrive={connectingGoogleDrive}
-              onConnectDrive={() => {
-                void connectGoogleDrive();
-              }}
+              onConnectDrive={connectGoogleDrive}
             />
           </TabsContent>
 
           <TabsContent value="counters">
-            <CountersSettingsTab isOwner={isOwner} />
+            <CountersSettingsTab isOwner={canManageCounters} />
           </TabsContent>
 
           <TabsContent value="kds">
             <SettingsTabShell>
               {/* Kitchen Display System enable toggle */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="kds-enable"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-foreground">{t('kdsEnabledToggle')}</p>
@@ -5125,7 +5904,9 @@ export default function SettingsPage() {
                   <Toggle
                     value={kdsEnabledSetting}
                     label={t('kdsEnabledToggle')}
+                    disabled={!isAdmin}
                     onChange={(v) => {
+                      if (!isAdmin) return;
                       void saveKdsEnabled(v);
                     }}
                   />
@@ -5143,7 +5924,10 @@ export default function SettingsPage() {
                 )}
               </div>
 
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="kds-require-delivered"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-foreground">
@@ -5156,7 +5940,9 @@ export default function SettingsPage() {
                   <Toggle
                     value={requireKitchenDeliveredSetting}
                     label={t('requireKitchenDeliveredToggle')}
+                    disabled={!isAdmin}
                     onChange={(value) => {
+                      if (!isAdmin) return;
                       void saveRequireKitchenDelivered(value);
                     }}
                   />
@@ -5164,11 +5950,19 @@ export default function SettingsPage() {
               </div>
 
               {!kdsEnabledSetting && (
-                <p className="text-sm text-muted-foreground italic">{t('kdsPairingHiddenHint')}</p>
+                <p
+                  data-setting-section="kds-pairing"
+                  className="text-sm text-muted-foreground italic rounded-lg"
+                >
+                  {t('kdsPairingHiddenHint')}
+                </p>
               )}
 
               {kdsEnabledSetting && (
-                <div className="bg-card rounded-xl border border-border p-6">
+                <div
+                  data-setting-section="kds-pairing"
+                  className="bg-card rounded-xl border border-border p-6"
+                >
                   <div className="flex items-center gap-2 mb-4">
                     <ChefHat size={20} className="text-muted-foreground" />
                     <h2 className="font-semibold text-foreground">{t('kds')}</h2>
@@ -5356,14 +6150,17 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              <KdsDefaultViewCard />
-              <CustomerDisplayCard />
+              <KdsDefaultViewCard canManage={canManageKdsView} />
+              <CustomerDisplayCard canManage={isAdmin} />
             </SettingsTabShell>
           </TabsContent>
 
           <TabsContent value="server-app">
             <SettingsTabShell>
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="server-app-enable"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-foreground">{t('serverApp')}</p>
@@ -5372,8 +6169,10 @@ export default function SettingsPage() {
                   <Toggle
                     value={serverAppEnabledSetting}
                     label={t('serverApp')}
+                    disabled={!isAdmin || savingServerAppEnabled}
                     onChange={(v) => {
-                      if (!savingServerAppEnabled) saveServerAppEnabled(v);
+                      if (!isAdmin || savingServerAppEnabled) return;
+                      void saveServerAppEnabled(v);
                     }}
                   />
                 </div>
@@ -5415,13 +6214,19 @@ export default function SettingsPage() {
               )}
 
               {!serverAppEnabledSetting && (
-                <p className="text-sm text-muted-foreground italic">
+                <p
+                  data-setting-section="server-app-pairing"
+                  className="text-sm text-muted-foreground italic rounded-lg"
+                >
                   {t('serverAppPairingHiddenHint')}
                 </p>
               )}
 
               {serverAppEnabledSetting && (
-                <div className="bg-card rounded-xl border border-border p-6">
+                <div
+                  data-setting-section="server-app-printing"
+                  className="bg-card rounded-xl border border-border p-6"
+                >
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-foreground">{t('serverAppBillPrinting')}</p>
@@ -5432,9 +6237,10 @@ export default function SettingsPage() {
                     <Toggle
                       value={serverAppBillPrintingEnabledSetting}
                       label={t('serverAppBillPrinting')}
+                      disabled={!isAdmin || savingServerAppBillPrintingEnabled}
                       onChange={(v) => {
-                        if (!savingServerAppBillPrintingEnabled)
-                          saveServerAppBillPrintingEnabled(v);
+                        if (!isAdmin || savingServerAppBillPrintingEnabled) return;
+                        void saveServerAppBillPrintingEnabled(v);
                       }}
                     />
                   </div>
@@ -5442,7 +6248,10 @@ export default function SettingsPage() {
               )}
 
               {serverAppEnabledSetting && (
-                <div className="bg-card rounded-xl border border-border p-6">
+                <div
+                  data-setting-section="server-app-pairing"
+                  className="bg-card rounded-xl border border-border p-6"
+                >
                   <div className="flex items-center gap-2 mb-4">
                     <Smartphone size={20} className="text-muted-foreground" />
                     <h2 className="font-semibold text-foreground">{t('tablesideOrdering')}</h2>
@@ -5630,7 +6439,10 @@ export default function SettingsPage() {
           <TabsContent value="loyalty">
             <SettingsTabShell>
               {/* Loyalty */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="loyalty-program"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Gift size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('loyaltyProgram')}</h2>
@@ -5643,11 +6455,17 @@ export default function SettingsPage() {
                       <p className="text-sm text-muted-foreground">{t('loyaltyHint')}</p>
                     </div>
                     <button
+                      type="button"
+                      role="switch"
+                      aria-checked={loyaltyEnabled}
+                      aria-label={t('enableLoyalty')}
+                      disabled={!isAdmin}
                       onClick={() => {
+                        if (!isAdmin) return;
                         markHydrationTouched('loyaltyEnabled');
                         setLoyaltyEnabled(!loyaltyEnabled);
                       }}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                         loyaltyEnabled ? 'bg-brand' : 'bg-gray-200 dark:bg-input'
                       }`}
                     >
@@ -5675,13 +6493,15 @@ export default function SettingsPage() {
                           min="0"
                           max="100"
                           step="0.1"
+                          disabled={!isAdmin}
                           value={globalCashbackPercent}
                           onChange={(e) => {
+                            if (!isAdmin) return;
                             markHydrationTouched('globalCashbackPercent');
                             setGlobalCashbackPercent(e.target.value);
                           }}
                           placeholder="0"
-                          className="w-20 px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand focus:border-brand transition-shadow text-end"
+                          className="w-20 px-3 py-2 border border-gray-300 dark:border-border rounded-lg focus:ring-2 focus:ring-brand focus:border-brand transition-shadow text-end disabled:bg-muted disabled:cursor-not-allowed"
                         />
                         <span className="text-muted-foreground font-medium">%</span>
                       </div>
@@ -5690,7 +6510,7 @@ export default function SettingsPage() {
                   {/* Products upgraded from before the tri-state all sit at 0%
                     ("earns nothing"), so the global rate does nothing for them
                     until the owner explicitly opts them in. */}
-                  {loyaltyEnabled && globalRateCandidates > 0 && (
+                  {canManageCatalog && loyaltyEnabled && globalRateCandidates > 0 && (
                     <div className="pt-4 border-t border-border">
                       <p className="font-medium text-foreground">{t('applyGlobalRateTitle')}</p>
                       <p className="text-sm text-muted-foreground mt-1">
@@ -5699,7 +6519,7 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={applyGlobalRateToProducts}
-                        disabled={applyingGlobalRate}
+                        disabled={!canManageCatalog || applyingGlobalRate}
                         className="mt-3 px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-border hover:bg-muted disabled:opacity-50"
                       >
                         {applyingGlobalRate
@@ -5722,7 +6542,10 @@ export default function SettingsPage() {
           <TabsContent value="discounts">
             <SettingsTabShell>
               {/* Discount Limits */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="discount-limits"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Percent size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('discountLimits')}</h2>
@@ -5734,11 +6557,13 @@ export default function SettingsPage() {
                     <p className="text-sm text-muted-foreground mb-2">{t('discountModeHint')}</p>
                     <select
                       value={discountMode}
+                      disabled={!isAdmin}
                       onChange={(e) => {
+                        if (!isAdmin) return;
                         markHydrationTouched('discountMode');
                         setDiscountMode(e.target.value);
                       }}
-                      className="min-w-48 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand bg-card"
+                      className="min-w-48 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand bg-card disabled:bg-muted disabled:cursor-not-allowed"
                     >
                       <option value="both">{t('discountBoth')}</option>
                       <option value="percentage">{t('discountPercentageOnly')}</option>
@@ -5758,12 +6583,14 @@ export default function SettingsPage() {
                           type="number"
                           min={1}
                           max={100}
+                          disabled={!isAdmin}
                           value={discountMaxPct}
                           onChange={(e) => {
+                            if (!isAdmin) return;
                             markHydrationTouched('discountMaxPct');
                             setDiscountMaxPct(normalizeDiscountPercentage(e.target.value));
                           }}
-                          className="w-24 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand"
+                          className="w-24 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand disabled:bg-muted disabled:cursor-not-allowed"
                         />
                         <span className="text-sm text-muted-foreground">{t('percentMaximum')}</span>
                       </div>
@@ -5781,12 +6608,14 @@ export default function SettingsPage() {
                           type="number"
                           min={0}
                           max={999999}
+                          disabled={!isAdmin}
                           value={discountMaxAmount}
                           onChange={(e) => {
+                            if (!isAdmin) return;
                             markHydrationTouched('discountMaxAmount');
                             setDiscountMaxAmount(normalizeDiscountAmount(e.target.value));
                           }}
-                          className="w-24 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand"
+                          className="w-24 px-3 py-1.5 text-sm border border-border rounded-lg outline-none focus:ring-1 focus:ring-brand disabled:bg-muted disabled:cursor-not-allowed"
                         />
                         <span className="text-sm text-muted-foreground">{t('zeroNoLimit')}</span>
                       </div>
@@ -5800,11 +6629,17 @@ export default function SettingsPage() {
                         <p className="text-sm text-muted-foreground">{t('requireApprovalHint')}</p>
                       </div>
                       <button
+                        type="button"
+                        role="switch"
+                        aria-checked={discountRequiresApproval}
+                        aria-label={t('requireApproval')}
+                        disabled={!isAdmin}
                         onClick={() => {
+                          if (!isAdmin) return;
                           markHydrationTouched('discountRequiresApproval');
                           setDiscountRequiresApproval(!discountRequiresApproval);
                         }}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                           discountRequiresApproval ? 'bg-brand' : 'bg-gray-200 dark:bg-input'
                         }`}
                       >
@@ -5826,7 +6661,10 @@ export default function SettingsPage() {
           <TabsContent value="account">
             <SettingsTabShell>
               {/* Account */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="account-details"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <h2 className="font-semibold text-foreground mb-4">{t('account')}</h2>
                 <div className="space-y-3">
                   <div>
@@ -5849,6 +6687,7 @@ export default function SettingsPage() {
               </div>
               {isOwner && (
                 <div
+                  data-setting-section="account-contact-email"
                   className={`rounded-xl border p-6 ${cloudAccountAvailable && cloudAccount?.email && !cloudAccount.verified ? 'border-red-200 dark:border-red-800/40 bg-red-50/40 dark:bg-red-950/20' : 'border-border bg-card'}`}
                 >
                   <div className="flex items-start justify-between gap-4">
@@ -5906,19 +6745,24 @@ export default function SettingsPage() {
                       className="mt-4"
                       disabled={cloudAccountBusy}
                       onClick={async () => {
+                        const tenantId = getActiveTenantId();
+                        if (tenantId === null) return;
                         setCloudAccountBusy(true);
                         try {
                           await api.post('/settings/cloud/account/verification');
+                          if (getActiveTenantId() !== tenantId) return;
                           toast.success(t('verificationEmailQueued'));
                           await fetchCloudAccount();
                         } catch (err) {
-                          const detail = (err as { response?: { data?: { error?: string } } })
-                            .response?.data?.error;
-                          toast.error(
-                            detail
-                              ? `${t('verificationEmailFailed')}: ${detail}`
-                              : t('verificationEmailFailed'),
-                          );
+                          if (getActiveTenantId() === tenantId) {
+                            const detail = (err as { response?: { data?: { error?: string } } })
+                              .response?.data?.error;
+                            toast.error(
+                              detail
+                                ? `${t('verificationEmailFailed')}: ${detail}`
+                                : t('verificationEmailFailed'),
+                            );
+                          }
                         } finally {
                           setCloudAccountBusy(false);
                         }
@@ -5936,19 +6780,8 @@ export default function SettingsPage() {
                         <Toggle
                           value={Boolean(cloudAccount?.product_updates)}
                           label={t('cloudPrefProductUpdates')}
-                          onChange={async (value) => {
-                            setCloudAccountBusy(true);
-                            try {
-                              const { data } = await api.put(
-                                '/settings/cloud/account/preferences',
-                                { product_updates: value },
-                              );
-                              setCloudAccount(data);
-                            } catch {
-                              toast.error(t('couldNotSavePreference'));
-                            } finally {
-                              setCloudAccountBusy(false);
-                            }
+                          onChange={(value) => {
+                            void updateCloudAccountPreference({ product_updates: value });
                           }}
                         />
                       </label>
@@ -5957,19 +6790,8 @@ export default function SettingsPage() {
                         <Toggle
                           value={Boolean(cloudAccount?.marketing)}
                           label={t('cloudPrefMarketing')}
-                          onChange={async (value) => {
-                            setCloudAccountBusy(true);
-                            try {
-                              const { data } = await api.put(
-                                '/settings/cloud/account/preferences',
-                                { marketing: value },
-                              );
-                              setCloudAccount(data);
-                            } catch {
-                              toast.error(t('couldNotSavePreference'));
-                            } finally {
-                              setCloudAccountBusy(false);
-                            }
+                          onChange={(value) => {
+                            void updateCloudAccountPreference({ marketing: value });
                           }}
                         />
                       </label>
@@ -5985,7 +6807,10 @@ export default function SettingsPage() {
           <TabsContent value="privacy">
             <SettingsTabShell>
               <OfflineModeCard canManage={tenantCan(currentTenant, 'offline-mode.manage')} />
-              <div className="bg-card rounded-xl border border-border p-6 space-y-4">
+              <div
+                data-setting-section="privacy-telemetry"
+                className="bg-card rounded-xl border border-border p-6 space-y-4"
+              >
                 <div className="flex items-center gap-2">
                   <Lock size={20} className="text-muted-foreground" />
                   <div>
@@ -5998,15 +6823,18 @@ export default function SettingsPage() {
                     {tAnalytics('settingsLabel')}
                   </legend>
                   {(['full', 'anonymous', 'off'] as const).map((level) => (
-                    <label key={level} className="flex items-start gap-3 cursor-pointer">
+                    <label
+                      key={level}
+                      className={`flex items-start gap-3 ${!isAdmin || savingAnalytics ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                    >
                       <input
                         type="radio"
                         name="product-analytics-level"
                         value={level}
                         checked={analyticsLevel === level}
-                        disabled={savingAnalytics}
+                        disabled={!isAdmin || savingAnalytics}
                         onChange={() => void saveAnalyticsLevel(level)}
-                        className="mt-0.5 border-gray-300 dark:border-border text-brand focus:ring-brand"
+                        className="mt-0.5 border-gray-300 dark:border-border text-brand focus:ring-brand disabled:cursor-not-allowed"
                       />
                       <span className="text-sm text-foreground">
                         {tAnalytics(
@@ -6023,13 +6851,15 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted-foreground">{tAnalytics('settingsHint')}</p>
 
                 <div className="border-t border-border pt-4">
-                  <label className="flex items-center gap-3 cursor-pointer">
+                  <label
+                    className={`flex items-center gap-3 ${!isAdmin || savingDiagnosticsConsent ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                  >
                     <input
                       type="checkbox"
                       checked={diagnosticsConsent}
-                      disabled={savingDiagnosticsConsent}
+                      disabled={!isAdmin || savingDiagnosticsConsent}
                       onChange={(e) => saveDiagnosticsConsent(e.target.checked)}
-                      className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                      className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand disabled:cursor-not-allowed"
                     />
                     <span className="text-sm text-foreground">{t('storeDiagnostics')}</span>
                   </label>
@@ -6038,7 +6868,10 @@ export default function SettingsPage() {
               </div>
 
               {isOwner && (
-                <div className="rounded-xl border border-border bg-card p-6">
+                <div
+                  data-setting-section="cloud-privacy-controls"
+                  className="rounded-xl border border-border bg-card p-6"
+                >
                   <h2 className="font-semibold text-foreground">{t('cloudPrivacyControls')}</h2>
                   <p className="mt-2 text-sm text-muted-foreground">{t('cloudStopReversible')}</p>
                   {cloudAccount?.deletion_request && (
@@ -6064,10 +6897,14 @@ export default function SettingsPage() {
                     <Button
                       variant="outline"
                       onClick={async () => {
+                        const tenantId = getActiveTenantId();
+                        if (tenantId === null) return;
                         if (!(await confirm(t('cloudStopAllConfirm')))) return;
+                        if (getActiveTenantId() !== tenantId) return;
                         try {
                           const { data } = await api.post('/settings/cloud/stop-all');
-                          setCloudStatus({
+                          if (getActiveTenantId() !== tenantId) return;
+                          const nextCloudStatus = {
                             cloud_registration_status:
                               data.cloud_registration_status || 'unregistered',
                             cloud_services_disabled_by_user: !!data.cloud_services_disabled_by_user,
@@ -6076,7 +6913,11 @@ export default function SettingsPage() {
                             cloud_last_heartbeat: data.cloud_last_heartbeat || null,
                             cloud_last_error: data.cloud_last_error || null,
                             cloud_deletion_status: data.cloud_deletion_status || '',
-                          });
+                          };
+                          setCloudStatus(nextCloudStatus);
+                          if (isOwnerForTenant(tenantId)) {
+                            syncCloudAttentionStatus(tenantId, nextCloudStatus);
+                          }
                           setCloudSettings((previous) => ({
                             ...previous,
                             cloud_sync_enabled: !!data.cloud_sync_enabled,
@@ -6092,10 +6933,13 @@ export default function SettingsPage() {
                           setAnalyticsLevel('off');
                           setDiagnosticsConsent(false);
                           await fetchCloudAccount();
+                          if (getActiveTenantId() !== tenantId) return;
                           notifyCloudAccountStatusChanged();
                           toast.success(t('cloudAllStopped'));
                         } catch {
-                          toast.error(t('cloudStopFailed'));
+                          if (getActiveTenantId() === tenantId) {
+                            toast.error(t('cloudStopFailed'));
+                          }
                         }
                       }}
                     >
@@ -6156,6 +7000,10 @@ export default function SettingsPage() {
           >
             <PrintersSettingsTab
               isActive={activeTab === 'receipts-printers'}
+              isAdmin={isAdmin}
+              canManagePrinters={canManagePrinters}
+              printingHydrated={printingHydrated}
+              printingHydrationFailed={printingHydrationFailed}
               hwPrinters={hwPrinters}
               setHwPrinters={setHwPrinters}
               printingForm={printingForm}
@@ -6170,6 +7018,7 @@ export default function SettingsPage() {
               pulseCustomMethods={pulseCustomMethods}
               markHydrationTouched={markHydrationTouched}
               onPersistPrintMethod={(method) => {
+                if (!canManagePrinters) return;
                 setPrintMethod(method);
                 printingFormRef.current = { ...printingFormRef.current, printMethod: method };
                 setSavedPrinting((prev) => ({ ...prev, printMethod: method }));
@@ -6182,6 +7031,7 @@ export default function SettingsPage() {
           <TabsContent value="data">
             <DatabaseSettingsTab
               isOwner={canManageDatabase}
+              canManageGoogleDrive={canManageGoogleDrive}
               masterPinStatus={masterPinStatus}
               backups={backups}
               backupsLoading={backupsLoading}
@@ -6230,18 +7080,23 @@ export default function SettingsPage() {
           <TabsContent value="whatsapp">
             <SettingsTabShell>
               {!whatsappEnabled ? (
-                <WhatsAppEnableCard />
+                <WhatsAppEnableCard canManage={canManageWhatsapp} />
               ) : (
-                <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+                <div
+                  data-setting-section="whatsapp-integration"
+                  className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4"
+                >
                   <div>
                     <p className="font-semibold text-foreground">{tWhatsappSettings('enabled')}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {tWhatsappSettings('enabledHint')}
                     </p>
                   </div>
-                  <Button asChild variant="outline" size="sm">
-                    <Link href="/whatsapp">{tWhatsappSettings('openConnection')}</Link>
-                  </Button>
+                  {canUseWhatsapp && (
+                    <Button asChild variant="outline" size="sm">
+                      <Link href="/whatsapp">{tWhatsappSettings('openConnection')}</Link>
+                    </Button>
+                  )}
                 </div>
               )}
             </SettingsTabShell>
@@ -6251,7 +7106,10 @@ export default function SettingsPage() {
             {canManageMobileAccess ? (
               <SettingsTabShell title={t('tabMobileAccess')}>
                 {/* FloAdmin — reporting sync */}
-                <div className="bg-card rounded-xl border border-border p-6 space-y-5">
+                <div
+                  data-setting-section="floadmin-reporting"
+                  className="bg-card rounded-xl border border-border p-6 space-y-5"
+                >
                   <div className="flex items-center gap-2">
                     <Cloud size={20} className="text-brand" />
                     <div>
@@ -6278,8 +7136,12 @@ export default function SettingsPage() {
                         </p>
                       </div>
                       <button
-                        onClick={() => setShowInitializeCloudConfirm(true)}
-                        className="px-4 py-2 bg-brand text-white text-sm font-medium rounded-lg hover:opacity-90"
+                        disabled={!canManageCloud}
+                        onClick={() => {
+                          if (!canManageCloud) return;
+                          setShowInitializeCloudConfirm(true);
+                        }}
+                        className="px-4 py-2 bg-brand text-white text-sm font-medium rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {t('cloudInitializeButton')}
                       </button>
@@ -6370,8 +7232,8 @@ export default function SettingsPage() {
                           cloudStatus.cloud_registration_status !== 'deleted' && (
                             <button
                               onClick={() => registerCloud('')}
-                              disabled={registeringCloud}
-                              className="px-4 py-2 text-sm bg-brand text-white rounded-lg hover:opacity-90 disabled:opacity-50 font-medium shrink-0"
+                              disabled={!canManageCloud || registeringCloud}
+                              className="px-4 py-2 text-sm bg-brand text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium shrink-0"
                             >
                               {registeringCloud ? t('registering') : t('registerWithFloadmin')}
                             </button>
@@ -6384,18 +7246,22 @@ export default function SettingsPage() {
                             {t('cloudManagedAutomatically')}
                           </p>
 
-                          <label className="flex items-start gap-3 cursor-pointer">
+                          <label
+                            className={`flex items-start gap-3 ${canManageCloud ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                          >
                             <input
                               type="checkbox"
+                              disabled={!canManageCloud}
                               checked={cloudSettings.cloud_sync_enabled}
                               onChange={(e) => {
+                                if (!canManageCloud) return;
                                 markHydrationTouched('cloud_sync_enabled');
                                 setCloudSettings({
                                   ...cloudSettings,
                                   cloud_sync_enabled: e.target.checked,
                                 });
                               }}
-                              className="mt-0.5 rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                              className="mt-0.5 rounded border-gray-300 dark:border-border text-brand focus:ring-brand disabled:cursor-not-allowed"
                             />
                             <div>
                               <span className="text-sm font-medium text-foreground block">
@@ -6425,7 +7291,10 @@ export default function SettingsPage() {
                 </div>
 
                 {/* RevFlo — consolidated: download/QR + app (pairing) code + paired devices */}
-                <div className="bg-card rounded-xl border border-border p-6 space-y-5">
+                <div
+                  data-setting-section="revflo-mobile"
+                  className="bg-card rounded-xl border border-border p-6 space-y-5"
+                >
                   <div className="flex items-center gap-2">
                     <Smartphone size={20} className="text-muted-foreground" />
                     <div>
@@ -6598,7 +7467,10 @@ export default function SettingsPage() {
             <SettingsTabShell title={t('tabOrderflow')}>
               <CloudConnectorSettings guestQrEnabled={guestQrOrderingEnabled} canManage={isAdmin} />
               {/* OrderFlow — online orders */}
-              <div className="bg-card rounded-xl border border-border p-6 space-y-4">
+              <div
+                data-setting-section="orderflow-online-orders"
+                className="bg-card rounded-xl border border-border p-6 space-y-4"
+              >
                 <div className="flex items-center gap-2">
                   <Zap size={20} className="text-amber-500" />
                   <div>
@@ -6609,18 +7481,22 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <label className="flex items-center gap-3 cursor-pointer">
+                <label
+                  className={`flex items-center gap-3 ${canManageCloud ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                >
                   <input
                     type="checkbox"
+                    disabled={!canManageCloud}
                     checked={cloudSettings.cloud_orders_enabled}
                     onChange={(e) => {
+                      if (!canManageCloud) return;
                       markHydrationTouched('cloud_orders_enabled');
                       setCloudSettings({
                         ...cloudSettings,
                         cloud_orders_enabled: e.target.checked,
                       });
                     }}
-                    className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                    className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand disabled:cursor-not-allowed"
                   />
                   <span className="text-sm text-foreground">{t('enableOnlineOrderPolling')}</span>
                 </label>
@@ -6646,7 +7522,10 @@ export default function SettingsPage() {
           {/* About tab */}
           <TabsContent value="about">
             <SettingsTabShell>
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="about-flocafe"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <h2 className="font-semibold text-foreground mb-4">{t('aboutFloCafe')}</h2>
                 <p className="text-sm text-muted-foreground mb-6">{t('aboutDescription')}</p>
                 <div className="space-y-3">
@@ -6695,11 +7574,22 @@ export default function SettingsPage() {
                     </svg>
                     {t('aboutWebsite')}
                   </a>
+                  <a
+                    href="https://github.com/receipt-print-hq/escpos-printer-db"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-sm text-muted-foreground hover:underline"
+                  >
+                    {t('printerProfileCredit')}
+                  </a>
                 </div>
               </div>
 
               {/* More Apps — moved here from the old Integrations tab */}
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="more-apps"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <Smartphone size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('moreApps')}</h2>
@@ -6781,7 +7671,10 @@ export default function SettingsPage() {
           {/* Software Updates tab */}
           <TabsContent value="updates">
             <SettingsTabShell>
-              <div className="bg-card rounded-xl border border-border p-6">
+              <div
+                data-setting-section="software-updates"
+                className="bg-card rounded-xl border border-border p-6"
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <RefreshCw size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('updates')}</h2>
@@ -6929,14 +7822,19 @@ export default function SettingsPage() {
                   updateStatus?.status !== 'linux-managed' && (
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={handleCheckUpdates}
+                        type="button"
+                        onClick={() => {
+                          if (!isAdmin) return;
+                          handleCheckUpdates();
+                        }}
                         disabled={
+                          !isAdmin ||
                           updateStatus?.status === 'checking' ||
                           updateStatus?.status === 'available' ||
                           updateStatus?.status === 'downloading' ||
                           updateStatus?.status === 'ready-to-install'
                         }
-                        className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 bg-brand text-white hover:opacity-90"
+                        className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-brand text-white hover:opacity-90"
                       >
                         <RefreshCw
                           size={16}
@@ -6946,9 +7844,14 @@ export default function SettingsPage() {
                       </button>
                       {updateStatus?.status === 'available' && (
                         <button
-                          onClick={() => void handleDownloadUpdate()}
+                          type="button"
+                          disabled={!isAdmin}
+                          onClick={() => {
+                            if (!isAdmin) return;
+                            void handleDownloadUpdate();
+                          }}
                           data-testid="settings-download-update"
-                          className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border border-brand text-brand hover:bg-brand/10"
+                          className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border border-brand text-brand hover:bg-brand/10 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {tUpdate('downloadNow')}
                         </button>
@@ -6959,8 +7862,8 @@ export default function SettingsPage() {
 
               {/* #463: beta/pre-release channel opt-in; feature-detects the
               beta-release-channel IPC contract and degrades visibly when absent. */}
-              {isElectron && <AutoUpdateCheckToggle />}
-              {isElectron && <BetaChannelToggle />}
+              {isElectron && <AutoUpdateCheckToggle disabled={!isAdmin} />}
+              {isElectron && <BetaChannelToggle disabled={!isAdmin} />}
             </SettingsTabShell>
           </TabsContent>
         </div>
@@ -7022,7 +7925,7 @@ export default function SettingsPage() {
       />
 
       <HealthCheckDialog
-        open={healthCheckOpen}
+        open={canManageDatabase && healthCheckOpen}
         onOpenChange={setHealthCheckOpen}
         report={healthReport}
         applying={applyingFixes}
@@ -7030,7 +7933,7 @@ export default function SettingsPage() {
       />
 
       <InitializeDatabaseDialog
-        open={initializeDbOpen}
+        open={canManageDatabase && initializeDbOpen}
         onOpenChange={setInitializeDbOpen}
         onConfirm={handleInitializeDatabase}
         onSuccess={() => {
@@ -7043,7 +7946,7 @@ export default function SettingsPage() {
         }}
       />
       <CurrencyResetDialog
-        open={Boolean(currencyResetTarget)}
+        open={isAdmin && canManageDatabase && Boolean(currencyResetTarget)}
         targetCurrency={currencyResetTarget}
         onOpenChange={(open) => {
           if (!open) setCurrencyResetTarget('');
@@ -7053,8 +7956,13 @@ export default function SettingsPage() {
           window.location.replace('/setup');
         }}
       />
-      {isAdmin && isDirty && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none animate-in slide-in-from-bottom-5 duration-300">
+      {hasSaveableDirtyChanges && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="settings-unsaved-bar"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none animate-in slide-in-from-bottom-5 duration-300"
+        >
           <div
             className={`bg-gray-900 text-white px-6 py-4 rounded-full shadow-2xl flex items-center gap-6 pointer-events-auto ${shakeSaveBar ? 'animate-shake' : ''}`}
           >

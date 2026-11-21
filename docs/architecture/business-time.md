@@ -29,22 +29,15 @@ machine clock.
 That form is **not** what `new Date(string)` expects. In V8, a space-delimited timestamp parses as
 machine-local time, so a naive parse shifts every reading by the developer's own UTC offset.
 
-`parseDbTimestamp` in the backend handles both stored forms:
-
-```ts
-export function parseDbTimestamp(ts: string | null | undefined): Date {
-  if (!ts) return new Date(NaN);
-  // Space form: append a Z so V8 parses it as UTC instead of machine-local.
-  return /^\d{4}-\d{2}-\d{2} /.test(ts) ? new Date(`${ts.replace(' ', 'T')}Z`) : new Date(ts);
-}
-```
-
-It returns an invalid `Date` for a missing value rather than the epoch, so a missing timestamp
+`parseDbTimestamp` in [`main/db.ts`](../../main/db.ts) handles both stored forms: it converts
+space-delimited UTC strings (`YYYY-MM-DD ...` and extended `+YYYYYY-MM-DD ...` years) to ISO
+`T...Z` form so V8 parses them as UTC rather than machine-local time, passes ISO strings through,
+and returns an invalid `Date` for a missing value rather than the epoch, so a missing timestamp
 fails a comparison instead of silently reading as 1970.
 
-The frontend has an identical helper in
-[`frontend/src/lib/utils.ts`](../../frontend/src/lib/utils.ts). Use one or the other; never call
-`new Date()` on a value that came out of the database.
+The frontend has the matching `parseDbTimestamp` helper in
+[`frontend/src/lib/utils.ts`](../../frontend/src/lib/utils.ts) for standard `YYYY-MM-DD` and ISO
+timestamps. Use one or the other; never call `new Date()` on a value that came out of the database.
 
 ## Day boundaries
 
@@ -109,7 +102,7 @@ function tenantTimezone(): string {
   cash closures, shift sessions, and bill business-day checks resolve the same window rather than a
   second, divergent one.
 - [`main/services/refund.ts`](../../main/services/refund.ts) resolves inline, because a wrong
-  business-day end there can wrongly accept or reject a late refund.
+  business-day end there can wrongly accept or reject a manager-approved refund.
 
 Pass `getSettingValue('timezone')` straight into `dayBoundsInTimezone` and you have reintroduced
 the trap. Go through the snapshot.
@@ -159,15 +152,13 @@ isolated in a shared drawer. For cross-shift bill tax attribution on shift X/Z r
 
 ### Refunds
 
-`main/services/refund.ts` allows a refund freely within `REFUND_WINDOW_MS` of order creation (or of
-`released_at` for released scheduled orders; unreleased scheduled orders never age into the late
-refund tier), which is one hour. After that window the anchor timestamp's business day is computed
-with `localDateInTimezone`, and if the current instant has passed that day's end the refund is
-refused with a `409`. Before the `409`, a late refund narrows the approver to owners and requires
-that owner's Staff Approval PIN. The device Master PIN never authorizes a refund.
-
-`parseDbTimestamp` is used on both ends of that comparison, so the boundary is an instant
-comparison in UTC rather than a string comparison.
+`main/services/refund.ts` bounds manager refund approval by the anchor timestamp's
+(`released_at || created_at`) business day, computed with `localDateInTimezone` and
+`dayBoundsInTimezone`, alongside the configured `refund_manager_window` duration. `parseDbTimestamp`
+is used on both ends of that comparison so the boundary is evaluated as a UTC instant rather than a
+string comparison. See
+[product invariants](../reference/product-invariants.md#refunds-and-staff-approval-pins) for the
+approval tiers and refund policy settings.
 
 ### Scheduled kitchen release
 

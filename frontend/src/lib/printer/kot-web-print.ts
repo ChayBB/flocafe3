@@ -4,6 +4,7 @@ import type { Order } from '@/lib/types';
 import { createTranslator } from 'use-intl/core';
 import { getCachedMessages } from '@/lib/i18n/loader';
 import { LANGUAGES, getLanguageDirection, type Language } from '@/lib/i18n/languages';
+import { awaitPrintPolicyBootstrap } from '@/lib/print-policy-bootstrap';
 import { defaultPrintLanguagePolicy, resolveKotLanguage } from '@print/policy';
 import {
   directionalText,
@@ -32,6 +33,8 @@ export interface KotWebPrintOptions {
   stationName?: string;
   /** Store timezone used for business-local time formatting. */
   timezone?: string;
+  /** Print the Order Number in a large bold callout banner on KOT. Default: true */
+  showLargeOrderNumber?: boolean;
 }
 
 /** Resolve the KOT ticket language: fixed policy language or the UI language. */
@@ -47,6 +50,13 @@ export function resolveKotTicketLanguage(language?: Language): Language {
   } catch {
     return 'en';
   }
+}
+
+/** Waits for any in-flight auth print-policy bootstrap before resolving the KOT ticket language. */
+export async function resolveReadyKotTicketLanguage(language?: Language): Promise<Language> {
+  if (language) return language;
+  await awaitPrintPolicyBootstrap();
+  return resolveKotTicketLanguage();
 }
 function translatorFor(lang: Language) {
   const locale = LANGUAGES[lang]?.locale ?? 'en';
@@ -188,6 +198,8 @@ export function generateKotHtml(order: Order, opts: KotWebPrintOptions = {}): st
     orderNotes?: unknown;
     notes?: unknown;
   };
+  const showLargeOrderNumber = opts.showLargeOrderNumber !== false;
+  const cleanOrderNumber = orderNumber.text.trim().replace(/^#/, '');
   const orderNotes =
     [order.special_instructions, orderShape.order_notes, orderShape.orderNotes, orderShape.notes]
       .find((val): val is string => typeof val === 'string' && val.trim().length > 0)

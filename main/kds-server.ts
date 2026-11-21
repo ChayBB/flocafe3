@@ -38,15 +38,30 @@ import {
   projectKdsOrder,
   KDS_MOVED_FROM_TABLE_SQL,
   annotateKdsItems,
+  recordAuthAudit,
   UNRELEASED_KDS_ORDER_ITEM_ERROR,
 } from './db';
-import { setupKdsWebSocket, notifyKdsUpdate, buildActiveOrdersSnapshot } from './services/kds';
+import {
+  buildActiveOrdersSnapshot,
+  checkKdsWebSocketAdmission,
+  setupKdsWebSocket,
+  notifyKdsUpdate,
+} from './services/kds';
+import { setKdsPort } from './server-state';
 import { reconcileActiveOrderStatusFromItems } from './services/orders';
 import { cloudSync } from './services/cloud-sync';
 import { readKdsPriceEntry } from './services/kds-price-entry';
 import { applyPendingPriceEntry } from './routes/orders';
 import { getJWTSecret } from './security/jwt-secret';
-import { normalizeEmail, parseCategoryIds } from './routes/auth';
+import { asyncHandler } from './middleware/async-handler';
+import {
+  authenticatePinLogin,
+  handlePasswordChange,
+  handlePinChange,
+  normalizeEmail,
+  parseCategoryIds,
+  tokenExpSeconds,
+} from './routes/auth';
 import {
   rateLimit,
   authRateLimit,
@@ -59,6 +74,7 @@ import {
   corsOptions,
   isTokenRevoked,
   isTokenStale,
+  nextTokenIatSeconds,
   revokeToken,
 } from './middleware/security';
 import { buildCspHeader } from './csp';
@@ -254,8 +270,42 @@ export function startKdsServer(): Promise<void> {
           res.json({
             language: s.language || null,
             country: s.country || null,
-            kds_default_view: s.kds_default_view === 'kanban' ? 'kanban' : 'tabs',
+            kds_default_view: s.kds_default_view === 'tabs' ? 'tabs' : 'kanban',
+            theme_mode:
+              s.theme_mode === 'light' || s.theme_mode === 'dark' || s.theme_mode === 'system'
+                ? s.theme_mode
+                : null,
           });
+        } catch (error: any) {
+          console.error('[API] Internal error:', error);
+          res.status(500).json({ error: 'Internal server error' });
+        }
+      },
+    );
+
+    app.put(
+      '/api/kds/view',
+      expressRateLimit({
+        windowMs: 60 * 1000,
+        limit: 100,
+        standardHeaders: true,
+        legacyHeaders: false,
+      }),
+      requireAuth,
+      (req: Request, res: Response) => {
+        if (!isKdsEnabled()) {
+          return res.status(403).json({ error: 'KDS is disabled for this business' });
+        }
+        try {
+          const view = req.body?.kds_default_view ?? req.body?.view;
+          if (!['tabs', 'kanban'].includes(view)) {
+            return res.status(400).json({ error: 'kds_default_view must be "tabs" or "kanban"' });
+          }
+          const db = getDatabase();
+          db.prepare(
+            'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)',
+          ).run('kds_default_view', view, now());
+          res.json({ kds_default_view: view });
         } catch (error: any) {
           console.error('[API] Internal error:', error);
           res.status(500).json({ error: 'Internal server error' });
@@ -316,10 +366,17 @@ export function startKdsServer(): Promise<void> {
         resetSuccessfulLogin(ip);
         recordClockIn(db, user.id, 'kds');
 
+        const iat = nextTokenIatSeconds();
         const token = jwt.sign(
-          { userId: user.id, email: user.email, role: user.role, jti: randomUUID() },
+          {
+            userId: user.id,
+            email: user.email,
+            role: user.role,
+            jti: randomUUID(),
+            iat,
+            exp: tokenExpSeconds(false, iat),
+          },
           getJWTSecret(),
-          { expiresIn: '24h' },
         );
 
         res.json({
@@ -329,6 +386,7 @@ export function startKdsServer(): Promise<void> {
             name: user.name,
             email: user.email,
             role: user.role,
+            has_pin: Boolean(user.pin_hash),
             category_ids: categoryIdsForRole(user.role, user.category_ids),
             station_ids: stationIds,
             station_assignments_configured: stationAssignmentsConfigured,
@@ -341,6 +399,191 @@ export function startKdsServer(): Promise<void> {
         res.status(500).json({ error: 'Internal server error' });
       }
     });
+
+    app.get('/api/auth/pin-users', authRateLimit({ max: 600 }), (_req: Request, res: Response) => {
+      if (!isKdsEnabled()) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      try {
+        const db = getDatabase();
+        const rows = db
+          .prepare(
+            `SELECT id, name, role
+             FROM users
+             WHERE is_active = 1 AND pin_hash IS NOT NULL
+             ORDER BY CASE role
+               WHEN 'owner' THEN 1
+               WHEN 'manager' THEN 2
+               WHEN 'cashier' THEN 3
+               WHEN 'server' THEN 4
+               WHEN 'chef' THEN 5
+               ELSE 6
+             END, name COLLATE NOCASE ASC`,
+          )
+          .all() as Array<{ id: string; name: string; role: string }>;
+
+        const eligible = rows.filter((row) => {
+          if (!hasPermission(row.id, 'kitchen.use')) return false;
+          const stationIds = getUserKdsStationIds(db, row.id);
+          const stationAssignmentsConfigured = hasUserKdsStationAssignments(db, row.id);
+          if (!stationIds || stationAssignmentsConfigured === null) return false;
+          if (stationAssignmentsConfigured && stationIds.length === 0) return false;
+          return true;
+        });
+
+        res.json({
+          users: eligible.map((row) => ({
+            id: String(row.id),
+            name: String(row.name),
+            role: String(row.role),
+          })),
+        });
+      } catch (error: unknown) {
+        console.error('[KDS] PIN users error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    });
+
+    app.post(
+      '/api/auth/pin-login',
+      authRateLimit({
+        max: 600,
+        skipSuccessfulRequests: true,
+        onRateLimited: (req: Request) => {
+          const ip = req.ip || req.socket.remoteAddress || 'unknown';
+          const rawUserId = req.body?.user_id;
+          const userId =
+            typeof rawUserId === 'string' && rawUserId.trim() ? rawUserId.trim() : null;
+          recordAuthAudit(getDatabase(), {
+            userId,
+            eventType: 'pin_login',
+            outcome: 'rate_limited',
+            ipAddress: ip,
+            details: { reason: 'endpoint_rate_limited', service: 'kds' },
+          });
+        },
+      }),
+      async (req: Request, res: Response) => {
+        if (!isKdsEnabled()) {
+          return res.status(404).json({ error: 'Not found' });
+        }
+        try {
+          const ip = req.ip || req.socket.remoteAddress || 'unknown';
+          const { user_id, pin, rememberMe, remember_me } = req.body || {};
+          const userId = typeof user_id === 'string' ? user_id.trim() : '';
+          const rawPin = typeof pin === 'string' || typeof pin === 'number' ? String(pin) : '';
+
+          const db = getDatabase();
+          if (!userId || !rawPin) {
+            recordAuthAudit(db, {
+              userId: userId || null,
+              eventType: 'pin_login',
+              outcome: 'failure',
+              ipAddress: ip,
+              details: {
+                service: 'kds',
+                reason:
+                  !userId && !rawPin
+                    ? 'missing_credentials'
+                    : !userId
+                      ? 'missing_user_id'
+                      : 'missing_pin',
+              },
+            });
+            return res.status(400).json({ error: 'user_id and pin are required' });
+          }
+
+          const remember = !!(rememberMe ?? remember_me);
+          const result = await authenticatePinLogin<{
+            stationIds: string[];
+            stationAssignmentsConfigured: boolean;
+          }>({
+            db,
+            userId,
+            rawPin,
+            ip,
+            remember,
+            service: 'kds',
+            authorizeUser: (currentDb, currentUser) => {
+              if (!hasPermission(currentUser.id, 'kitchen.use')) {
+                recordAuthAudit(currentDb, {
+                  userId: currentUser.id,
+                  eventType: 'pin_login',
+                  outcome: 'failure',
+                  ipAddress: ip,
+                  details: { service: 'kds', reason: 'permission_denied' },
+                });
+                return {
+                  ok: false,
+                  status: 403,
+                  body: {
+                    error: 'Access denied. Only kitchen staff allowed.',
+                    code: 'permission_denied',
+                  },
+                };
+              }
+
+              const stationIds = getUserKdsStationIds(currentDb, currentUser.id);
+              const stationAssignmentsConfigured = hasUserKdsStationAssignments(
+                currentDb,
+                currentUser.id,
+              );
+              if (!stationIds || stationAssignmentsConfigured === null) {
+                return {
+                  ok: false,
+                  status: 500,
+                  body: { error: 'Could not load station permissions' },
+                };
+              }
+              if (stationAssignmentsConfigured && stationIds.length === 0) {
+                recordAuthAudit(currentDb, {
+                  userId: currentUser.id,
+                  eventType: 'pin_login',
+                  outcome: 'failure',
+                  ipAddress: ip,
+                  details: { service: 'kds', reason: 'no_active_station' },
+                });
+                return {
+                  ok: false,
+                  status: 403,
+                  body: { error: 'No active kitchen station is assigned to this user' },
+                };
+              }
+              return { ok: true, extra: { stationIds, stationAssignmentsConfigured } };
+            },
+          });
+
+          if (result.status !== 200) {
+            return res.status(result.status).json(result.body);
+          }
+
+          const {
+            token,
+            user,
+            extra: { stationIds, stationAssignmentsConfigured },
+          } = result;
+
+          res.json({
+            access_token: token,
+            user: {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              has_pin: Boolean(user.pin_hash),
+              category_ids: categoryIdsForRole(user.role, user.category_ids),
+              station_ids: stationIds,
+              station_assignments_configured: stationAssignmentsConfigured,
+              permission_ids: [...(resolveEffectivePermissions(user.id)?.permissionIds ?? [])],
+              authorization_revision: effectivePermissionRevision(user.id),
+            },
+          });
+        } catch (error: unknown) {
+          console.error('[KDS] PIN login error:', error);
+          res.status(500).json({ error: 'Internal server error' });
+        }
+      },
+    );
 
     app.post('/api/auth/logout', (req: Request, res: Response) => {
       const authHeader = req.headers.authorization;
@@ -364,14 +607,18 @@ export function startKdsServer(): Promise<void> {
         const authedUser = (req as any).user as KdsRequestUser;
         const db = getDatabase();
         const row = db
-          .prepare('SELECT id, name, email, role FROM users WHERE id = ?')
+          .prepare('SELECT id, name, email, role, pin_hash FROM users WHERE id = ?')
           .get(authedUser.userId) as any;
         if (!row) {
           return res.status(404).json({ error: 'User not found' });
         }
         res.json({
           user: {
-            ...row,
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            role: row.role,
+            has_pin: Boolean(row.pin_hash),
             permission_ids: [...(resolveEffectivePermissions(row.id)?.permissionIds ?? [])],
             authorization_revision: effectivePermissionRevision(row.id),
           },
@@ -380,6 +627,32 @@ export function startKdsServer(): Promise<void> {
         res.status(500).json({ error: 'Internal server error' });
       }
     });
+
+    app.post(
+      '/api/auth/password/change',
+      authRateLimit(),
+      requireAuth,
+      (req: Request, res: Response, next: NextFunction) => {
+        if (!isKdsEnabled()) {
+          return res.status(403).json({ error: 'KDS is disabled for this business' });
+        }
+        next();
+      },
+      asyncHandler(handlePasswordChange),
+    );
+
+    app.post(
+      '/api/auth/pin/change',
+      authRateLimit(),
+      requireAuth,
+      (req: Request, res: Response, next: NextFunction) => {
+        if (!isKdsEnabled()) {
+          return res.status(403).json({ error: 'KDS is disabled for this business' });
+        }
+        next();
+      },
+      asyncHandler(handlePinChange),
+    );
 
     // Get orders for KDS (pending, preparing, ready)
     app.get('/api/kds/stations', requireAuth, (req: Request, res: Response) => {
@@ -948,6 +1221,7 @@ export function startKdsServer(): Promise<void> {
         listeningServer.off('error', onError);
         const address = listeningServer.address();
         activeKdsPort = address && typeof address !== 'string' ? address.port : attemptedPort;
+        setKdsPort(activeKdsPort);
         console.log(`[KDS Server] HTTP server running on http://localhost:${activeKdsPort}`);
 
         if (listeningServer) {
@@ -976,6 +1250,15 @@ export function startKdsServer(): Promise<void> {
 
             if (!isKdsEnabled()) {
               socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+              socket.destroy();
+              return;
+            }
+
+            const admission = checkKdsWebSocketAdmission(request);
+            if (!admission.allowed) {
+              socket.write(
+                `HTTP/1.1 ${admission.statusCode} ${admission.statusText}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+              );
               socket.destroy();
               return;
             }

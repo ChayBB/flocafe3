@@ -375,9 +375,12 @@ effects; `bill.payment_details` is the
 settlement ledger, one entry per line with the applied amount, the requested amount, cash tendered
 and change, the `cash_session_id`, the staff member who received it (`received_by`,
 `received_by_name`, shown on the Orders page as Paid: name), and the timestamp.
-While a `paid` bill's cash shift and business
+While a `paid` bill's cash shift (if recorded in one) and business
 day remain open, the tender method on a recorded non-wallet line can be corrected without changing
-its amount via `PATCH /api/bills/:id/payments/:index/method` (see [the Bills API reference](../reference/api.md#bills)).
+its amount via `PATCH /api/bills/:id/payments/:index/method` (see [the Bills API reference](../reference/api.md#bills));
+legacy untagged lines missing `cash_session_id` remain closed, and shiftless (`cash_session_id = 0`)
+non-cash lines switched to cash attach to the actor's same-day open shift when one exists or require
+an open shift when `require_open_shift` is enabled.
 
 ## Settlement and completion
 
@@ -460,23 +463,29 @@ order items are appended, cancelled, edited, refunded, or restored:
 - Each resulting parent status change records an actor-attributed `status_changed` entry
   (`source: 'kds_reconciliation'`) in `order_audit_log`.
 
-Terminal `completed` and `cancelled` orders are never reopened or mutated by item-status
+Terminal `completed` and `cancelled` orders never transition `orders.status` via item-status
 reconciliation. When KDS is enabled, upfront-paid orders created within the rolling 24-hour
 `orders.created_at` window that settle to `completed` before kitchen fulfillment finishes remain in
 `GET /api/orders?view=active` and `GET /api/orders?status=active` while positive-quantity live items
-stay in `pending`, `preparing`, or `ready` (non-`completed` active orders are not age-bounded). Both
-`/customer-display` surfaces (`GET /api/orders?board_status=...` and
-`GET /api/customer-display/feed`) project such an order's effective board status (`pending`,
-`preparing`, or `ready`) from live item statuses via `projectBoardStatusFromItems` and filter by
-configured statuses before pagination, omitting the order once no live item remains unfinished
-(for example once every remaining live item is `served` or `completed`). When KDS is disabled,
-automatic item-to-order reconciliation stands down and manual `PATCH /api/orders/:id/status`
-transitions govern preparation and service.
+stay in `pending`, `preparing`, or `ready` (non-`completed` active orders are not age-bounded), and
+`reconcileActiveOrderStatusFromItems` mirrors active-order timestamp transitions on `completed`
+orders without changing `orders.status` (stamping `cooking_started_at = COALESCE(cooking_started_at, now)`
+and clearing `ready_at` and `served_at` on `preparing`, clearing stale `ready_at` and `served_at` on
+`pending`, recording `ready_at` and clearing `served_at` on `ready`, and recording
+`served_at = COALESCE(served_at, now)` on `served`). Both `/customer-display` surfaces (`GET /api/orders?board_status=...` and
+`GET /api/customer-display/feed`) filter by configured `order_types` (`['takeaway']` by default) and
+`statuses` before pagination, projecting an eligible KDS-unfinished `completed` order's effective
+board status (`pending`, `preparing`, or `ready`) from live item statuses via
+`projectBoardStatusFromItems` and omitting the order once no live item remains unfinished (for
+example once every remaining live item is `served` or `completed`). When KDS is disabled, automatic
+item-to-order reconciliation stands down and manual `PATCH /api/orders/:id/status` transitions
+govern preparation and service.
 
 ## Refunds
 
 `POST /api/refunds` reverses part or all of a paid bill. Cash refunds follow the same shift gate as
-cash payments. Refund approval tiers, cutoff, and store-credit requirements are in
+cash payments. Refund approval tiers, manager approval window settings, and store-credit
+requirements are in
 [product invariants](../reference/product-invariants.md#refunds-and-staff-approval-pins).
 
 The refund modal loads eligible staff before enabling PIN entry and submission. It retains an
@@ -493,7 +502,7 @@ held-order, bill, payment, or refund state use `withTxn` for their database writ
 print-status updates run outside this transaction. A failure in a wrapped mutation rolls back its
 database writes, so it leaves no partial order, bill, or ledger line behind. A closed business day
 does not block new orders or new payments; it blocks cash-drawer
-movements, and refunds have their own end-of-business-day cutoff described above.
+movements, and refunds follow the approval tiers described above.
 
 ## Verification
 

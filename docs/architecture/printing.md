@@ -62,8 +62,8 @@ vocabulary is `business-header`, `document-meta`, `customer`, `item-table`, `tax
 `totals`, `payments`, and `message`.
 
 `KotDocument` v1 is the same shape for a kitchen ticket, with a reduced block vocabulary:
-`kot-header` (carrying station and order metadata, plus an optional order-level notes banner) and
-`kot-items`.
+`kot-header` (carrying station and order metadata, an optional large bold order number callout banner,
+plus an optional order-level notes banner) and `kot-items`.
 
 `DeliverySlipDocument` v1 is a courier handout: `delivery-slip-header`,
 `delivery-slip-contact`, optional `delivery-slip-notes` and
@@ -222,20 +222,58 @@ text rasterizer skips so non-Latin headers never overwrite the logo bitmap. Prof
 `raster.enabled: false` (such as `escpos-impact-76`) omit `{RAW_BYTES:...}` logo bitmaps. Kitchen
 tickets do not use the bill logo setting.
 
+### Order number banners
+
+The business setting `bill_show_large_order_number` controls whether customer receipts and kitchen
+tickets print a prominent, bold order number banner. On customer receipts (classic, compact,
+merchant, browser HTML, and WebUSB/tax-bill paths), the banner renders centered, double-height, bold
+`#<number>` below the invoice header, while preserving the underlying order number in
+`DocumentMetaBlock.orderNumber` when `invoiceNumber` is an invoice sequence. On kitchen tickets
+(`document-kot`, `kot-encoder`, and `kot-web-print`), it renders centered, double-height, bold
+`#<number>` in the header block. When the formatted banner text exceeds the printable width of
+narrow or enlarged paper profiles (such as 16-column extra-large KOT), the line layout wraps without
+dropping sequence digits. Signed compliance pack receipts (`pluginReceiptLines`) intentionally omit
+the callout banner.
+
 ## Transports
 
 | Transport | Mechanism |
 | --- | --- |
-| Network | Raw socket. Each job first sends `DLE EOT 4` (paper sensor) and `DLE EOT 2` (offline cause) and waits up to 300 ms for the replies; paper out, a paper-end stop, or an open cover fails the job before any data is sent, and no reply prints anyway. Data is sent in 4096-byte chunks (`NETWORK_PRINT_CHUNK_SIZE`) with a 10 ms delay between chunks (`NETWORK_PRINT_CHUNK_DELAY_MS`), so a large receipt does not overrun the printer's buffer. A refused, reset, or timed-out connection is tried twice more (after 500 ms, then 1 s; `networkPrintPolicy` in `main/printers/network-status.ts`), but only while none of the job's data was sent, so a retry never prints twice. |
-| CUPS | `lp -d <printer> -o raw <tmpfile>`. |
-| Windows | `OpenPrinterW` with `pDataType` set to `RAW`. |
+| Network | Raw socket (`printViaNetwork()` in `main/printers/thermal.ts`). `validateNetworkPrinterTarget()` (enforced on `/api/printers` configuration, `/:id/status` probes, LAN discovery in `main/printers/lan-discovery.ts`, and `printViaNetwork()` dispatch) rejects cloud metadata endpoints, unspecified/broadcast addresses, and FloCafe's own local listening ports across canonical and non-canonical IPv4 forms. Jobs for one printer are queued (`main/printers/print-queue.ts`) and hold the endpoint lock in `main/printers/network-port-lock.ts`, so status probes and discovery never open a socket mid-job. Each job first sends `DLE EOT 4` (paper sensor) and `DLE EOT 2` (offline cause) and waits up to 300 ms for the replies; paper out, a paper-end stop, or an open cover fails the job before any data is sent, and no reply prints anyway. Data is sent in 4096-byte chunks (`NETWORK_PRINT_CHUNK_SIZE`) with a 10 ms delay between chunks (`NETWORK_PRINT_CHUNK_DELAY_MS`), so a large receipt does not overrun the printer's buffer. A refused, reset, or timed-out connection is tried twice more (after 500 ms, then 1 s; `networkPrintPolicy` in `main/printers/network-status.ts`), but only while none of the job's data was sent, so a retry never prints twice. |
+| CUPS | `lp -d <printer> -o raw <tmpfile>`, using an exclusive (`wx`, `0600`) temporary file with a per-job UUID suffix that is unlinked only if created. |
+| Windows | `OpenPrinterW` with `pDataType` set to `RAW`, reading an exclusive (`wx`, `0600`) temporary file with a per-job UUID suffix that is unlinked only if created. A PDF, XPS, OneNote, or fax printer is refused with the `Document printer` marker, and the POS prints through the system dialog instead. Before `StartDocPrinter`, the helper refuses a queue that is set to Use Printer Offline, offline, or not available. For those three refusals only, when the queue's port is a Standard TCP/IP port in RAW mode, `main/printers/windows-queue-bypass.ts` sends the same bytes once to that port with `printViaNetwork()`. No job exists in the spool at that point, so the bypass cannot print a ticket twice. When the port has SNMP status enabled, the failure detail says so and the POS shows how to turn it off. |
 | macOS Mac App Store | IPP over the local CUPS UNIX domain socket `/private/var/run/cupsd` (with loopback HTTP fallback on `127.0.0.1:631`) using `main/printers/ipp-client.ts` and `document-format` `application/vnd.cups-raw`, because the macOS App Sandbox blocks shelling out to `lp` and blocks outbound TCP to `localhost:631` while permitting `/private/var/run/cupsd` under `com.apple.security.print`. |
 | WebUSB | The browser WebUSB API through the frontend bridge. |
 
 Dispatch failures are classified by `classifyPrintFailure()` into a stable, privacy-safe set:
-`not_configured`, `offline`, `queue_unavailable`, `spooler_error`, `driver_error`,
-`permission_denied`, `timeout`, and `unknown`. The classification is what fleet telemetry reports,
+`not_configured`, `offline`, `needs_attention`, `queue_unavailable`, `spooler_error`, `driver_error`,
+`permission_denied`, `timeout`, `write_error`, `unsupported`, and `unknown`. The classification is what fleet telemetry reports,
 so it must not embed device names or user data.
+
+### Printer status and discovery
+
+`main/printers/escpos-status.ts` probes a network printer with `DLE EOT` (`0x10 0x04 n`) over one
+socket and decodes the answer into online, cover open, paper out, paper near end, and error states.
+The probe never throws, and it returns when the first query gets no answer, so a printer that does
+not implement `DLE EOT` costs one timeout. `statusToFailureCause()` maps the result to one cause:
+`paper_out`, `cover_open`, `printer_error`, `offline`, or `unreachable`. USB queues report
+`queue_offline` or `queue_missing` from OS detection. After a test print to a network printer, the
+route probes that printer and treats `paper_out`, `cover_open`, `printer_error`, and `offline` as
+failures (preserving `failure_class` from dispatch when more specific, such as `timeout`), because a
+raw socket can accept bytes that an offline or faulted printer drops. The frontend turns the cause,
+or else the failure class and the operating system, into one fix step
+(`frontend/src/lib/printer/print-failure-help.ts`).
+
+`main/printers/lan-discovery.ts` finds printers when the Printers page opens. It scans port 9100 on
+up to four private /24 networks of this machine, skipping virtual adapters and link-local
+addresses, and browses mDNS for `_pdl-datastream._tcp`, `_ipp._tcp`, and `_printer._tcp`, within a
+3 s budget. `probePort()`, `scanPort9100()`, and `discoverLanPrinters()` validate each target's
+port (`1`-`65535`) and `validateNetworkPrinterTarget()` before acquiring the port lock, opening a
+probe socket, or returning merged entries, so disallowed mDNS or scan targets are never probed or
+listed. Both `probePort()` and `DLE EOT` status probes share the per-`host:port` FIFO mutex in
+`main/printers/network-port-lock.ts` (`withNetworkPortLock()`) with `printViaNetwork()`, so discovery
+and status checks serialize behind active print jobs on single-connection `:9100` printers. The macOS
+builds declare those services in `NSBonjourServices`.
 
 ## Printer profiles
 
@@ -255,10 +293,12 @@ ribbon impact printers (`TM-U220`, `SRP-275`, `XP-76`) with `raster.enabled: fal
 `modes: []`), so bitmap logos (`GS v 0`), `GS ( k` QR codes, and text-to-bitmap raster bands are
 never sent to an impact head.
 
-`resolvePrinterProfile()` resolves in three steps: an explicit `profile_id` persisted on `printers`
+`resolvePrinterProfile()` resolves in four steps: an explicit `profile_id` persisted on `printers`
 (exposed as `configured_profile_id` alongside the resolved `profile_id` on `/api/printers`
 responses) if it names a known profile, then a substring match against each profile's make, model,
-and aliases, then the paper width, which selects `generic-escpos-58` for a width starting `58mm` and
+and aliases, then a model match in `main/printers/escpos-printer-db.json` (a trimmed snapshot of
+escpos-printer-db, CC BY 4.0, regenerated by `scripts/sync-escpos-printer-db.cjs`), then the paper
+width, which selects `generic-escpos-58` for a width starting `58mm` and
 `generic-escpos-80` otherwise. A name that matches nothing does not produce "generic for
 everything": it produces one of the two generic profiles, chosen by paper width. OS printer
 detection (`detectConnectedPrinters()`) also annotates each queue with
@@ -331,8 +371,9 @@ The enlargement is idempotent. The raster path applies it to the lines and to ea
 same `double-height` and `double-width` styles as native rows. On the browser HTML path,
 `web-print.ts`, `kot-web-print.ts`, `delivery-slip-web-print.ts`, and `order-slip-web-print.ts`
 render thermal output in solid `#000` (so 203 DPI GDI thermal drivers do not halftone-dither text or
-borders) with `@page` sizing (`58mm` or `80mm`) and scale font sizes and weights (`600`/`700`) for
-`normal`, `large`, and `extra_large`. `tests/printer-text-size.test.ts` and
+borders) with `@page` sizing (`58mm` or `80mm`), wrap 58 mm receipt item rows onto full-width item
+lines above their numeric columns across all text sizes, and scale font sizes and weights
+(`600`/`700`) for `normal`, `large`, and `extra_large`. `tests/printer-text-size.test.ts` and
 `tests/browser-receipts.test.ts` cover these paths; the ESC/POS column math is also pinned by the
 receipt column oracle.
 

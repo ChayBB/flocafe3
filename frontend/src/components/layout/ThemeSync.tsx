@@ -24,7 +24,7 @@ const cancellableSleep = (ms: number, isCancelled: () => boolean): Promise<void>
     }
   });
 
-/** Renderer theme engine with precedence DB > param > mirror > OS.
+/** Renderer theme engine with precedence DB > server info > param > mirror > OS.
  * Syncs theme state across windows and avoids overwriting user choices. */
 export function ThemeSync() {
   const mode = useThemeMode((s) => s.mode);
@@ -86,6 +86,7 @@ export function ThemeSync() {
     let recheckCancelled = false;
     let recheckHandle: ReturnType<typeof setTimeout> | null = null;
     const userHasChosen = () => useThemeMode.getState().userSelected;
+    const serverHasSynced = () => useThemeMode.getState().serverSynced;
 
     /** Bounded fetch used by boot and the post-hydration re-check. */
     const fetchThemeMode = async (isCancelled: () => boolean): Promise<ThemeMode | null> => {
@@ -116,7 +117,16 @@ export function ThemeSync() {
       }
       recheckCancelled = false;
 
+      const isStandaloneRoute = (() => {
+        try {
+          const p = typeof location !== 'undefined' ? location.pathname : '';
+          return p.startsWith('/kds-standalone') || p.startsWith('/server-standalone');
+        } catch {
+          return false;
+        }
+      })();
       const hasPosToken = (() => {
+        if (isStandaloneRoute) return false;
         try {
           return Boolean(localStorage.getItem('token'));
         } catch {
@@ -173,17 +183,19 @@ export function ThemeSync() {
           if (dbMode) {
             authoritative.current = true;
             setMode(dbMode);
-          } else if (paramResolved) {
+          } else if (!serverHasSynced() && paramResolved) {
             authoritative.current = true;
             setMode(paramResolved);
           } else if (isThemeModeValue(mirrorResolved)) {
-            if (!dbAttempted) authoritative.current = true;
-            setMode(mirrorResolved);
+            if (!serverHasSynced()) {
+              if (!dbAttempted) authoritative.current = true;
+              setMode(mirrorResolved);
+            }
           }
         }
       }
 
-      if (hasPosToken && dbAttempted && !dbMode) {
+      if (hasPosToken && dbAttempted && !dbMode && !serverHasSynced()) {
         recheckHandle = setTimeout(async () => {
           if (recheckCancelled) return;
           const resolved = await fetchThemeMode(() => recheckCancelled);
@@ -223,7 +235,7 @@ export function ThemeSync() {
     const apply = () => {
       const isDark = mode === 'dark' || (mode === 'system' && Boolean(media?.matches));
       html.classList.toggle('dark', isDark);
-      if (window.electronAPI || authoritative.current) {
+      if (window.electronAPI || authoritative.current || useThemeMode.getState().serverSynced) {
         try {
           localStorage.setItem(THEME_MIRROR_KEY, isDark ? 'dark' : 'light');
         } catch {

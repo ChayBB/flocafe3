@@ -4,6 +4,7 @@ import {
   E2E_PASSWORD,
   E2E_OPERATIONAL_PASSWORD,
   getE2eToken,
+  loginWithPassword,
   setLanguage,
 } from './helpers/test-auth';
 import { captureSettings, restoreSettings } from './helpers/kitchen-fixture';
@@ -31,6 +32,11 @@ test.describe('PIN Quick User Switch and Lock Flow (#1338)', () => {
       data: { pin: '1111' },
     });
     expect(ownerPinRes.ok()).toBeTruthy();
+    ownerToken = getE2eToken('e2e-owner', 'owner@flo.local', 'owner');
+    ownerHeaders = {
+      Authorization: `Bearer ${ownerToken}`,
+      'Content-Type': 'application/json',
+    };
 
     const staffRes = await request.get(`${BASE}/api/staff`, { headers: ownerHeaders });
     expect(staffRes.ok()).toBeTruthy();
@@ -104,10 +110,7 @@ test.describe('PIN Quick User Switch and Lock Flow (#1338)', () => {
   test('locks POS from topbar, quick-switches to cashier via PIN tile picker, preserves cart, and completes payment', async ({
     page,
   }) => {
-    await page.goto(`${BASE}/auth/login`);
-    await page.locator('#email').fill('owner@flo.local');
-    await page.locator('#password').fill(E2E_PASSWORD);
-    await page.locator('button[type="submit"]').click();
+    await loginWithPassword(page, 'owner@flo.local');
     await page.waitForURL('**/pos/**', { timeout: 20000 });
     await setLanguage(page, 'en');
     await page.goto(`${BASE}/pos`);

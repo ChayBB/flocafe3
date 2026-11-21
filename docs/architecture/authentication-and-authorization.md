@@ -36,7 +36,7 @@ list. `requireRole` (in `main/middleware/security.ts`) still exists, but a stati
 `main/routes/` uses it; the few remaining direct role checks are reviewed context policy, covered
 in their own sections below or in the owning feature documentation (KDS station/category scope,
 refund approver identity, the Staff Approval PIN holder, the last-active-owner/staff-target rule,
-own-shift vs manager/owner cash-shift access, and owner-only `z_report_day_close` configuration in
+own-shift vs manager/owner cash-shift access, owner-only counter and refund-policy settings, and owner-only `z_report_day_close` configuration in
 [WhatsApp receipt delivery](cloud-integrations.md#whatsapp-receipt-delivery)).
 
 **Resolution.** For every permission id, `resolveEffectivePermissions(userId)` evaluates, in
@@ -83,8 +83,17 @@ That module owns the only copy of the cache;
 `clearJWTSecretCache()` in the same module invalidates it, and a restore that restored a rotated
 secret must go through it or pre-rotation tokens would keep validating.
 
-**Issuance.** `jwt.sign` runs on login and on the token-refresh paths. A token without the remember
-option expires in 24 hours; with it, in 10 days.
+**Issuance.** `jwt.sign` runs across all login, refresh, setup, and self-service credential-change paths (`POST /api/auth/login`,
+`POST /api/auth/pin-login`, `POST /api/auth/tenants/select`, `POST /api/auth/refresh`,
+`POST /api/auth/password/change`, `POST /api/auth/pin/change`, and
+`POST /api/auth/setup/initialize` on `:3001`, plus `POST /api/auth/login`, `POST /api/auth/pin-login`,
+`POST /api/auth/password/change`, and `POST /api/auth/pin/change`
+on `:3002` KDS and `:3003` Server App, and `PUT /api/staff/:id` when an administrator updates their own credentials) using `nextTokenIatSeconds()`, which stamps a monotonically advancing sub-second
+`iat` claim, while `tokenExpSeconds()` computes `exp` from
+`Math.min(Math.floor(iat), Math.floor(Date.now() / 1000)) + ttlSeconds` so second-boundary
+rollovers between sampling `iat` and `exp` never inflate the token TTL and ahead-of-wall monotonic
+`iat` values stay bounded by wall-clock time. A token without the remember option expires in 24
+hours; with it, in 10 days. Self-service password and PIN changes advance `tokens_valid_after` first and then mint a fresh replacement token preserving the caller's session claims, keeping the caller's current session authenticated while invalidating every token issued before the change.
 
 **Verification.** `requireAuth` in
 [`main/server.ts`](../../main/server.ts) guards paths under `/api`. It passes through `/api/health`,
@@ -104,9 +113,19 @@ with the token's expiry, so revocation stops mattering on its own. A `Set` of ra
 is the fast path, bounded at 5,000 entries. `isTokenRevoked` fails closed: if the database lookup
 throws, the token is rejected rather than accepted.
 
-**Staleness.** `tokens_valid_after` on the `users` row is compared against the token's `iat` at
-second resolution. A password or PIN change bumps this column, which invalidates every token
-issued before it without needing to enumerate them.
+**Staleness.** `tokens_valid_after` on the `users` row is written via `nextTokensValidAfterTimestamp()`
+as a monotonically advancing UTC millisecond timestamp (`YYYY-MM-DD HH:MM:SS.SSS`) using the same
+shared monotonic clock (`nextAuthTimestampMs()`) as `nextTokenIatSeconds()`, where the last logical timestamp
+(even across backward system clock jumps), the maximum persisted `users.tokens_valid_after` cutoff,
+and the persisted `auth_clock_high_water_ms` setting in SQLite (persisted across process restarts,
+redacted from database exports, preserved locally across structured imports, and reset on SQLite
+backup restores) serve as lower bounds that the next value is strictly greater than. Password changes, PIN changes,
+owner recovery, account deactivations, and backup restores bump this column, invalidating every token
+issued before the update without needing to enumerate them. `isTokenStale` compares sub-second `iat`
+claims against `tokens_valid_after` with `<=` at millisecond resolution so pre-change tokens are
+invalidated and fresh post-change logins succeed even within the same UTC second or millisecond;
+legacy integer-second `iat` claims (and whole-second `tokens_valid_after` strings) are compared at
+second resolution with `<=`.
 
 **Role freshness.** The role attached to the request is the value read from the database, not the
 role claim inside the token, so a role change takes effect on the next request. `getUserAuthStatus`
@@ -190,28 +209,45 @@ drift apart without any test failing. Treat them as a set. Note also that `:3002
 
 All three HTTP listeners (`:3001` Main API, `:3002` Standalone KDS, and `:3003` Server App) share an install-wide login attempt rate limiter exported from [`main/middleware/security.ts`](../../main/middleware/security.ts):
 
-1. **Volume rate limiter (`loginAuthRateLimit`):** Used on all three default login endpoints, `loginAuthRateLimit()` reuses a shared singleton instance so total authentication request volume across listeners shares a single budget (default 10 requests per 15 minutes, configurable via `FLO_AUTH_RATE_LIMIT_MAX`). Non-login authentication routes (e.g. staff management, password changes) use independent rate-limiter instances.
-2. **Shared failed-login lockout (`checkLoginRateLimit` / `incrementFailedLogin`):** Keyed to the canonical client IP (`normalizeIpForRateLimit`, which strips `::ffff:` IPv4-mapped IPv6 prefixes so IPv4 and IPv6 representations share the exact same bucket). Five failed credential attempts across any combination of the three listeners triggers a 15-minute lockout (HTTP `429`). During the lockout, any further login attempt on any listener is rejected before password evaluation.
+1. **Volume rate limiter (`loginAuthRateLimit`):** Used on all three default login endpoints, `loginAuthRateLimit()` reuses a shared singleton instance so total authentication request volume across listeners shares a single budget (default 10 requests per 15 minutes, configurable via `FLO_AUTH_RATE_LIMIT_MAX`). Non-login authentication routes (e.g. staff management, password and PIN changes) use independent rate-limiter instances.
+2. **Shared failed-login lockout (`checkLoginRateLimit` / `incrementFailedLogin`):** Keyed to the canonical client IP (`normalizeIpForRateLimit`, which lowers case, strips `::ffff:` IPv4-mapped IPv6 prefixes, and canonicalizes IPv6 loopback `::1` and `0:0:0:0:0:0:0:1` to `127.0.0.1` so IPv4 and IPv6 representations share the exact same bucket). Five failed credential attempts across any combination of the three listeners triggers a 15-minute lockout (HTTP `429`). During the lockout, any further login attempt on any listener is rejected before password evaluation.
 3. **Reset on success (`resetSuccessfulLogin`):** A successful login from any listener immediately clears the failed-attempt count for that client IP once role and permission checks pass.
 4. **Role and permission decoupling:** Non-credential rejections (such as HTTP `403` when valid credentials lack `kitchen.use` on `:3002` or `server-app.use` on `:3003`) do not count as credential failures and do not clear previously accumulated failed-login attempts.
 
 ### PIN quick user switch and terminal lock
 
-Any staff role (`owner`, `manager`, `cashier`, `server`, `chef`) may configure a 4-6 digit PIN
+Any active user in any staff role (`owner`, `manager`, `cashier`, `server`, `chef`) may set or change their own 4-6 digit PIN via `POST /api/auth/pin/change` (verifying `current_pin` when a PIN is already set, or `current_password` when setting a PIN for the first time), and owners (or managers granted `staff.credentials.reset` for operational staff) may set, reset, or clear a 4-6 digit PIN
 (`users.pin_hash`) in Staff management. That PIN serves as the user's sign-in PIN on shared
 terminals, while approval authority stays restricted to active `owner` and `manager` accounts:
 
-1. **Quick-switch tile directory (`GET /api/auth/pin-users`):** Returns active users who have a
-   `pin_hash` set, exposing only `{ id, name, role }`. Users without a PIN are omitted from the
-   picker and sign in with email and password.
-2. **Selected-user PIN sign-in (`POST /api/auth/pin-login`):** Accepts `{ user_id, pin, rememberMe }`
+1. **Quick-switch tile directory (`GET /api/auth/pin-users`):** Served on `:3001`, `:3002`, and
+   `:3003`. Returns active users who have a `pin_hash` set, exposing only `{ id, name, role }`. On
+   `:3001` with `?scope=kds` and on `:3002`, the list is narrowed to accounts holding `kitchen.use`
+   with at least one active kitchen station when station assignments are configured (`:3001` returns
+   `{ users: [] }` and `:3002` returns `404` when KDS is disabled); on `:3003`, it is narrowed to
+   accounts holding `server-app.use` (`404` when Server App is disabled). Users without a PIN are
+   omitted from the picker and sign in with email and password. When PIN-eligible users exist, the
+   sign-in screens on POS (`/auth/login`), KDS (`/kds` and `/kds-standalone`), and Server App
+   (`/server-standalone`) show a segmented toggle between **Quick Sign-In** (default) and password
+   sign-in.
+2. **Selected-user PIN sign-in (`POST /api/auth/pin-login`):** Served on `:3001`, `:3002`, and
+   `:3003`. Accepts `{ user_id, pin, rememberMe }` (or `remember_me` on `:3002` and `:3003`)
    and verifies the PIN strictly against the selected `user_id` via `verifyPinAsync` without
-   scanning other users, so two staff members may share the same PIN. Verification and rate-limit
-   checks are serialized per target account (`pin-user:${userId}`) with `withPinVerificationLock`,
-   failed attempts are tracked by the install-wide login rate limiter both per client IP + user
-   (`${normalizedIp}:pin:${userId}`) and per target account across source IPs (`pin-user:${userId}`),
-   and every attempt is recorded in `auth_audit_log` (`event_type = 'pin_login'`, `outcome` in
-   `'success'`, `'failure'`, or `'rate_limited'`).
+   scanning other users, so two staff members may share the same PIN. On `:3002` and `:3003`, it
+   also enforces the surface's permission and station gates (`kitchen.use` and active station check
+   on `:3002`; `server-app.use` on `:3003`) before resetting the failed-attempt counter or issuing a
+   token. Concurrent bcrypt
+   verifications for a target account remain serialized per user (`pin-user:${userId}`) with
+   `withPinVerificationLock`, while the 5-attempt / 15-minute failed-attempt lockout is scoped per
+   normalized client IP and user ID (`${normalizeIpForPinRateLimit(ip)}:pin:${userId}`, collapsing
+   non-loopback IPv6 addresses to their canonical `/64` prefix while keeping individual IPv4
+   addresses and canonicalized loopback `127.0.0.1` / `::1` in their own buckets without an
+   authentication exemption), alongside the endpoint
+   volume limiter. Scoping lockouts per `(client IP, user ID)` rather than install-wide per account
+   protects main POS terminal availability when another device on a shared restaurant LAN submits
+   wrong PINs, at the explicit trade-off of reduced resistance to PIN guessing distributed across
+   multiple LAN devices. Every attempt is recorded in `auth_audit_log` (`event_type = 'pin_login'`,
+   `outcome` in `'success'`, `'failure'`, or `'rate_limited'`).
 3. **Terminal lock and session boundary:** Only one user is signed in on a device at a time. The
    manual **Lock** action in the POS topbar/sidebar (and the optional `auto_lock_minutes` idle
    setting in **Settings > POS**, off by default with choices `1`, `5`, `15`, or `30` minutes,
@@ -235,7 +271,7 @@ A password must be at least 4 characters long. There are no uppercase, lowercase
 requirements. The rule lives only in
 [`shared/password-policy.ts`](../../shared/password-policy.ts); the backend (`validatePassword`
 re-exported from `main/middleware/security.ts`) and every frontend form that sets a password
-(first-run setup, staff create and edit, staff password reset, recovery) import it, and the
+(first-run setup, self-service password change, staff create and edit, staff password reset, recovery) import it, and the
 `password-policy` test fails if a source file re-implements a password rule. Every route that
 writes a password enforces it: setup, staff create and update, password change, and both recovery
 paths. The 4-digit Master PIN and 4-6 digit staff PINs are separate secrets with their own rules.
@@ -289,12 +325,17 @@ to `authorizeMasterPin` in
 | PIN does not verify                               | 403, and the attempt is recorded; 429 once the limit is reached     |
 
 The PIN hash is stored through Electron `safeStorage` in `master-pin.enc` under the app's
-`userData` directory, written with mode `0o600`. Rate limiting is in memory, keyed by IP and route
-path, at 5 attempts per 15 minutes.
+`userData` directory, written with mode `0o600`. Rate limiting is in memory, at 5 attempts per 15
+minutes per key.
 
-The rate-limit key includes the route, so attempts against one endpoint do not consume another's
-budget. A caller with a different route can therefore attempt the PIN 5 times per route. That is
-the intended scoping, not an oversight.
+For HTTP routes (`requireMasterPin`) and local password recovery (`POST /api/auth/recover-password`),
+the rate-limit key is `master-pin:${normalizeIpForRateLimit(ip)}`, so all HTTP Master PIN endpoints,
+parameterized routes (such as `POST /api/db-tools/backups/:fileName/delete`), trailing slashes, path
+casing, and equivalent IP representations (`::1`, `127.0.0.1`, `::ffff:127.0.0.1`) share a single
+5-attempt budget per normalized client IP. `requireMasterPin` reads `master_pin` from the request
+body first and falls back to the `x-master-pin` request header (used by bodyless requests such as
+`GET /api/db/download`); it never reads URL query parameters. Electron IPC handlers pass channel-scoped
+`ipc:*` keys to `authorizeMasterPin`.
 
 ## KDS station and category narrowing
 
@@ -315,11 +356,12 @@ assignments are configured for the user and the resolved list is empty, authenti
 than granting unrestricted access. An exception is thrown if the station lookup itself returns
 `null`, so a failed query is an error, not a grant.
 
-**The gate is re-read inside the transaction.** The station decision for a status update is made
-inside a `withTxn` callback, after resolving the order's `kitchen_station_id` and calling
-`getKdsStationRoutingScope` and `isKdsStationItemAllowed`. Re-reading inside the transaction is what
-makes the decision correct against the data being written. Do not cache the station scope across
-the transaction boundary or move this check above it.
+**The gate is re-read inside the transaction.** The station and category decision for a status
+update is made inside a `withTxn` callback (on item-level KDS endpoints and across all
+`PATCH /api/orders/:id/status` transitions), after resolving the order's `kitchen_station_id` and
+calling `getKdsStationRoutingScope` and `isKdsStationItemAllowed`. Re-reading inside the
+transaction is what makes the decision correct against the data being written. Do not cache the
+station scope across the transaction boundary or move this check above it.
 
 ## Server App authorization
 

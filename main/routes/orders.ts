@@ -18,7 +18,6 @@ import {
   parseRowJson,
   KDS_MOVED_FROM_TABLE_SQL,
   withTxn,
-  verifyPin,
   verifyPinAsync,
   getSettingValue,
   insertOrderItemAddons,
@@ -27,7 +26,14 @@ import {
   utcTodayDate,
   recordOrderAudit,
   registerOrderSearchFunctions,
+  expandCategoryIdsWithSubcategories,
+  getKdsStationRoutingScope,
+  getUserKdsStationIds,
+  hasUserKdsStationAssignments,
+  isKdsStationItemAllowed,
 } from '../db';
+import type { OrderCreateDisplayCode } from '../lib/order-create-display-codes';
+import { orderCreateDisplayCodeFromError } from '../lib/order-create-display-codes';
 import { asyncHandler } from '../middleware/async-handler';
 import {
   calculateDocumentTaxes,
@@ -51,10 +57,12 @@ import {
 } from '../services/orders';
 import {
   collectProjectedCompletedOrderIds,
+  parseBoardOrderTypes,
   parseBoardStatuses,
   selectBoardEligibleOrderPage,
   type DisplayFeedCursor,
 } from '../services/customer-display-tokens';
+import { CUSTOMER_DISPLAY_ORDER_TYPES } from '../services/customer-display-config';
 import {
   PROMOTION_APPLIED_MESSAGE,
   PROMOTION_DISCOUNT_TYPE,
@@ -71,6 +79,7 @@ import {
 import {
   adjustProductStock,
   InventoryServiceError,
+  describeStockRefusal,
   resolveInventoryDeduction,
 } from '../services/inventory';
 import {
@@ -117,6 +126,7 @@ import {
 } from '../services/scheduled-orders';
 import { ROLE_ACCESS, hasRole } from '../../shared/role-permissions';
 import { isTerminalItemStatus } from '../../shared/order-item-status';
+import { parseCategoryIds } from './auth';
 import { getCurrencyFractionDigits, getCurrencyMinorUnitFactor } from '../countries';
 import {
   checkKitchenDeliveryStatus,
@@ -150,19 +160,23 @@ export {
   PIN_MAX_ATTEMPTS,
   PIN_WINDOW_MS,
 };
-import { isOperationReference, serializeOperationFailure } from '../lib/operation-failure';
+import {
+  classifySqlitePersistenceFailure,
+  isOperationReference,
+  serializeOperationFailure,
+} from '../lib/operation-failure';
 
 type PinApproverCandidate = { id: string; role: string; pin_hash: string };
 
 const registeredSearchDatabases = new WeakSet<object>();
 
-function ensureOrderSearchFunctions(dbInstance: any): void {
+function ensureOrderSearchFunctions(dbInstance: ReturnType<typeof getDatabase>): void {
   if (registeredSearchDatabases.has(dbInstance)) return;
   registerOrderSearchFunctions(dbInstance);
   registeredSearchDatabases.add(dbInstance);
 }
 
-function isSearchIndexAvailable(dbInstance: any): boolean {
+function isSearchIndexAvailable(dbInstance: ReturnType<typeof getDatabase>): boolean {
   try {
     const row = dbInstance
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'orders_search_fts'")
@@ -263,27 +277,37 @@ function assertPaymentDispatchPriceResolved(
   }
 }
 
-function structuredOperationFailure(
+export function structuredOperationFailure(
   req: Request,
   capturePoint: string,
   outcome: 'not_applied' | 'applied',
   error: string,
   displayCode?: string,
+  facts?: Record<string, string | number>,
+  options: { capture?: boolean } = {},
 ): Record<string, unknown> {
   const header = req.get('x-operation-id');
   const correlationId = isOperationReference(header) ? header : randomUUID();
+  const mergedFacts = {
+    ...(displayCode ? { display_code: displayCode } : {}),
+    ...(facts ?? {}),
+  };
   const failure = serializeOperationFailure({
     capture_point: capturePoint,
     outcome,
     correlation_id: correlationId,
-    ...(displayCode ? { facts: { display_code: displayCode } } : {}),
+    ...(Object.keys(mergedFacts).length > 0 ? { facts: mergedFacts } : {}),
   });
   if (!failure) return { error };
-  (req as Request & { diagnosticsCaptured?: boolean }).diagnosticsCaptured = true;
-  try {
-    cloudSync.captureOperationFailure(failure);
-  } catch {
-    /* Diagnostics must not affect order handling. */
+  const responseFacts = { ...failure.facts };
+  delete responseFacts.display_code;
+  if (options.capture !== false) {
+    (req as Request & { diagnosticsCaptured?: boolean }).diagnosticsCaptured = true;
+    try {
+      cloudSync.captureOperationFailure(failure);
+    } catch {
+      /* Diagnostics must not affect order handling. */
+    }
   }
   return {
     error,
@@ -294,7 +318,48 @@ function structuredOperationFailure(
     outcome: failure.outcome,
     correlation_id: failure.correlation_id,
     ...(failure.facts.display_code ? { display_code: failure.facts.display_code } : {}),
+    ...(Object.keys(responseFacts).length > 0 ? { facts: responseFacts } : {}),
   };
+}
+
+/** Answers an unparseable order-write body in the shape the client reads. Not captured: the request is unauthenticated. */
+export function malformedOrderBodyPayload(req: Request): Record<string, unknown> | null {
+  if (req.method !== 'POST') return null;
+  const pathname = req.originalUrl.split('?')[0].replace(/\/+$/, '').toLowerCase();
+  let capturePoint: string;
+  let displayCode: OrderCreateDisplayCode | undefined;
+  if (pathname === '/api/orders') {
+    capturePoint = 'fc.backend.order.create.other_validation';
+    displayCode = 'malformed_body';
+  } else if (/^\/api\/orders\/[^/]+\/items$/.test(pathname)) {
+    capturePoint = 'fc.backend.order.append.validation';
+  } else return null;
+  return structuredOperationFailure(
+    req,
+    capturePoint,
+    'not_applied',
+    'Malformed JSON request body',
+    displayCode,
+    undefined,
+    { capture: false },
+  );
+}
+
+/** Only an unclassified refusal carries a code from the thrown error. */
+const otherValidationCode = (point: string, error: unknown) =>
+  point === 'fc.backend.order.create.other_validation'
+    ? orderCreateDisplayCodeFromError(error)
+    : undefined;
+
+/** A pre-storage order refusal: the closed code says which check refused it. */
+function orderRefusal(req: Request, message: string, displayCode: OrderCreateDisplayCode) {
+  return structuredOperationFailure(
+    req,
+    'fc.backend.order.create.other_validation',
+    'not_applied',
+    message,
+    displayCode,
+  );
 }
 
 /**
@@ -386,7 +451,7 @@ function getStoredOrderReplay(
   if (prior.request_hash !== requestHash) {
     throw Object.assign(
       new Error('Idempotency-Key was already used for a different order request'),
-      { statusCode: 409 },
+      { statusCode: 409, diagnosticCode: 'IDEMPOTENCY_KEY_REUSED' },
     );
   }
   try {
@@ -397,11 +462,13 @@ function getStoredOrderReplay(
 }
 
 function syncCustomerTagCounts(
-  db: any,
+  db: ReturnType<typeof getDatabase>,
   customerId: string,
   items: { product_id: string; quantity: number }[],
 ) {
-  const row = db.prepare('SELECT tag_counts FROM customers WHERE id = ?').get(customerId) as any;
+  const row = db.prepare('SELECT tag_counts FROM customers WHERE id = ?').get(customerId) as
+    | { tag_counts?: string | null }
+    | undefined;
   if (!row) return;
   let counts: Record<string, number> = {};
   try {
@@ -410,9 +477,9 @@ function syncCustomerTagCounts(
     counts = {};
   }
   for (const item of items) {
-    const product = db
-      .prepare('SELECT tags FROM products WHERE id = ?')
-      .get(item.product_id) as any;
+    const product = db.prepare('SELECT tags FROM products WHERE id = ?').get(item.product_id) as
+      | { tags?: string | null }
+      | undefined;
     if (!product?.tags) continue;
     let tags: string[] = [];
     try {
@@ -510,6 +577,7 @@ function moveOrderItemAddonStock(
       throw new InventoryServiceError(
         400,
         `Add-on "${addon.name}" is out of stock (requested ${quantity}, available ${Number(pool?.stock_quantity ?? 0)})`,
+        describeStockRefusal('addon', Number(pool?.stock_quantity ?? 0)),
       );
     }
   }
@@ -610,7 +678,10 @@ function resolveItemAddons(
 
     const quantity = addon.quantity ?? 1;
     if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity <= 0) {
-      throw new Error(`Invalid add-on quantity for "${catalog.name}": must be a positive integer`);
+      throw Object.assign(
+        new Error(`Invalid add-on quantity for "${catalog.name}": must be a positive integer`),
+        { statusCode: 400, diagnosticCode: 'ADDON_QUANTITY_INVALID' },
+      );
     }
 
     // One tracked add-on on a line consumes a whole item's worth: three burgers
@@ -625,8 +696,10 @@ function resolveItemAddons(
       // Refusing is the point: a tracked add-on with nothing left must not be
       // silently substituted, so there is no variant-style fallback here.
       if (requirement - available > 1e-8) {
-        throw new Error(
+        throw new InventoryServiceError(
+          400,
           `Add-on "${catalog.name}" is out of stock (requested ${requirement}, available ${available})`,
+          describeStockRefusal('addon', available),
         );
       }
       inventoryDeductedQuantity = requirement;
@@ -653,7 +726,16 @@ function resolveItemAddons(
   for (const groupId of linkedGroupIds) {
     const group = db
       .prepare('SELECT * FROM addon_groups WHERE id = ? AND is_active = 1')
-      .get(groupId) as any;
+      .get(groupId) as
+      | {
+          id: string;
+          name: string;
+          allow_multiple_quantities: number;
+          max_selection: number | null;
+          is_required: number;
+          min_selection: number | null;
+        }
+      | undefined;
     if (!group) continue;
     const selection = groupSelections.get(groupId) || { totalQty: 0, hasMultiQty: false };
 
@@ -692,7 +774,7 @@ router.get(
     try {
       const db = getDatabase();
       const wheres: string[] = [];
-      const params: any[] = [];
+      const params: unknown[] = [];
       const view = typeof req.query.view === 'string' ? req.query.view : 'all';
       if (!['all', 'active', 'unpaid'].includes(view)) {
         return res.status(400).json({ error: 'Invalid view parameter.' });
@@ -701,6 +783,15 @@ router.get(
         req.query.board_status !== undefined ? parseBoardStatuses(req.query.board_status) : null;
       if (req.query.board_status !== undefined && boardStatuses === null) {
         return res.status(400).json({ error: 'Invalid board_status parameter.' });
+      }
+      const boardOrderTypes =
+        boardStatuses !== null
+          ? req.query.type !== undefined
+            ? parseBoardOrderTypes(req.query.type)
+            : CUSTOMER_DISPLAY_ORDER_TYPES
+          : null;
+      if (boardStatuses !== null && boardOrderTypes === null) {
+        return res.status(400).json({ error: 'Invalid type parameter.' });
       }
       const statusQuery = typeof req.query.status === 'string' ? req.query.status : '';
       const statuses = statusQuery ? statusQuery.split(',') : [];
@@ -736,9 +827,19 @@ router.get(
           params.push(...statuses);
         }
       }
-      if (req.query.type) {
-        wheres.push('orders.type = ?');
-        params.push(req.query.type);
+      if (boardStatuses === null && req.query.type) {
+        const typeValues =
+          typeof req.query.type === 'string' ? req.query.type.split(',').filter(Boolean) : [];
+        if (typeValues.length === 1) {
+          wheres.push('orders.type = ?');
+          params.push(typeValues[0]);
+        } else if (typeValues.length > 1) {
+          wheres.push(`orders.type IN (${typeValues.map(() => '?').join(',')})`);
+          params.push(...typeValues);
+        } else {
+          wheres.push('orders.type = ?');
+          params.push(req.query.type);
+        }
       }
       const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
       if (search) {
@@ -767,7 +868,7 @@ router.get(
 
         if (hasFts) {
           let candidateClause: string;
-          const candidateParams: any[] = [];
+          const candidateParams: unknown[] = [];
           const ftsSearch = '"' + search.replace(/"/g, '""') + '"';
 
           if (isPhoneSearch) {
@@ -881,9 +982,10 @@ router.get(
           ? Math.min(requestedPerPage, 500)
           : 50;
 
-      if (boardStatuses !== null && wheres.length === 0) {
+      if (boardStatuses !== null && boardOrderTypes !== null && wheres.length === 0) {
         const { pageRows, hasMore } = selectBoardEligibleOrderPage(db, {
           statuses: boardStatuses,
+          orderTypes: boardOrderTypes,
           cursor: beforeCursor,
           limit: perPage,
         });
@@ -908,29 +1010,33 @@ router.get(
         });
       }
 
-      if (boardStatuses !== null) {
+      if (boardStatuses !== null && boardOrderTypes !== null) {
         const boardPlaceholders = boardStatuses.map(() => '?').join(',');
+        const boardOrderTypePlaceholders = boardOrderTypes.map(() => '?').join(',');
         const projectedCompletedIds = collectProjectedCompletedOrderIds(
           db,
           boardStatuses,
           beforeCursor,
+          boardOrderTypes,
         );
         if (projectedCompletedIds.length > 0) {
           wheres.push(`orders.id IN (
             SELECT ao.id FROM orders AS ao
             WHERE ao.status IN (${boardPlaceholders})
               AND ao.release_status = 'released'
+              AND +ao.type IN (${boardOrderTypePlaceholders})
             UNION ALL
             SELECT CAST(value AS INTEGER) FROM json_each(?)
           )`);
-          params.push(...boardStatuses, JSON.stringify(projectedCompletedIds));
+          params.push(...boardStatuses, ...boardOrderTypes, JSON.stringify(projectedCompletedIds));
         } else {
           wheres.push(`orders.id IN (
             SELECT ao.id FROM orders AS ao
             WHERE ao.status IN (${boardPlaceholders})
               AND ao.release_status = 'released'
+              AND +ao.type IN (${boardOrderTypePlaceholders})
           )`);
-          params.push(...boardStatuses);
+          params.push(...boardStatuses, ...boardOrderTypes);
         }
       }
       if (beforeCursor) {
@@ -961,7 +1067,7 @@ router.get(
         orders: ordersWithRelations,
         ...(nextCursor !== null && { nextCursor }),
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -1947,7 +2053,7 @@ router.get(
       // Hydrate relations using batchHydrateOrders.
       const [hydrated] = batchHydrateOrders(db, [order]);
       res.json({ order: hydrated });
-    } catch (error: any) {
+    } catch (error: unknown) {
       res.locals.postHogError = error;
       console.error('[API] Internal error:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -1994,26 +2100,16 @@ router.post(
       const authenticatedUserId = (req as any).user.userId;
 
       if (!Array.isArray(items) || items.length === 0) {
-        return res
-          .status(400)
-          .json(
-            structuredOperationFailure(
-              req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
-              'At least one item is required',
-            ),
-          );
+        return res.status(400).json(orderRefusal(req, 'At least one item is required', 'no_items'));
       }
       if (items.length > MAX_ORDER_ITEMS) {
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               `A maximum of ${MAX_ORDER_ITEMS} items is allowed per request`,
+              'too_many_items',
             ),
           );
       }
@@ -2022,11 +2118,10 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               'Valid type is required (dine_in, takeaway, delivery, online)',
+              'invalid_type',
             ),
           );
       }
@@ -2039,11 +2134,10 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               'Valid dispatch_policy is required (immediate, on_payment)',
+              'invalid_dispatch_policy',
             ),
           );
       }
@@ -2052,11 +2146,10 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               'Multi-counter payment flow is not supported for delivery orders',
+              'dispatch_policy_unsupported',
             ),
           );
       }
@@ -2064,11 +2157,10 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               'Multi-counter payment flow is only supported for takeaway and dine-in orders',
+              'dispatch_policy_unsupported',
             ),
           );
       }
@@ -2082,11 +2174,10 @@ router.post(
           return res
             .status(400)
             .json(
-              structuredOperationFailure(
+              orderRefusal(
                 req,
-                'fc.backend.order.create.other_validation',
-                'not_applied',
                 `Invalid checkout_stage: expected '${derivedCheckoutStage}' for dispatch_policy '${isOnPayment ? 'on_payment' : 'immediate'}'`,
+                'invalid_checkout_stage',
               ),
             );
         }
@@ -2099,11 +2190,10 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               'guest_count must be a whole number between 1 and 99',
+              'invalid_guest_count',
             ),
           );
       }
@@ -2125,16 +2215,7 @@ router.post(
             ? error.statusCode
             : 400;
         const message = error instanceof Error ? error.message : 'Invalid charge amount';
-        return res
-          .status(statusCode)
-          .json(
-            structuredOperationFailure(
-              req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
-              message,
-            ),
-          );
+        return res.status(statusCode).json(orderRefusal(req, message, 'invalid_charge_amount'));
       }
 
       // Cashier charge decisions taken in the cart travel with the order, so the
@@ -2150,11 +2231,10 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               'waived_charge_ids and opted_in_charge_ids must be arrays of charge ids',
+              'invalid_charge_selection',
             ),
           );
       }
@@ -2168,14 +2248,7 @@ router.post(
       ) {
         return res
           .status(400)
-          .json(
-            structuredOperationFailure(
-              req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
-              'online_platform must be a string',
-            ),
-          );
+          .json(orderRefusal(req, 'online_platform must be a string', 'invalid_online_platform'));
       }
       if (
         external_order_id !== undefined &&
@@ -2185,12 +2258,7 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
-              req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
-              'external_order_id must be a string',
-            ),
+            orderRefusal(req, 'external_order_id must be a string', 'invalid_external_order_id'),
           );
       }
       if (
@@ -2200,14 +2268,7 @@ router.post(
       ) {
         return res
           .status(400)
-          .json(
-            structuredOperationFailure(
-              req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
-              'delivery_address must be a string',
-            ),
-          );
+          .json(orderRefusal(req, 'delivery_address must be a string', 'invalid_delivery_address'));
       }
       const deliveryAddress =
         typeof delivery_address === 'string' ? delivery_address.trim() || null : null;
@@ -2218,14 +2279,7 @@ router.post(
       ) {
         return res
           .status(400)
-          .json(
-            structuredOperationFailure(
-              req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
-              'delivery_note must be a string',
-            ),
-          );
+          .json(orderRefusal(req, 'delivery_note must be a string', 'invalid_delivery_note'));
       }
       // Courier-only details: other order types never store them.
       const isDelivery = type === 'delivery';
@@ -2286,6 +2340,7 @@ router.post(
             'fc.backend.order.create.other_validation',
             'not_applied',
             message,
+            'invalid_scheduled_release',
           ),
           ...(code ? { code } : {}),
         });
@@ -2323,11 +2378,10 @@ router.post(
         return res
           .status(400)
           .json(
-            structuredOperationFailure(
+            orderRefusal(
               req,
-              'fc.backend.order.create.other_validation',
-              'not_applied',
               err instanceof Error ? err.message : 'Invalid delivery details',
+              orderCreateDisplayCodeFromError(err) ?? 'invalid_delivery_details',
             ),
           );
       }
@@ -2340,8 +2394,9 @@ router.post(
             deferStockDeduction: shouldDeferRelease,
           });
         }
-      } catch (err: any) {
-        const msg = err?.message || 'Item validation failed';
+      } catch (err: unknown) {
+        if (err instanceof InventoryServiceError) throw err;
+        const msg = err instanceof Error ? err.message : 'Item validation failed';
         const isRequiredGroup =
           typeof msg === 'string' &&
           (msg.includes('requires at least') ||
@@ -2349,15 +2404,23 @@ router.post(
             msg.includes('does not allow multiple'));
         const isAddonUnavailable =
           typeof msg === 'string' &&
-          (msg.includes('is not available') ||
-            msg.includes('was not found') ||
-            msg.includes('is out of stock'));
+          (msg.includes('is not available') || msg.includes('was not found'));
         const point = isRequiredGroup
           ? 'fc.backend.order.create.addon_group_validation'
           : isAddonUnavailable
             ? 'fc.backend.order.create.addon_item_validation'
             : 'fc.backend.order.create.other_validation';
-        return res.status(400).json(structuredOperationFailure(req, point, 'not_applied', msg));
+        return res
+          .status(400)
+          .json(
+            structuredOperationFailure(
+              req,
+              point,
+              'not_applied',
+              msg,
+              otherValidationCode(point, err),
+            ),
+          );
       }
       const result = withTxn(() => {
         if (idempotencyKey) {
@@ -2376,7 +2439,7 @@ router.post(
             if (prior.request_hash !== requestHash) {
               throw Object.assign(
                 new Error('Idempotency-Key was already used for a different order request'),
-                { statusCode: 409 },
+                { statusCode: 409, diagnosticCode: 'IDEMPOTENCY_KEY_REUSED' },
               );
             }
             try {
@@ -2553,6 +2616,7 @@ router.post(
           if (!product) {
             throw Object.assign(new Error(`Product ${item.product_id} not found`), {
               statusCode: 404,
+              diagnosticCode: 'PRODUCT_NOT_FOUND',
             });
           }
 
@@ -2573,6 +2637,7 @@ router.post(
             if (!hasPermission(authenticatedUserId, ITEM_PRICE_OVERRIDE_PERMISSION)) {
               throw Object.assign(new Error('Only the owner can override item prices'), {
                 statusCode: 403,
+                diagnosticCode: 'PRICE_OVERRIDE_FORBIDDEN',
               });
             }
             priceOverride = parsePriceOverrideInput(
@@ -2587,7 +2652,7 @@ router.post(
           if (unitPrice < 0 || !Number.isFinite(unitPrice)) {
             throw Object.assign(
               new Error(`Invalid price for ${product.name}: must be a non-negative number`),
-              { statusCode: 400 },
+              { statusCode: 400, diagnosticCode: 'PRICE_INVALID' },
             );
           }
 
@@ -2605,7 +2670,7 @@ router.post(
                     new Error(
                       `Invalid add-on quantity for ${addon.name || 'addon'}: must be a positive integer`,
                     ),
-                    { statusCode: 400 },
+                    { statusCode: 400, diagnosticCode: 'ADDON_QUANTITY_INVALID' },
                   );
                 }
               }
@@ -2968,6 +3033,12 @@ router.post(
           point,
           operationCommitted ? 'applied' : 'not_applied',
           error.statusCode ? error.message : 'Internal server error',
+          otherValidationCode(point, error),
+          point === 'fc.backend.order.create.persistence'
+            ? { failure_class: classifySqlitePersistenceFailure(error) }
+            : point === 'fc.backend.order.create.stock_validation' && error.refusal
+              ? { ...error.refusal }
+              : undefined,
         ),
         ...(error.code === 'bill_awaiting_payment' ||
         error.code === 'MULTI_COUNTER_DISABLED' ||
@@ -3755,6 +3826,94 @@ router.patch(
           throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
         }
 
+        const liveUser = db
+          .prepare('SELECT role, category_ids FROM users WHERE id = ? AND is_active = 1')
+          .get(authUser.userId) as { role: string; category_ids: string | null } | undefined;
+        if (!liveUser) {
+          throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+        }
+        const categoryIds = hasRole(liveUser.role, ROLE_ACCESS.ownerManager)
+          ? []
+          : expandCategoryIdsWithSubcategories(db, parseCategoryIds(liveUser.category_ids));
+        const stationIds = getUserKdsStationIds(db, authUser.userId);
+        const hasStationAssignments = hasUserKdsStationAssignments(db, authUser.userId);
+        if (!stationIds || hasStationAssignments === null) {
+          throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+        }
+        if (hasStationAssignments && stationIds.length === 0) {
+          throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+        }
+        if (categoryIds.length > 0 || stationIds.length > 0) {
+          const stationScope = getKdsStationRoutingScope(db, stationIds, categoryIds);
+          if (!stationScope) {
+            throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+          }
+          const orderStationRow = currentOrder.table_id
+            ? (db
+                .prepare('SELECT kitchen_station_id FROM tables WHERE id = ?')
+                .get(currentOrder.table_id) as { kitchen_station_id: string | null } | undefined)
+            : undefined;
+          const orderStationId = orderStationRow?.kitchen_station_id;
+          if (
+            stationIds.length > 0 &&
+            orderStationId &&
+            !stationIds.includes(String(orderStationId))
+          ) {
+            throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+          }
+          const activeItemCategories = db
+            .prepare(`
+              SELECT oi.id, p.category_id
+              FROM order_items oi
+              LEFT JOIN products p ON p.id = oi.product_id
+              WHERE oi.order_id = ?
+                AND oi.status NOT IN ('cancelled', 'voided', 'void_adjustment', 'refunded')
+                AND oi.quantity > 0
+            `)
+            .all(req.params.id) as Array<{ id: number; category_id: string | null }>;
+          if (activeItemCategories.length === 0) {
+            if (
+              categoryIds.length > 0 ||
+              (stationIds.length > 0 &&
+                !isKdsStationItemAllowed(
+                  stationIds,
+                  stationScope.tablelessCategoryIds,
+                  orderStationId,
+                  null,
+                  orderStationId
+                    ? stationScope.categoryIdsByStation[String(orderStationId)]
+                    : undefined,
+                  stationScope.hasUnrestrictedStation,
+                ))
+            ) {
+              throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+            }
+          }
+          for (const item of activeItemCategories) {
+            if (
+              categoryIds.length > 0 &&
+              (!item.category_id || !categoryIds.includes(String(item.category_id)))
+            ) {
+              throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+            }
+            if (
+              stationIds.length > 0 &&
+              !isKdsStationItemAllowed(
+                stationIds,
+                stationScope.tablelessCategoryIds,
+                orderStationId,
+                item.category_id,
+                orderStationId
+                  ? stationScope.categoryIdsByStation[String(orderStationId)]
+                  : undefined,
+                stationScope.hasUnrestrictedStation,
+              )
+            ) {
+              throw Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
+            }
+          }
+        }
+
         if (currentOrder.status === status) {
           // Idempotent same-state request for order
           const items = attachEffectiveAddons(
@@ -3834,8 +3993,6 @@ router.patch(
           minorFactor,
           roundCurrency,
           evaluatedBills,
-          orderTotalMinor,
-          payableBills,
           totalOutstandingMinor,
           totalCollectedMinor,
           paymentBlocksCompletion: rawPaymentBlocksCompletion,
@@ -4818,18 +4975,42 @@ const handleOrderDiscount = asyncHandler(async (req: Request, res: Response) => 
       const requiresApproval = getSettingValue('discount_requires_approval') === 'true';
       if (requiresApproval) {
         if (!override_pin) {
-          return res
-            .status(403)
-            .json({ error: 'Manager PIN required for discounts', requiresApproval: true });
+          return res.status(403).json({
+            ...structuredOperationFailure(
+              req,
+              'fc.backend.order.discount.validation',
+              'not_applied',
+              'Manager PIN required for discounts',
+            ),
+            requiresApproval: true,
+          });
         }
         const canonicalIp = normalizeIpForRateLimit(clientIp);
         const rateLimitKey = `pin:${canonicalIp}:discount`;
         if (isPinRateLimited(rateLimitKey)) {
-          return res.status(429).json({ error: 'Too many PIN attempts. Try again in 15 minutes.' });
+          return res
+            .status(429)
+            .json(
+              structuredOperationFailure(
+                req,
+                'fc.backend.order.discount.validation',
+                'not_applied',
+                'Too many PIN attempts. Try again in 15 minutes.',
+              ),
+            );
         }
         if (typeof override_pin !== 'string' || !/^\d{4,6}$/.test(override_pin)) {
           checkPinRateLimit(rateLimitKey);
-          return res.status(403).json({ error: 'Invalid manager PIN' });
+          return res
+            .status(403)
+            .json(
+              structuredOperationFailure(
+                req,
+                'fc.backend.order.discount.validation',
+                'not_applied',
+                'Invalid manager PIN',
+              ),
+            );
         }
         const candidateUsers = explicitApproverId
           ? (db
@@ -4867,10 +5048,28 @@ const handleOrderDiscount = asyncHandler(async (req: Request, res: Response) => 
         });
 
         if (verifiedResult.rateLimited) {
-          return res.status(429).json({ error: 'Too many PIN attempts. Try again in 15 minutes.' });
+          return res
+            .status(429)
+            .json(
+              structuredOperationFailure(
+                req,
+                'fc.backend.order.discount.validation',
+                'not_applied',
+                'Too many PIN attempts. Try again in 15 minutes.',
+              ),
+            );
         }
         if (!verifiedResult.user) {
-          return res.status(403).json({ error: 'Invalid manager PIN' });
+          return res
+            .status(403)
+            .json(
+              structuredOperationFailure(
+                req,
+                'fc.backend.order.discount.validation',
+                'not_applied',
+                'Invalid manager PIN',
+              ),
+            );
         }
         approvedByUserId = verifiedResult.user.id;
         preVerifiedOrderDiscountPinHash = verifiedResult.user.pin_hash;

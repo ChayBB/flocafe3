@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import api from '@/lib/api';
 import { showPrintLanguageLoadErrorsToast } from '@/lib/printer/warnings-toast';
 import { tenantCan } from '@/lib/permissions';
-import { normalizePathname } from '@/lib/utils';
+import { clearStaleBodyPointerEvents, normalizePathname } from '@/lib/utils';
 import type { Tenant } from '@/lib/types';
 
 export const LANDING_PAGE_CANDIDATES = [
@@ -32,6 +32,39 @@ export function getLandingPage(tenant?: Tenant | null): string {
     LANDING_PAGE_CANDIDATES.find(([permission]) => tenantCan(tenant, permission))?.[1] ??
     '/auth/login'
   );
+}
+
+export function resolveSafeRedirect(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) {
+    return null;
+  }
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f || trimmed[i] === '\\') {
+      return null;
+    }
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed, 'http://localhost');
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== 'http://localhost') {
+    return null;
+  }
+  const normalized = normalizePathname(parsed.pathname);
+  if (
+    !normalized.startsWith('/') ||
+    normalized.startsWith('//') ||
+    normalized.startsWith('/auth') ||
+    normalized.startsWith('/setup')
+  ) {
+    return null;
+  }
+  return normalized;
 }
 
 const PUBLIC_PATHS = [
@@ -82,13 +115,33 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     pathname?.startsWith('/server-standalone') ||
     pathname === '/customer-display' ||
     pathname?.startsWith('/customer-display/');
+  const isDashboardKdsPath = pathname === '/kds';
+
+  useEffect(() => {
+    clearStaleBodyPointerEvents();
+  }, [pathname, user]);
 
   useEffect(() => {
     // Standalone KDS, Server App, and paired customer display pages manage their own
-    // auth sessions; skip loading shared POS auth store to avoid clearing their tokens.
-    if (isStandalonePath) return;
-    loadFromStorage();
-  }, [isStandalonePath, loadFromStorage]);
+    // auth sessions; skip loading shared POS auth store unless a dashboard tenant session
+    // is present on the in-dashboard /kds route.
+    const authState = typeof useAuthStore.getState === 'function' ? useAuthStore.getState() : null;
+    if (isStandalonePath) {
+      if (
+        isDashboardKdsPath &&
+        (!authState?.user || !authState?.currentTenant) &&
+        typeof window !== 'undefined' &&
+        Boolean(window.localStorage.getItem('token')) &&
+        Boolean(window.localStorage.getItem('tenant'))
+      ) {
+        loadFromStorage();
+      }
+      return;
+    }
+    if (!authState?.user || !authState?.currentTenant) {
+      loadFromStorage();
+    }
+  }, [isDashboardKdsPath, isStandalonePath, loadFromStorage]);
 
   useEffect(() => {
     if (isStandalonePath || !user || !currentTenant) return;

@@ -649,6 +649,16 @@ async function main() {
         'unreleased order excluded from /api/kitchen/orders',
       );
 
+      setStoreSetting(
+        db,
+        'customer_display',
+        JSON.stringify({
+          statuses: ['pending', 'preparing', 'ready'],
+          order_types: ['takeaway', 'delivery'],
+          refresh_seconds: 3,
+          show_updated: true,
+        }),
+      );
       const displayFeed = buildDisplayFeed();
       assertOrThrow(
         !displayFeed.orders.some((o: any) => Number(o.id) === scheduledOrder1Id),
@@ -1936,12 +1946,13 @@ async function main() {
       // Verify unexpected release errors in sweepDueScheduledOrders are caught,
       // the offending order is marked blocked with a generic reason, and the sweep
       // continues processing subsequent orders without aborting.
+      const sharedSweepWall = futureWallClockInZone('America/New_York', 60);
       const poisonCreate = await api(baseUrl, '/api/orders', {
         method: 'POST',
         headers: owner.authHeader,
         body: {
           type: 'takeaway',
-          scheduled_for: futureWallClockInZone('America/New_York', 60),
+          scheduled_for: sharedSweepWall,
           items: [{ product_id: 'prod-latte', quantity: 1 }],
         },
       });
@@ -1952,13 +1963,18 @@ async function main() {
         headers: owner.authHeader,
         body: {
           type: 'takeaway',
-          scheduled_for: futureWallClockInZone('America/New_York', 60),
+          scheduled_for: sharedSweepWall,
           items: [{ product_id: 'prod-latte', quantity: 1 }],
         },
       });
       const healthyOrderId = Number(healthyCreate.data.order.id);
 
-      const sweepDueTime = new Date(Date.parse(poisonCreate.data.order.scheduled_for) + 5_000);
+      const sweepDueTime = new Date(
+        Math.max(
+          Date.parse(poisonCreate.data.order.scheduled_for),
+          Date.parse(healthyCreate.data.order.scheduled_for),
+        ) + 5_000,
+      );
       const isolatedSweepSummary = await sweepDueScheduledOrders(db, {
         nowDate: sweepDueTime,
         trigger: 'sweep',

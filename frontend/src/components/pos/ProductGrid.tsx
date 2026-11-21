@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Search, SlidersHorizontal } from 'lucide-react';
+import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { categoryMenuButton, type CategoryMenuProps } from './CategoryMenuButton';
 import toast from 'react-hot-toast';
 import type { Category, Product, ProductVariant } from '@/lib/types';
@@ -433,6 +433,7 @@ export default function ProductGrid({
   const { showProductImages: showProductImagesSetting } = usePosSettingsStore();
   const showProductImages = showImages ?? showProductImagesSetting;
   const t = useTranslations('pos');
+  const tCommon = useTranslations('common');
   const validateSelectionQuantity = (product: Product, quantity: number) => {
     if (isValidProductQuantity(product, quantity)) return true;
     toast.error(t('orderQuantityInvalid'));
@@ -832,6 +833,11 @@ export default function ProductGrid({
               ) {
                 return;
               }
+              if (e.key === 'Escape' && search) {
+                e.stopPropagation?.();
+                setSearch('');
+                return;
+              }
               if (e.key !== 'Enter' || disabled) return;
               // Typed or pasted barcode, or multiplier search (e.g. 3*latte)
               const trimmed = search.trim();
@@ -876,10 +882,25 @@ export default function ProductGrid({
                 : 'bg-card border-border rounded-xl focus:border-brand'
             }`}
           />
-          {!search && !flat && (
-            <kbd className="hidden sm:inline-flex absolute end-3 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded border border-border bg-muted text-[10px] font-mono text-muted-foreground pointer-events-none">
-              /
-            </kbd>
+          {search ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('');
+                searchInputRef.current?.focus();
+              }}
+              aria-label={tCommon('clear')}
+              data-testid="pos-product-search-clear"
+              className="absolute end-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <X size={14} />
+            </button>
+          ) : (
+            !flat && (
+              <kbd className="hidden sm:inline-flex absolute end-3 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded border border-border bg-muted text-[10px] font-mono text-muted-foreground pointer-events-none">
+                /
+              </kbd>
+            )
           )}
         </div>
         {flat && (

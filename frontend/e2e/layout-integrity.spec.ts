@@ -10,6 +10,7 @@ test('POS product grid has no horizontal clipping and touchable product cards', 
   await page.locator('#email').fill('manager@flo.local');
   await page.locator('#password').fill('E2ePass123!');
   await page.locator('button[type="submit"]').click();
+  await page.waitForURL((url) => !url.pathname.startsWith('/auth/login'), { timeout: 20000 });
 
   // The LAN/browser build must not render Electron-only title-bar markup.
   expect(await page.evaluate(() => Boolean(window.electronAPI))).toBe(false);
@@ -519,8 +520,33 @@ async function removeSyntheticMenu(api: APIRequestContext, menu: SyntheticMenu):
 }
 
 async function loginAsManager(page: Page): Promise<void> {
+  const pinUsersFetched = page
+    .waitForResponse((res) => res.url().includes('/api/auth/pin-users'), { timeout: 5000 })
+    .catch(() => null);
   await page.goto(`${BASE}/auth/login`);
+  await pinUsersFetched;
+  const passwordTab = page.getByTestId('signin-mode-password');
+  if (await passwordTab.isVisible()) {
+    await passwordTab.click();
+  }
   await page.locator('#email').fill('manager@flo.local');
+  await page.locator('#password').fill(E2E_PASSWORD);
+  await page.locator('button[type="submit"]').click();
+  await page.waitForURL(/\/(pos|orders)/, { timeout: 20000 });
+  await setLanguage(page, 'en');
+}
+
+async function loginAsOwner(page: Page): Promise<void> {
+  const pinUsersFetched = page
+    .waitForResponse((res) => res.url().includes('/api/auth/pin-users'), { timeout: 5000 })
+    .catch(() => null);
+  await page.goto(`${BASE}/auth/login`);
+  await pinUsersFetched;
+  const passwordTab = page.getByTestId('signin-mode-password');
+  if (await passwordTab.isVisible()) {
+    await passwordTab.click();
+  }
+  await page.locator('#email').fill('owner@flo.local');
   await page.locator('#password').fill(E2E_PASSWORD);
   await page.locator('button[type="submit"]').click();
   await page.waitForURL(/\/(pos|orders)/, { timeout: 20000 });
@@ -1010,6 +1036,7 @@ interface SyntheticInventory {
   /** Supplies created by this invocation; the cleanup owns exactly these. */
   supplyIds: string[];
   recipeProductIds: string[];
+  visibleSupplyName?: string;
 }
 
 /** Supplies fill the Supplies tab, one movement per supply fills Movements,
@@ -1028,6 +1055,7 @@ async function seedSyntheticInventory(
   const seededSupplyIds = seededSupplies.map((supply) => supply.id);
   const existingSupplyNames = new Set(supplies.map((supply) => supply.name));
   const supplyIds: string[] = [];
+  const createdSupplyNames: string[] = [];
   let nextSupplyIndex = 1;
   let movementsResponse = await api.get(`${BASE}/api/supplies/movements?per_page=50`, { headers });
   expect(movementsResponse.status(), 'movements are readable for seeding').toBe(200);
@@ -1067,6 +1095,7 @@ async function seedSyntheticInventory(
       expect(created.status(), `synthetic supply ${name} is created`).toBe(201);
       const createdId = (await created.json()).supply.id as string;
       supplyIds.push(createdId);
+      createdSupplyNames.push(name);
       seededSupplyIds.push(createdId);
     }
 
@@ -1094,7 +1123,12 @@ async function seedSyntheticInventory(
     expect(saved.status(), 'synthetic recipe is saved').toBe(200);
   }
 
-  return { supplyIds, recipeProductIds };
+  const visibleSupplyName =
+    createdSupplyNames[0] ??
+    seededSupplies[0]?.name ??
+    supplies[0]?.name ??
+    'Scroll Layout Supply 01';
+  return { supplyIds, recipeProductIds, visibleSupplyName };
 }
 
 async function removeSyntheticRecipes(api: APIRequestContext, productIds: string[]): Promise<void> {
@@ -1204,6 +1238,10 @@ test.describe('management lists keep their controls visible while records scroll
 
     const region = page.getByTestId('products-list-scroll');
     await expect(region, 'the product list region renders').toBeVisible();
+    await expect(
+      region.locator('tbody tr').first(),
+      'the product list rows are loaded',
+    ).toBeVisible();
     await expect(
       page.getByText(`${SYNTHETIC_PRODUCT_PREFIX} 024`, { exact: true }),
       'the seeded product catalog is loaded',
@@ -1382,6 +1420,10 @@ test.describe('management lists keep their controls visible while records scroll
       await page.getByRole('tab', { name: entry.tab }).click();
       const region = page.getByTestId(entry.region);
       await expect(region, `${entry.tab}: the list region renders`).toBeVisible();
+      await expect(
+        region.locator('tbody tr').first(),
+        `${entry.tab}: the list rows are loaded`,
+      ).toBeVisible();
       const title = page.getByRole('heading', { name: 'Products', level: 1 });
       const tabs = page.getByRole('tablist');
       const action = page.getByRole('button', { name: entry.action });
@@ -1511,6 +1553,10 @@ test.describe('management lists keep their controls visible while records scroll
       await page.getByRole('tab', { name: entry.tab }).click();
       const region = page.getByTestId(entry.region);
       await expect(region, `${entry.tab}: the list region renders`).toBeVisible();
+      await expect(
+        region.locator('tbody tr').first(),
+        `${entry.tab}: the list rows are loaded`,
+      ).toBeVisible();
 
       const title = page.getByRole('heading', { name: 'Inventory', level: 1 });
       const tabs = page.getByRole('tablist');
@@ -1613,14 +1659,23 @@ test.describe('management lists keep their controls visible while records scroll
     await loginAsManager(page);
     await page.goto(`${BASE}/inventory`);
 
+    const targetSupplyName = inventory?.visibleSupplyName ?? 'Scroll Layout Supply 01';
     const region = page.getByTestId('inventory-supplies-scroll');
     await expect(region).toBeVisible();
+    await expect(
+      region.locator('tbody tr').first(),
+      'the supply list rows are loaded',
+    ).toBeVisible();
+    await expect(
+      page.getByText(targetSupplyName, { exact: true }),
+      'the seeded supply inventory is loaded',
+    ).toBeVisible();
     const scrolled = await scrollToEnd(region);
     expect(scrolled.scrollTop, 'the supply list region owns the scroll').toBeGreaterThan(0);
 
     // The pinned search keeps filtering the scrolled list.
     const search = page.getByPlaceholder('Search').first();
-    await search.fill('Scroll Layout Supply 01');
+    await search.fill(targetSupplyName);
     await expect(region.locator('tbody tr'), 'the pinned search filters the list').toHaveCount(1);
     await search.fill('');
     await expect
@@ -1657,6 +1712,10 @@ test.describe('management lists keep their controls visible while records scroll
 
     const region = page.getByTestId('customers-list-scroll');
     await expect(region, 'the customer list region renders').toBeVisible();
+    await expect(
+      region.locator('tbody tr').first(),
+      'the customer list rows are loaded',
+    ).toBeVisible();
     await expect(
       page.getByText(`${SYNTHETIC_CUSTOMER_PREFIX} 030`, { exact: true }),
       'the seeded customer directory is loaded',
@@ -2220,6 +2279,9 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
     await page.clock.runFor(3000);
     await updatedFeed;
     await page.clock.runFor(0);
+    const readySection = ready.locator('..');
+    const readyIndicator = readySection.getByTestId('customer-display-page-indicator');
+    await expect(readyIndicator).toContainText(/^1 \/ \d+/);
     expect(
       await updatedAt.textContent(),
       'the changed feed is accepted before the current page expires',
@@ -2239,6 +2301,8 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       ready.locator('[data-order-id="display-ready-new-1"]:visible'),
       'the first rotation prioritizes newly ready orders',
     ).toBeVisible();
+    const priorityIndicatorText = (await readyIndicator.textContent()) ?? '';
+    expect(priorityIndicatorText).toMatch(/^(\d+) \/ \1/);
     expectPinned(
       await elementTop(page.locator('header'), 'display header'),
       pinned.header,
@@ -2257,8 +2321,10 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
     await page.clock.runFor(3000);
     await nextFeedUpdate;
     await page.clock.runFor(0);
+    await expect(ready.locator('[data-order-id="display-ready-new-2"]')).toBeAttached();
     await page.clock.runFor(7000);
     await expect.poll(readReadyIds).not.toEqual(firstOrdinaryPage);
+    await expect(readyIndicator).toContainText(/^2 \/ \d+/);
     const secondOrdinaryPage = await readReadyIds();
     expect(
       secondOrdinaryPage.length,
@@ -2279,7 +2345,13 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       'ready heading',
     );
 
-    await page.clock.runFor(20_000);
+    await page.clock.runFor(10_000);
+    await expect(
+      ready.locator('[data-order-id="display-ready-new-2"]:visible'),
+      'continued arrivals show the next priority page before rotating back to ordinary pages',
+    ).toBeVisible();
+    await page.clock.runFor(10_000);
+    await expect(ready.locator('[data-order-id="display-ready-new-2"]:visible')).toHaveCount(0);
     const laterOrdinaryPage = await readReadyIds();
     expect(
       laterOrdinaryPage.length,
@@ -2457,8 +2529,40 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
     expect(firstPreparingPage.length, 'preparing has multiple pages').toBeLessThan(30);
     expect(readyPage).toEqual(['display-ready-1', 'display-ready-2']);
 
+    const preparingSection = preparing.locator('..');
+    const readySection = ready.locator('..');
+    const preparingIndicator = preparingSection.getByTestId('customer-display-page-indicator');
+    await expect(
+      preparingIndicator,
+      'multi-page preparing column shows page indicator',
+    ).toBeVisible();
+    await expect(preparingIndicator).toContainText(/^1 \/ \d+/);
+    await expect(preparingSection.getByTestId('customer-display-overflow-count')).toHaveText(
+      `+${30 - firstPreparingPage.length}`,
+    );
+    const preparingDots = preparingSection.getByTestId('customer-display-page-dot');
+    expect(await preparingDots.count()).toBeGreaterThan(1);
+    await expect(preparingDots.nth(0)).toHaveAttribute('data-active', 'true');
+    await expect(preparingDots.nth(1)).toHaveAttribute('data-active', 'false');
+    await expect(
+      preparingSection.getByTestId('customer-display-page-timer'),
+      'multi-page preparing column shows 10s switch timer',
+    ).toBeVisible();
+    await expect(preparingSection.getByTestId('customer-display-page-timer-bar')).toBeVisible();
+    await expect(
+      readySection.getByTestId('customer-display-page-indicator'),
+      'single-page ready column omits page indicator',
+    ).toHaveCount(0);
+    await expect(
+      readySection.getByTestId('customer-display-page-timer'),
+      'single-page ready column omits page timer',
+    ).toHaveCount(0);
+
     await page.clock.runFor(10_000);
     await expect.poll(() => readIds(preparing)).not.toEqual(firstPreparingPage);
+    await expect(preparingIndicator).toContainText(/^2 \/ \d+/);
+    await expect(preparingDots.nth(0)).toHaveAttribute('data-active', 'false');
+    await expect(preparingDots.nth(1)).toHaveAttribute('data-active', 'true');
     expect(await readIds(ready), 'the single ready page does not rotate').toEqual(readyPage);
 
     feed.replace(displayOrders(30, 3));
@@ -2485,6 +2589,8 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
         .locator('[data-order-id]:visible')
         .evaluateAll((rows) => rows.map((row) => row.getAttribute('data-order-id')));
     await expect(preparing.locator('[data-order-id="display-preparing-1"]:visible')).toBeVisible();
+    const preparingSection = preparing.locator('..');
+    await expect(preparingSection.getByTestId('customer-display-page-timer-bar')).toBeVisible();
     await page.clock.pauseAt(new Date(Date.now() + 1000));
     const currentPage = await readIds();
     expect(currentPage.length).toBeGreaterThan(0);
@@ -2494,6 +2600,10 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await page.clock.runFor(0);
+    await expect(
+      preparingSection.getByTestId('customer-display-page-timer-bar'),
+      'hidden tab unmounts the timer bar',
+    ).toHaveCount(0);
     await page.clock.runFor(20_000);
     expect(await readIds(), 'hidden time does not advance the board').toEqual(currentPage);
 
@@ -2502,6 +2612,10 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await page.clock.runFor(0);
+    await expect(
+      preparingSection.getByTestId('customer-display-page-timer-bar'),
+      'resuming mounts a fresh timer bar',
+    ).toBeVisible();
     await page.clock.runFor(9500);
     expect(await readIds(), 'resuming starts a fresh page interval').toEqual(currentPage);
     await page.clock.runFor(700);
@@ -2617,6 +2731,14 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
       12,
     );
     await expect(ready.locator('[data-order-id^="display-ready-"]:visible')).toHaveCount(12);
+    await expect(
+      page.getByTestId('customer-display-page-indicator'),
+      'narrow viewport omits page indicator',
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId('customer-display-page-timer'),
+      'narrow viewport omits page timer bar',
+    ).toHaveCount(0);
 
     const widths = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
@@ -3180,6 +3302,102 @@ test.describe('customer display wraps full receipt numbers and pages on TV', () 
         .catch(() => {});
     }
   });
+
+  test('keeps a large 550-order feed bounded at 1024x600 without page dots expanding the header', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 600 });
+    await loginAsManager(page);
+    await page.clock.install();
+    await mockDisplayOrders(page, displayOrders(350, 200));
+    await page.goto(`${BASE}/customer-display`);
+
+    const preparing = page.getByTestId('customer-display-preparing-scroll');
+    const ready = page.getByTestId('customer-display-ready-scroll');
+    await expect(
+      preparing.locator('[data-order-id^="display-preparing-"]:visible').first(),
+    ).toBeVisible();
+    await expect(ready.locator('[data-order-id^="display-ready-"]:visible').first()).toBeVisible();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+
+    const preparingSection = preparing.locator('..');
+    const readySection = ready.locator('..');
+    for (const [name, section, scroll] of [
+      ['preparing', preparingSection, preparing],
+      ['ready', readySection, ready],
+    ] as const) {
+      const indicator = section.getByTestId('customer-display-page-indicator');
+      await expect(indicator, `${name} shows numeric page indicator`).toContainText(/^1 \/ \d+/);
+      const dots = section.getByTestId('customer-display-page-dot');
+      expect(
+        await dots.count(),
+        `${name} caps rendered dots to a sliding window`,
+      ).toBeLessThanOrEqual(7);
+      await expect(dots.nth(0)).toHaveAttribute('data-active', 'true');
+
+      const dotRowHeight = await dots
+        .first()
+        .evaluate((dot) => dot.parentElement?.getBoundingClientRect().height ?? 0);
+      expect(dotRowHeight, `${name} dot row remains single-line bounded`).toBeLessThanOrEqual(12);
+
+      const layout = await scroll.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const usableTop = bounds.top + Number.parseFloat(style.paddingTop);
+        const usableBottom = bounds.bottom - Number.parseFloat(style.paddingBottom);
+        const visibleRows = [
+          ...element.querySelectorAll('[data-testid="customer-display-order-row"]'),
+        ]
+          .filter((row) => getComputedStyle(row).visibility === 'visible')
+          .map((row) => {
+            const rect = row.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom };
+          });
+        return {
+          clientHeight: element.clientHeight,
+          usableTop,
+          usableBottom,
+          visibleRows,
+        };
+      });
+      expect(layout.clientHeight, `${name} order scroll stays visible at 1024x600`).toBeGreaterThan(
+        100,
+      );
+      expect(
+        layout.visibleRows.length,
+        `${name} renders visible order rows on page 1`,
+      ).toBeGreaterThan(0);
+      expect(
+        layout.visibleRows.every(
+          (row) => row.top >= layout.usableTop - 1 && row.bottom <= layout.usableBottom + 1,
+        ),
+        `${name} rows remain within the viewport scroll area`,
+      ).toBe(true);
+    }
+
+    const headerTopBefore = await page
+      .locator('header')
+      .evaluate((el) => el.getBoundingClientRect().top);
+    await page.clock.runFor(10_000);
+    await expect(preparingSection.getByTestId('customer-display-page-indicator')).toContainText(
+      /^2 \/ \d+/,
+    );
+    await expect(preparingSection.getByTestId('customer-display-page-dot').nth(1)).toHaveAttribute(
+      'data-active',
+      'true',
+    );
+    const headerTopAfter = await page
+      .locator('header')
+      .evaluate((el) => el.getBoundingClientRect().top);
+    expect(
+      Math.abs(headerTopAfter - headerTopBefore),
+      'header does not oscillate vertically',
+    ).toBeLessThanOrEqual(1);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1),
+      'customer display does not overflow viewport vertically at 1024x600',
+    ).toBe(true);
+  });
 });
 
 /**
@@ -3411,7 +3629,7 @@ test('staff modals close on Escape, ignore non-Escape keys, restore trigger focu
     ).__getActiveKeydownListenerCount = () => activeKeydownListeners.size;
   });
 
-  await loginAsManager(page);
+  await loginAsOwner(page);
   await page.goto(`${BASE}/staff`);
 
   const getListenerCount = () =>

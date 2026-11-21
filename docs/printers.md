@@ -46,6 +46,17 @@ when you save. You can toggle **Store Logo** independently in **Settings > Print
 Browser bills center the logo above the business header. See the
 [printing architecture](architecture/printing.md#receipt-logos) for the renderer details.
 
+## Order number banners
+
+In **Settings > Printers > Bill Content**, the **Large Bold Order Number** toggle controls whether
+customer receipts and kitchen order tickets (KOT) print a prominent, bold order number banner
+(`#<number>` on both customer receipts and KOTs) for order pickup and handover
+verification. The toggle is enabled by default. Signed compliance-pack receipts omit the callout
+banner even when the toggle is enabled. On KDS order cards (both Kanban and Tabs views), order
+numbers are always displayed in prominent bold text to assist kitchen staff and expediters. See the
+[printing architecture](architecture/printing.md#order-number-banners) for renderer layout and wrapping
+details.
+
 ## Menu printing
 
 From **Products** or **POS**, open **Print Menu** and choose a destination before printing:
@@ -103,10 +114,11 @@ skipped with a warning and an unsupported financial row refuses the receipt befo
 ## Receipt and kitchen-ticket languages
 
 Receipt labels (invoice title, bill number, date, totals, payment methods) and kitchen-ticket labels
-are resolved from the tenant's language configuration. During authenticated POS bootstrap, FloCafe
-loads the bundles selected by the receipt and kitchen-ticket policies before releasing the
-dashboard, so the first print does not depend on visiting Settings. If a bundle cannot load, the
-app surfaces an actionable error and the print warning reports any English fallback explicitly.
+are resolved from the tenant's language configuration. During authenticated POS and KDS bootstrap,
+FloCafe loads the receipt and kitchen-ticket policies and their selected locale bundles before any
+first print resolves labels, so the first print does not depend on visiting Settings or racing
+session startup. If a bundle cannot load, the app surfaces an actionable error and the print
+warning reports any English fallback explicitly.
 
 - **Receipts** on the document-driven thermal and browser paths follow the tenant **language**
   setting combined with the stored `bill_language_policy`.

@@ -53,6 +53,7 @@ export interface PosSettingsState {
   billShowCustomerPhone: boolean;
   billDeliveryShowCustomerPhoneAlways: boolean;
   billShowTableNumber: boolean;
+  billShowLargeOrderNumber: boolean;
   // Thermal printer unicode support
   printerUseUnicode: boolean;
   // Printer firmware Arabic/Persian shaping; disabled by default for generic hardware.
@@ -102,6 +103,7 @@ export interface PosSettingsState {
   setBillShowCustomerPhone: (v: boolean) => void;
   setBillDeliveryShowCustomerPhoneAlways: (v: boolean) => void;
   setBillShowTableNumber: (v: boolean) => void;
+  setBillShowLargeOrderNumber: (v: boolean) => void;
   setBillingType: (v: 'postpaid' | 'prepaid') => void;
   setTablesRequired: (v: boolean) => void;
   setPrinterUseUnicode: (v: boolean) => void;
@@ -137,6 +139,8 @@ export interface ReceiptSettingsHydrationData {
   billDeliveryShowCustomerPhoneAlways?: boolean | string | null;
   bill_show_table_number?: boolean | string | null;
   billShowTableNumber?: boolean | string | null;
+  bill_show_large_order_number?: boolean | string | null;
+  billShowLargeOrderNumber?: boolean | string | null;
   receipt_logo?: string | null;
   receiptLogo?: string | null;
   receipt_logo_raster?: string | null;
@@ -193,6 +197,7 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       billShowCustomerPhone: true,
       billDeliveryShowCustomerPhoneAlways: true,
       billShowTableNumber: true,
+      billShowLargeOrderNumber: true,
       printerUseUnicode: false,
       printerArabicShaping: false,
       printerTrimDecimals: false,
@@ -240,6 +245,7 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       setBillDeliveryShowCustomerPhoneAlways: (v) =>
         set({ billDeliveryShowCustomerPhoneAlways: v }),
       setBillShowTableNumber: (v) => set({ billShowTableNumber: v }),
+      setBillShowLargeOrderNumber: (v) => set({ billShowLargeOrderNumber: v }),
       setBillingType: (v) => set({ billingType: v }),
       setTablesRequired: (v) => set({ tablesRequired: v }),
       setPrinterUseUnicode: (v) => set({ printerUseUnicode: v }),
@@ -296,6 +302,11 @@ export const usePosSettingsStore = create<PosSettingsState>()(
           const showTableNum = d.bill_show_table_number ?? d.billShowTableNumber;
           if (showTableNum !== undefined && showTableNum !== null) {
             updates.billShowTableNumber = showTableNum !== false && showTableNum !== 'false';
+          }
+          const showLargeOrderNum = d.bill_show_large_order_number ?? d.billShowLargeOrderNumber;
+          if (showLargeOrderNum !== undefined && showLargeOrderNum !== null) {
+            updates.billShowLargeOrderNumber =
+              showLargeOrderNum !== false && showLargeOrderNum !== 'false';
           }
           const logo = d.receipt_logo ?? d.receiptLogo;
           if (logo !== undefined) {
@@ -371,7 +382,7 @@ export const usePosSettingsStore = create<PosSettingsState>()(
           ),
         ) as PosSettingsState,
       // Migrates legacy store keys (GSTIN rename, removed A4/A5 paper sizes, removed UI languages).
-      version: 6,
+      version: 7,
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (version < 1) {
@@ -411,6 +422,9 @@ export const usePosSettingsStore = create<PosSettingsState>()(
         }
         if (version < 6 && !isLanguage(state.language)) {
           state.language = 'th';
+        }
+        if (version < 7) {
+          state.billShowLargeOrderNumber ??= true;
         }
         return state as unknown as PosSettingsState;
       },

@@ -24,7 +24,13 @@ interface MergeRecord {
   merged_at: string;
 }
 
-export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
+export function PaymentMethodsSettings({
+  isAdmin,
+  canManagePaymentMethods = isAdmin,
+}: {
+  isAdmin: boolean;
+  canManagePaymentMethods?: boolean;
+}) {
   const t = useTranslations('settings');
   const tCommon = useTranslations('common');
   const tPos = useTranslations('pos');
@@ -93,7 +99,9 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
       qrNameRes,
     ] = await Promise.all([
       api.get('/payment-methods?include_inactive=true'),
-      api.get('/payment-methods/merge-history'),
+      canManagePaymentMethods
+        ? api.get('/payment-methods/merge-history').catch(() => ({ data: { merges: [] } }))
+        : Promise.resolve({ data: { merges: [] } }),
       api
         .get('/settings/split_checks_enabled')
         .catch(() => ({ data: { setting: { value: 'false' } } })),
@@ -158,6 +166,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
   }, []); // oxlint-disable-line react-hooks/exhaustive-deps
 
   const add = async () => {
+    if (!canManagePaymentMethods) return;
     if (!newName.trim()) return;
     try {
       await api.post('/payment-methods', { name: newName });
@@ -169,6 +178,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const update = async (method: CustomPaymentMethod, changes: Record<string, unknown>) => {
+    if (!canManagePaymentMethods) return;
     try {
       await api.put(`/payment-methods/${method.id}`, changes);
       await load();
@@ -211,6 +221,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const remove = async (method: CustomPaymentMethod) => {
+    if (!canManagePaymentMethods) return;
     if (!window.confirm(t('deletePaymentMethodConfirm'))) return;
     try {
       await api.delete(`/payment-methods/${method.id}`);
@@ -221,6 +232,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const merge = async (method: CustomPaymentMethod) => {
+    if (!canManagePaymentMethods) return;
     const target = mergeTargets[method.id];
     if (!target) return;
     if (!window.confirm(t('mergePaymentMethodConfirm'))) return;
@@ -240,7 +252,10 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <SettingsTabShell>
-      <div className="bg-card rounded-xl border border-border p-6">
+      <div
+        data-setting-section="payment-methods"
+        className="bg-card rounded-xl border border-border p-6"
+      >
         <div className="flex items-center gap-2 mb-2">
           <CreditCard size={20} className="text-muted-foreground" />
           <h2 className="font-semibold text-foreground">{t('paymentMethods')}</h2>
@@ -278,15 +293,18 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
             <div key={method.id} className="rounded-lg border border-border p-3 space-y-2">
               <div className="flex gap-2 items-center">
                 <input
-                  disabled={!isAdmin}
+                  disabled={!canManagePaymentMethods}
                   value={names[method.id] ?? method.name}
-                  onChange={(e) => setNames((old) => ({ ...old, [method.id]: e.target.value }))}
-                  className="flex-1 px-3 py-2 text-sm border rounded-lg"
+                  onChange={(e) => {
+                    if (!canManagePaymentMethods) return;
+                    setNames((old) => ({ ...old, [method.id]: e.target.value }));
+                  }}
+                  className="flex-1 px-3 py-2 text-sm border rounded-lg disabled:bg-muted disabled:cursor-not-allowed"
                 />
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!isAdmin || names[method.id] === method.name}
+                  disabled={!canManagePaymentMethods || names[method.id] === method.name}
                   onClick={() => update(method, { name: names[method.id] })}
                 >
                   <Save size={14} />
@@ -294,7 +312,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                 <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
-                    disabled={!isAdmin}
+                    disabled={!canManagePaymentMethods}
                     checked={method.is_active}
                     onChange={(e) => update(method, { is_active: e.target.checked })}
                   />{' '}
@@ -303,7 +321,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!isAdmin || Boolean(method.usage_count)}
+                  disabled={!canManagePaymentMethods || Boolean(method.usage_count)}
                   onClick={() => remove(method)}
                 >
                   <Trash2 size={14} />
@@ -316,7 +334,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                   </label>
                   <div className="flex gap-2 items-center">
                     <input
-                      disabled={!isAdmin}
+                      disabled={!canManagePaymentMethods}
                       inputMode="numeric"
                       value={qrAccount}
                       onChange={(e) => setQrAccount(e.target.value)}
@@ -326,7 +344,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!isAdmin || qrAccount === qrAccountSaved}
+                      disabled={!canManagePaymentMethods || qrAccount === qrAccountSaved}
                       onClick={saveQrAccount}
                     >
                       <Save size={14} />
@@ -338,7 +356,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                   </label>
                   <div className="flex gap-2 items-center">
                     <input
-                      disabled={!isAdmin}
+                      disabled={!canManagePaymentMethods}
                       maxLength={60}
                       value={qrAccountName}
                       onChange={(e) => setQrAccountName(e.target.value)}
@@ -350,7 +368,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                       variant="outline"
                       size="sm"
                       aria-label={t('qrAccountNameLabel')}
-                      disabled={!isAdmin || qrAccountName === qrAccountNameSaved}
+                      disabled={!canManagePaymentMethods || qrAccountName === qrAccountNameSaved}
                       onClick={saveQrAccountName}
                     >
                       <Save size={14} />
@@ -366,7 +384,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                   </label>
                   <div className="flex gap-2 items-center">
                     <input
-                      disabled={!isAdmin}
+                      disabled={!canManagePaymentMethods}
                       inputMode="numeric"
                       value={bankAccount}
                       onChange={(e) => setBankAccount(e.target.value)}
@@ -378,7 +396,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                       variant="outline"
                       size="sm"
                       aria-label={t('bankQrAccountLabel')}
-                      disabled={!isAdmin || bankAccount === bankAccountSaved}
+                      disabled={!canManagePaymentMethods || bankAccount === bankAccountSaved}
                       onClick={saveBankAccount}
                     >
                       <Save size={14} />
@@ -387,7 +405,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
                   <p className="text-xs text-muted-foreground">{t('bankQrAccountHint')}</p>
                 </div>
               )}
-              {Boolean(method.usage_count) && isAdmin && (
+              {Boolean(method.usage_count) && canManagePaymentMethods && (
                 <div className="flex gap-2 items-center">
                   <select
                     value={mergeTargets[method.id] || ''}
@@ -419,7 +437,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
               )}
             </div>
           ))}
-          {isAdmin && (
+          {canManagePaymentMethods && (
             <div className="flex gap-2">
               <input
                 value={newName}
@@ -439,17 +457,21 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </div>
 
-      <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+      <div
+        data-setting-section="split-checks"
+        className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4"
+      >
         <div>
           <h2 className="font-semibold text-foreground">{t('splitChecks')}</h2>
           <p className="text-sm text-muted-foreground mt-1">{t('splitChecksHint')}</p>
         </div>
         <input
           type="checkbox"
-          className="size-5"
+          className="size-5 disabled:cursor-not-allowed"
           disabled={!isAdmin}
           checked={splitChecksEnabled}
           onChange={async (e) => {
+            if (!isAdmin) return;
             const value = e.target.checked;
             setSplitChecksEnabled(value);
             try {
@@ -462,7 +484,10 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
         />
       </div>
 
-      <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+      <div
+        data-setting-section="card-transaction-id"
+        className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4"
+      >
         <div>
           <h2 id="card-transaction-id-required-label" className="font-semibold text-foreground">
             {t('cardTransactionIdRequired')}
@@ -484,7 +509,7 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
             type="checkbox"
             aria-labelledby="card-transaction-id-required-label"
             aria-describedby="card-transaction-id-required-hint"
-            className="size-5 shrink-0"
+            className="size-5 shrink-0 disabled:cursor-not-allowed"
             disabled={
               !isAdmin ||
               cardTransactionSettingState !== 'ready' ||
@@ -492,7 +517,11 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
             }
             checked={cardTransactionIdRequired}
             onChange={async (e) => {
-              if (isSavingCardTransactionIdRequired || cardTransactionSaveInFlightRef.current)
+              if (
+                !isAdmin ||
+                isSavingCardTransactionIdRequired ||
+                cardTransactionSaveInFlightRef.current
+              )
                 return;
               const previousValue = cardTransactionIdRequired;
               const value = e.target.checked;
@@ -516,7 +545,10 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+      <div
+        data-setting-section="require-open-shift"
+        className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4"
+      >
         <div>
           <h2 id="require-open-shift-label" className="font-semibold text-foreground">
             {t('requireOpenShift')}
@@ -530,10 +562,11 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
           type="checkbox"
           aria-labelledby="require-open-shift-label"
           aria-describedby="require-open-shift-hint"
-          className="size-5 shrink-0"
+          className="size-5 shrink-0 disabled:cursor-not-allowed"
           disabled={!isAdmin}
           checked={requireOpenShift}
           onChange={async (e) => {
+            if (!isAdmin) return;
             const value = e.target.checked;
             setRequireOpenShift(value);
             try {
@@ -546,7 +579,10 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
         />
       </div>
 
-      <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+      <div
+        data-setting-section="one-shift-per-staff"
+        className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4"
+      >
         <div>
           <h2 id="one-shift-per-staff-label" className="font-semibold text-foreground">
             {t('oneShiftPerStaff')}
@@ -563,10 +599,11 @@ export function PaymentMethodsSettings({ isAdmin }: { isAdmin: boolean }) {
           type="checkbox"
           aria-labelledby="one-shift-per-staff-label"
           aria-describedby="one-shift-per-staff-hint"
-          className="size-5 shrink-0"
+          className="size-5 shrink-0 disabled:cursor-not-allowed"
           disabled={!isAdmin}
           checked={oneShiftPerStaff}
           onChange={async (e) => {
+            if (!isAdmin) return;
             const value = e.target.checked;
             setOneShiftPerStaff(value);
             try {

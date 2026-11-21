@@ -328,6 +328,29 @@ html[data-flo-desktop-titlebar='true'] {
   }
 }
 
+@keyframes flo-display-page-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.flo-display-page-timer-bar {
+  inline-size: 100%;
+  block-size: 100%;
+  transform-origin: left center;
+  animation-name: flo-display-page-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  pointer-events: none;
+}
+
+html[dir='rtl'] .flo-display-page-timer-bar {
+  transform-origin: right center;
+}
+
 .flo-toast-drain {
   position: absolute;
   inset-block-end: 0;
@@ -525,6 +548,8 @@ div:hover > .flo-toast-drain,
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 12%);
   --sidebar-ring: #f97316;
+  /* Brand surface for bg-brand-light in dark mode. */
+  --color-brand-light: oklch(0.24 0.05 50);
 }
 
 .theme-kds.dark {
@@ -632,8 +657,15 @@ html.dark::-webkit-scrollbar-thumb:hover,
   body {
     @apply bg-background text-foreground;
   }
-  select {
+  select,
+  input[type="date"],
+  input[type="datetime-local"],
+  input[type="month"],
+  input[type="week"],
+  input[type="time"] {
     color-scheme: light;
+  }
+  select {
     background-color: var(--card);
     color: var(--card-foreground);
   }
@@ -642,7 +674,12 @@ html.dark::-webkit-scrollbar-thumb:hover,
     background-color: var(--card);
     color: var(--card-foreground);
   }
-  .dark select {
+  .dark select,
+  .dark input[type="date"],
+  .dark input[type="datetime-local"],
+  .dark input[type="month"],
+  .dark input[type="week"],
+  .dark input[type="time"] {
     color-scheme: dark;
   }
 }

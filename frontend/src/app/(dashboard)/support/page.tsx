@@ -1,5 +1,7 @@
 'use client';
 
+import { ORDER_CREATE_DISPLAY_CODES } from '@/lib/order-attempt';
+import { NETWORK_FAILURE_CLASSES } from '@/lib/transport-failure';
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { LifeBuoy } from 'lucide-react';
@@ -37,6 +39,8 @@ const FAILURE_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}
 const HELP_CAPTURE_OUTCOMES: Record<string, readonly string[]> = {
   'fc.backend.order.create.quantity_validation': ['not_applied'],
   'fc.backend.order.create.stock_validation': ['not_applied'],
+  'fc.backend.order.create.addon_group_validation': ['not_applied'],
+  'fc.backend.order.create.addon_item_validation': ['not_applied'],
   'fc.backend.order.create.other_validation': ['not_applied'],
   'fc.backend.order.create.persistence': ['not_applied', 'partial', 'unknown'],
   'fc.backend.order.create.server_error': ['not_applied', 'partial', 'unknown'],
@@ -77,7 +81,8 @@ const HELP_CAPTURE_OUTCOMES: Record<string, readonly string[]> = {
   'fc.client.payment.create.retry_state_update': ['applied'],
   'fc.client.bill.generate.retry_state_update': ['applied'],
 };
-const HELP_DISPLAY_CODES = new Set([
+const HELP_DISPLAY_CODES = new Set<string>([
+  ...ORDER_CREATE_DISPLAY_CODES,
   'invalid_type',
   'invalid_value',
   'disabled',
@@ -117,13 +122,14 @@ const HELP_DISPLAY_CODES = new Set([
   'charge_not_waivable',
   'charge_always_applied',
 ]);
-const HELP_FAILURE_CLASSES = new Set([
-  'timeout',
-  'dns',
-  'connection_refused',
-  'offline',
-  'unreachable',
-  'invalid_response',
+const HELP_FAILURE_CLASSES = new Set<string>(NETWORK_FAILURE_CLASSES);
+const HELP_PERSISTENCE_FAILURE_CLASSES = new Set([
+  'busy_or_locked',
+  'constraint',
+  'read_only',
+  'disk_full',
+  'io_error',
+  'schema_or_migration',
   'unknown',
 ]);
 
@@ -156,6 +162,14 @@ function operationFailureForHelp(failure: LocalFailure): {
     capturePoint.endsWith('.transport') &&
     typeof metadata.failure_class === 'string' &&
     HELP_FAILURE_CLASSES.has(metadata.failure_class)
+  ) {
+    facts.failure_class = metadata.failure_class;
+  }
+  if (
+    (capturePoint === 'fc.backend.order.create.persistence' ||
+      capturePoint === 'fc.backend.bill.generate.failure') &&
+    typeof metadata.failure_class === 'string' &&
+    HELP_PERSISTENCE_FAILURE_CLASSES.has(metadata.failure_class)
   ) {
     facts.failure_class = metadata.failure_class;
   }

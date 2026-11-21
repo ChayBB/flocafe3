@@ -140,7 +140,7 @@ export function ChargesSettingsCard({ canManage }: { canManage: boolean }) {
   }, [load]);
 
   const persist = async (next: ChargeDefinition[]) => {
-    if (loading || loadError) return;
+    if (!canManage || loading || loadError) return;
     setSaving(true);
     try {
       await save(next);
@@ -153,7 +153,7 @@ export function ChargesSettingsCard({ canManage }: { canManage: boolean }) {
   };
 
   const removeCharge = async (charge: ChargeDefinition) => {
-    if (loading || loadError) return;
+    if (!canManage || loading || loadError) return;
     const ok = await confirm(t('deleteChargeConfirm', { name: charge.name }), {
       destructive: true,
       confirmLabel: tCommon('delete'),
@@ -163,7 +163,7 @@ export function ChargesSettingsCard({ canManage }: { canManage: boolean }) {
   };
 
   const handlePresetChange = (kind: ChargePresetKind) => {
-    if (saving || editingOriginalId !== null) return;
+    if (!canManage || saving || editingOriginalId !== null) return;
     setDuplicateId(false);
     if (kind === 'custom') {
       setEditing(emptyForm());
@@ -187,7 +187,7 @@ export function ChargesSettingsCard({ canManage }: { canManage: boolean }) {
   };
 
   const submitForm = async () => {
-    if (!editing || loading || loadError || saving) return;
+    if (!canManage || !editing || loading || loadError || saving) return;
     setSaving(true);
     try {
       let currentCharges = charges;
@@ -247,7 +247,10 @@ export function ChargesSettingsCard({ canManage }: { canManage: boolean }) {
   ) : null;
 
   return (
-    <div className="bg-card rounded-xl border border-border p-6">
+    <div
+      data-setting-section="charges-surcharges"
+      className="bg-card rounded-xl border border-border p-6"
+    >
       <div className="flex items-center justify-between gap-3 mb-1">
         <div className="flex items-center gap-2">
           <Percent size={20} className="text-muted-foreground" />

@@ -42,6 +42,8 @@ export interface KotOptions {
   locale?: string;
   /** Store timezone used for business-local time formatting. */
   timezone?: string;
+  /** Print the Order Number in a large bold callout banner on KOT. Default: true */
+  showLargeOrderNumber?: boolean;
   /** Selected thermal text capabilities; defaults to generic ESC/POS safety. */
   capabilities?: ThermalPrinterCapabilities;
 }

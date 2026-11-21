@@ -1,7 +1,12 @@
 /** Detailed tax billing receipt encoder for ESC/POS thermal printers. */
 import ReceiptPrinterEncoder from '@point-of-sale/receipt-printer-encoder';
 import type { Bill, Tenant } from '@/lib/types';
-import { normalizeCurrencyToAscii, normalizeThermalText, padCurrencyPrefix } from './unicode';
+import {
+  normalizeCurrencyToAscii,
+  normalizeThermalText,
+  padCurrencyPrefix,
+  resolveAsciiCurrencyFallback,
+} from './unicode';
 import {
   columnsForReceiptPaperSize,
   displayCellWidth,
@@ -22,6 +27,7 @@ import {
 } from '@/lib/countries';
 import { formatDate } from './format-date';
 import { billDocumentTime, shouldShowCustomerNumber } from '@print/document';
+import { layoutStyledUnit } from '@print/layout';
 import { formatTaxComponentLabel, resolveTaxComponents } from './tax-components';
 import {
   hasUnsupportedPrinterChars,
@@ -65,6 +71,8 @@ export interface TaxBillOptions {
   deliveryShowCustomerPhoneAlways?: boolean;
   /** Show the table number when available. Default: true */
   showTableNumber?: boolean;
+  /** Print the Order Number in a large bold callout banner on customer receipts. */
+  showLargeOrderNumber?: boolean;
   /** State code for tax calculation */
   stateCode?: string;
   /** If false (default), replace ₹/€/£/etc. with ASCII (Rs, EUR, GBP…). */
@@ -103,13 +111,9 @@ function resolveEncoderCurrency(
   capabilities?: ThermalPrinterCapabilities,
 ): string {
   const normalizedCurrency = rawCurrency === 'ریال' ? 'IRR' : rawCurrency;
-  const asciiFallback = normalizeCurrencyToAscii(normalizedCurrency);
-  const fallbackCurrency =
-    normalizedCurrency === '¥' && currencyCode !== 'JPY'
-      ? currencyCode
-      : /^[\x00-\x7F]+$/.test(asciiFallback)
-        ? asciiFallback
-        : currencyCode;
+  const mappedFallback = resolveAsciiCurrencyFallback(normalizedCurrency, currencyCode);
+  const asciiFallback = mappedFallback ?? normalizeCurrencyToAscii(normalizedCurrency);
+  const fallbackCurrency = /^[\x00-\x7F]+$/.test(asciiFallback) ? asciiFallback : currencyCode;
   const hasSymbol = normalizedCurrency.trim().length > 0;
   if (capabilities) {
     const normalizedForCapabilities = normalizeThermalText(normalizedCurrency, capabilities);
@@ -333,6 +337,39 @@ export function buildTaxBillBytes(
   enc.newline();
 
   // ── Bill Details ─────────────────────────────────────────────────────────
+  if (opts.showLargeOrderNumber === true && order?.order_number) {
+    const cleanOrderNum = String(order.order_number).trim().replace(/^#/, '');
+    if (cleanOrderNum.length > 0) {
+      const bannerText = `#${cleanOrderNum}`;
+      const layout = layoutStyledUnit(
+        {
+          text: bannerText,
+          widthMultiplier: 2,
+          field: 'order number banner',
+        },
+        {
+          logicalColumns: cols,
+          direction: 'ltr',
+          languages: [language ?? 'en'],
+          capabilities: opts.capabilities,
+        },
+      );
+      enc.align('center').bold(true).width(layout.widthMultiplier).height(2);
+      for (const line of layout.lines) {
+        safePrinterText(
+          enc,
+          line,
+          warnings,
+          false,
+          arabicShaping,
+          cols,
+          undefined,
+          language,
+        ).newline();
+      }
+      enc.width(1).height(1).bold(false).align('left');
+    }
+  }
   enc.align('left');
   safePrinterText(
     enc,

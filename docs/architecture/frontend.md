@@ -86,7 +86,7 @@ Four things do not use it, and a new screen has to notice which kind it is:
 | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`kds-standalone/page.tsx`](../../frontend/src/app/kds-standalone/page.tsx)       | builds its own axios instance on its own origin, because it runs on the `:3002` base port rather than the POS window's `:3001`, and on a `401` clears the token and reloads instead of redirecting |
 | [`server-standalone/page.tsx`](../../frontend/src/app/server-standalone/page.tsx) | the same, against the filtered `:3003` proxy                                                                                                                                                       |
-| [`i18n/server-language.ts`](../../frontend/src/lib/i18n/server-language.ts)       | bare `fetch`, because it reads the tenant's language before a session exists                                                                                                                       |
+| [`i18n/server-language.ts`](../../frontend/src/lib/i18n/server-language.ts)       | bare `fetch`, because it reads the tenant's language and theme defaults before a session exists                                                                                                    |
 | the KDS live feed                                                                 | a WebSocket, described below                                                                                                                                                                       |
 
 The other `axios` imports in the renderer are `axios.isAxiosError` for error shape, not a second
@@ -140,11 +140,21 @@ transient notices and ignores late-settling responses from another order.
 
 ### Split-check availability is a state, not a hidden button
 
-The POS payment modal derives split-check availability through explicit states rather than a boolean
-that silently hid the control. The feature setting (`split_checks_enabled`) lookup reports loading,
-ready, and failed states: while loading the section stays hidden, on failure it
-replaces the section with an error and a retry action, and a `settings.view` denial explains the
-account cannot check availability. Only a successfully read `false` removes the section.
+The POS payment modal consolidates equal-amount shares and item-based check splitting into a unified
+Split card inside the tender column of the three-column checkout workspace, rather than splitting
+controls across separate panels. It derives
+item-based split-check availability through explicit states rather than a boolean that silently hid the
+control. The feature setting (`split_checks_enabled`) lookup reports loading, ready, and error states:
+while loading the item-split panel stays hidden, on failure it displays an inline error with a retry
+action, and a `settings.view` denial explains the account cannot check availability. When enabled, a
+two-tab mode switcher toggles between item-based check splitting and equal-amount shares. A successfully
+read `false` removes the item-split mode switcher and controls, leaving only the equal-amount share
+calculator when a balance remains.
+
+Both equal-amount sharing and [`SplitCheckModal`](../../frontend/src/components/pos/SplitCheckModal.tsx)
+provide `-` / `+` steppers for numeric values. Equal-share payer counts also have quick presets
+(`2`, `3`, `4`). In table mode, check allocators rebalance quantities across checks or reset evenly
+in a single tap without over-allocating.
 
 Eligibility resolves in a fixed order so staff always see the same reason for the same bill:
 billing permissions, an unresolved payment or split in progress, anything other than an untouched
@@ -308,7 +318,9 @@ Route gating lives in `AuthGuard`:
 - `getLandingPage` returns the first page in a fixed list the tenant can reach. The list is ordered,
   not role-aware: `pos.use` is checked before `dashboard.view`, and `pos.use` ships to owners, so
   an owner lands on the POS like anyone else. The list is a fallback order for whichever surfaces
-  are available, not a statement about what a role prefers.
+  are available, not a statement about what a role prefers. When `/auth/login` carries a
+  `?redirect=` query parameter, `resolveSafeRedirect` accepts only a normalized same-origin internal
+  path outside `/auth` and `/setup`; any other value falls back to `getLandingPage`.
 - `PAGE_PERMISSIONS` maps a guarded route to the single permission id it needs. `/staff` and
   `/settings` are the two exceptions and carry an any-of list instead, because either screen
   aggregates several permissions. Adding a route means adding it to one of those three; a route in
@@ -316,7 +328,8 @@ Route gating lives in `AuthGuard`:
 - `PUBLIC_PATHS` holds the unauthenticated surfaces: `/kds`, `/kds-standalone`,
   `/server-standalone`, `/customer-display`, `/auth/login`, `/auth/register`, `/auth/recover`, and
   `/setup`. The standalone KDS, Server App, and paired customer display pages run their own session
-  and skip the shared auth store, so loading it there would clear their token.
+  and skip the shared auth store, so loading it there would clear their token; `/kds` loads the
+  shared store only when both `token` and `tenant` are already in `localStorage`.
 - Once a user and tenant are resolved, the guard refreshes the auth context on window focus, every
   30 seconds, and on `flo:authorization-denied`.
 
@@ -354,9 +367,12 @@ Every privileged channel in [`main/ipc.ts`](../../main/ipc.ts) is registered thr
 wrapper, which calls `isTrustedMainWindowSender` before the listener runs and returns
 `{ error: 'Unauthorized sender' }` to anything else. `isTrustedMainWindowSender` requires the caller
 to be the active main `BrowserWindow`, its current top-level `mainFrame`, and `http:` on `localhost`
-or `127.0.0.1` at the active Express server port. That establishes **which window is calling**. It
-does not establish **who is signed in**, and the single POS window serves every role from chef to
-owner. Everything else in this section follows from that gap.
+or `127.0.0.1` at the active Express server port. That establishes **which window is calling**. To
+establish **who is signed in** for renderer mutations, privileged IPC channels (`set-setting`,
+`updates:set-auto-check`, `updates:set-beta-channel`) receive the caller's JWT forwarded from
+renderer storage via [`main/preload.ts`](../../main/preload.ts) and authorize it through
+`authorizeRendererPermission` in [`main/security/ipc-auth.ts`](../../main/security/ipc-auth.ts),
+checking active status, revocation, staleness, and permissions against the database.
 
 Registering a privileged channel with a bare `ipcMain.handle` skips the check. All privileged
 channels in [`main/ipc.ts`](../../main/ipc.ts) go through the `handle` wrapper, and direct update
@@ -366,17 +382,19 @@ enforce sender validation.
 
 ### What the settings channel may write
 
-One key. `set-setting` checks the key against `ALLOWED_IPC_KEYS`, which contains `theme_mode` and
-nothing else, and rejects a value that is not one of `light`, `dark`, or `system`. Every other
-setting is written over a permission-gated HTTP route, where the acting user is known. The read
-side, `get-settings`, masks `jwt_secret`, `cloud_api_key`, `cloud_device_secret`,
-`cloud_deletion_status_token`, and `cloud_last_error`, and collapses `cloud_last_error` to a
-generic string.
+`set-setting` checks the key against `ALLOWED_IPC_KEYS`, which contains `theme_mode` (accepted
+values: `light`, `dark`, `system`) and `orders_layout` (accepted values: `split`, `cards`). Writes
+require `settings.manage` via `authorizeRendererPermission`. Before initial setup creates any users,
+unauthenticated writes are allowed for `theme_mode` only (`allowPreSetup: true`) so initial theme
+preference can be applied; once users exist, `settings.manage` is strictly enforced. Desktop update
+settings written via IPC (`updates:set-auto-check` and `updates:set-beta-channel` in
+[`main/update-ipc.ts`](../../main/update-ipc.ts)) similarly require sender validation and
+`settings.manage` authorization.
 
-The renderer writes the theme over HTTP too, with `PUT /api/settings/theme_mode`, which requires
-`settings.manage`. The IPC settings channel exists with the theme key allowed; no renderer code
-calls it today. Widening `ALLOWED_IPC_KEYS` means moving an authorization decision from a
-permission-gated route onto a window-origin check, which is a different and weaker boundary.
+Every other setting is written over a permission-gated HTTP route, where the acting user is known.
+The read side, `get-settings`, masks `jwt_secret`, `auth_clock_high_water_ms`, `cloud_api_key`,
+`cloud_device_secret`, `cloud_deletion_status_token`, and `cloud_last_error`, and collapses
+`cloud_last_error` to a generic string.
 
 The Settings theme picker also stores which light and which dark theme is chosen, in
 `theme_light_variant` and `theme_dark_variant` (`1`, `2`, or `3`, written over the same HTTP
@@ -404,14 +422,16 @@ The restore that path feeds is authorised over HTTP by a session holding `databa
 origin check is the right gate for the picker and adding a PIN prompt to it would be theatre.
 
 The HTTP twins of those repairs are gated separately, and not uniformly, by
-[`main/routes/database-tools.ts`](../../main/routes/database-tools.ts). Every one of its nine routes
-requires `database.manage`. Three of them add `requireMasterPin` on a `master_pin` body field:
+[`main/routes/database-tools.ts`](../../main/routes/database-tools.ts). Every one of its ten routes
+requires `database.manage`. Four of them add `requireMasterPin` (reading `master_pin` from the
+request body or `x-master-pin` header):
 
-| Route                                         | Extra requirement                            |
-| --------------------------------------------- | -------------------------------------------- |
-| `POST /api/db-tools/initialize`               | the Master PIN, then the `INITIALIZE` phrase |
-| `POST /api/db-tools/currency-reset`           | the Master PIN                               |
-| `POST /api/db-tools/backups/:fileName/delete` | the Master PIN                               |
+| Route                                         | Extra requirement                                     |
+| --------------------------------------------- | ----------------------------------------------------- |
+| `POST /api/db-tools/initialize`               | the Master PIN, then the `INITIALIZE` phrase          |
+| `POST /api/db-tools/currency-reset`           | the Master PIN                                        |
+| `POST /api/db-tools/backups/:fileName/delete` | the Master PIN                                        |
+| `POST /api/db-tools/master-pin/reset`         | the current Master PIN when one is already configured |
 
 Of the remaining six, one matters here because its IPC twin is gated the other way:
 
@@ -438,23 +458,29 @@ Write it on the HTTP settings route, gated on the same permission as its neighbo
 through `api`. Use the IPC settings channel for nothing. A genuinely new native capability needs
 three things together: a `contextBridge` entry in `preload.ts`, a `handle` wrapper in `ipc.ts` so
 `isTrustedMainWindowSender` applies, and a matching entry in `ElectronAPI`. If it is a privileged
-write, it also needs an authorization step that can see the signed-in user, because the origin check
-cannot.
+write, it also needs an authorization step that verifies the signed-in user against the backend
+permission model via `authorizeRendererPermission` in
+[`main/security/ipc-auth.ts`](../../main/security/ipc-auth.ts), because the window-origin check
+establishes only the calling window.
 
 ## State stores
 
-Zustand holds the renderer's client state. Five stores live in
-[`frontend/src/store/`](../../frontend/src/store), and the printer store lives with the printer
-hook because it carries the transport:
+Zustand holds the renderer's client state. Eight stores live in
+[`frontend/src/store/`](../../frontend/src/store) (alongside
+[`session-events.ts`](../../frontend/src/store/session-events.ts) for session-boundary reset
+notifications), and the printer store lives with the printer hook because it carries the transport:
 
-| Store                                                         | Holds                                                                                                                                                                                     | Persistence                                                                                                                                                  |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`auth.ts`](../../frontend/src/store/auth.ts)                 | `user`, `token`, `tenants`, `currentTenant`, `loading`, `isLocked`, and the locales that failed to warm at bootstrap                                                                      | token and tenant in `localStorage`; throws `StorageUnavailableError` when storage is unavailable                                                             |
-| [`cart.ts`](../../frontend/src/store/cart.ts)                 | cart items with their addons, instructions and selected product variant, order type, table, customer, guest count, delivery details, and the subtotal and item count selectors            | none                                                                                                                                                         |
-| [`held-orders.ts`](../../frontend/src/store/held-orders.ts)   | suspended orders keyed by table, and the fetch, hold, restore, remove, and lookup actions over `/held-orders`                                                                             | none                                                                                                                                                         |
-| [`pos-settings.ts`](../../frontend/src/store/pos-settings.ts) | the tenant's POS configuration, printer defaults, bill template and provenance, receipt and kitchen-ticket language policy, and idle `autoLockMinutes`                                    | `persist` under the `pos-settings` key, version 5; `partialize` excludes `whatsappEnabled`, `billLanguagePolicy`, `kotLanguagePolicy`, and `autoLockMinutes` |
-| [`theme.ts`](../../frontend/src/store/theme.ts)               | `mode` and whether this session made an explicit choice                                                                                                                                   | none; `useThemeModeToggle` writes through the API and rolls the store back when the write fails                                                              |
-| [`usePrinterStore`](../../frontend/src/hooks/usePrinter.ts)   | connection status, the hardware and WebUSB printer records, the print method, the last emitted bytes, and the print actions: `printBill`, `printTaxBill`, `printKot`, `printDeliverySlip` | `persist`                                                                                                                                                    |
+| Store                                                           | Holds                                                                                                                                                                                                                                    | Persistence                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`auth.ts`](../../frontend/src/store/auth.ts)                   | `user`, `token`, `tenants`, `currentTenant`, `loading`, `isLocked`, and the locales that failed to warm at bootstrap                                                                                                                     | token and tenant in `localStorage`; throws `StorageUnavailableError` when storage is unavailable                                                                                                                                                  |
+| [`cart.ts`](../../frontend/src/store/cart.ts)                   | cart items with their addons, instructions and selected product variant, order type, table, customer, guest count, delivery details, and the subtotal and item count selectors                                                           | none                                                                                                                                                                                                                                              |
+| [`charges.ts`](../../frontend/src/store/charges.ts)             | `charges`, `loading`, `error`, and the `load` and `save` actions over `/settings/charges`                                                                                                                                                | none in the store (persisted via `PUT /api/settings/charges`)                                                                                                                                                                                     |
+| [`cloud-attention.ts`](../../frontend/src/store/cloud-attention.ts) | per-tenant `emailNeedsAttention`, `deletionNeedsAttention`, and `anyNeedsAttention` indicators shared by the sidebar Settings badge and Settings sub-navigation (`Account`, `Privacy`), derived from `/settings/cloud/account` and `/settings/cloud` | none (reset on session boundaries via `session-events.ts`)                                                                                                                                                                                        |
+| [`held-orders.ts`](../../frontend/src/store/held-orders.ts)     | suspended orders keyed by table, and the fetch, hold, restore, remove, and lookup actions over `/held-orders`                                                                                                                            | none                                                                                                                                                                                                                                              |
+| [`orders-layout.ts`](../../frontend/src/store/orders-layout.ts) | `layout` (`'split'` or `'cards'`) and the `userSelected` session guard                                                                                                                                                                   | none in the store (persisted via `PUT /api/settings/orders_layout`)                                                                                                                                                                               |
+| [`pos-settings.ts`](../../frontend/src/store/pos-settings.ts)   | the tenant's POS configuration, printer defaults, bill template and provenance, receipt and kitchen-ticket language policy, and idle `autoLockMinutes`                                                                                   | `persist` under the `pos-settings` key, version 6; `partialize` excludes `whatsappEnabled`, `billLanguagePolicy`, `kotLanguagePolicy`, and `autoLockMinutes`                                                                                      |
+| [`theme.ts`](../../frontend/src/store/theme.ts)                 | `mode`, whether this session made an explicit choice, and whether server theme info has synced                                                                                                                                           | none in the store; `useThemeModeToggle` and Settings write `PUT /api/settings/theme_mode` (clearing `flo-kds-theme-override` after a successful save, while a failed save rolls back the mode and keeps the override; `useThemeModeToggle` also clears the override when the selected mode is already active), and the KDS header toggle persists a local override under `flo-kds-theme-override` |
+| [`usePrinterStore`](../../frontend/src/hooks/usePrinter.ts)     | connection status, the hardware and WebUSB printer records, the print method, the last emitted bytes, and the print actions: `printBill`, `printTaxBill`, `printKot`, `printDeliverySlip`                                                | `persist`                                                                                                                                                                                                                                         |
 
 `held-orders.ts` exports `createHeldOrdersStore(apiClient)`, so a test can pass its own client
 instead of the shared one.
@@ -546,12 +572,12 @@ Warnings travel with every result. `hasFinancialPrintWarning` refuses the whole 
 print a total the printer cannot represent, which is why a capability failure is a thrown error and
 not a toast.
 
-Print locales are warmed at authentication, not lazily at render time. `syncPrintPoliciesAtBootstrap`
-applies the tenant's receipt and kitchen-ticket language policy and loads the bundles it selects,
-and the auth store keeps the languages that failed. Every print action calls
-`ensurePrintLanguagesLoaded` again before it encodes, and a locale that still will not load becomes
-a receipt warning saying English labels were used. A receipt that renders in the wrong language is
-a financial document, not a cosmetic bug.
+Print locales are warmed at authentication and gated behind the active tenant's bootstrap barrier
+before any print resolves or encodes labels; see
+[warming print locales at bootstrap](internationalization.md#warming-print-locales-at-bootstrap).
+The auth store keeps any languages that failed to warm, and a locale that still will not load
+becomes a receipt warning saying English labels were used. A receipt that renders in the wrong
+language is a financial document, not a cosmetic bug.
 
 ## Internationalization: 32 locales
 
@@ -581,19 +607,28 @@ table, and a `tsc` pass over the frontend.
 
 ## Customer display
 
-`/customer-display` is a signed-in order-status board. It pages through `GET /orders` with
-`view=active` and `board_status` set to the configured statuses via `before_id` cursor pagination
-(100 orders per page, up to 50 pages) so effective board eligibility applies before pagination,
-projects effective board status from `order.items` for settled `completed` orders via
-`projectBoardStatusFromItems` in [`shared/order-item-status.ts`](../../shared/order-item-status.ts)
-(see [Order lifecycle](order-lifecycle.md#order-status)), and shows eligible orders in a Preparing
+`/customer-display` is a signed-in order-status board. Without a paired display token it loads the
+staff session from storage and redirects to `/auth/login?redirect=/customer-display` (or adds
+`select_tenant=true` when a user is signed in without a selected tenant) so signing in returns to
+`/customer-display`. Once signed in, it pages through `GET /orders` with
+`view=active`, `board_status` set to the configured statuses, and `type` set to the configured
+`order_types` via `before_id` cursor pagination (100 orders per page, up to 50 pages) so effective
+board status and order-type eligibility apply in SQL before pagination, projects effective board
+status from `order.items` for settled `completed` orders via `projectBoardStatusFromItems` in
+[`shared/order-item-status.ts`](../../shared/order-item-status.ts) (see
+[Order lifecycle](order-lifecycle.md#order-status)), and shows eligible orders in a Preparing
 column (`pending`, `preparing`) and a Ready column (`ready`).
 It re-reads `GET /settings/customer-display` on every poll cycle, so changes made in Settings >
-Kitchen Display apply without reloading the board. The tenant-wide config sets which statuses show,
-the refresh interval, and whether the last-updated time is shown. Deduplicated orders are sorted
-oldest first and applied atomically once all pages complete in a cycle, preserving the ten-second TV
+Kitchen Display apply without reloading the board. The tenant-wide config sets which statuses show
+(`statuses`, defaulting to `['pending', 'preparing', 'ready']`), which order types show
+(`order_types`, defaulting to `['takeaway']` so Dine-in, Online, and Delivery orders stay off the
+pickup screen unless enabled), the refresh interval (`refresh_seconds`), and whether the
+last-updated time is shown (`show_updated`). Deduplicated orders are sorted oldest first and
+applied atomically once all pages complete in a cycle, preserving the ten-second TV
 visual page rotation. At desktop widths, each column renders complete bill or order numbers in
-readable rows and independently rotates measured pages every ten seconds when needed. Newly ready
+readable rows and independently rotates measured pages every ten seconds when needed, showing a
+multi-page indicator (`1 / N`, page dots, and a `+count` overflow pill) and a ten-second progress
+bar in the column header when orders span multiple pages. Newly ready
 orders take priority on the next rotation, interleaved with existing pages. At narrow widths the rows
 remain in one scrollable flow. A failed poll retains the last successful orders and reports that the
 feed is stale. Multi-page poll cycles automatically pace their interval above the configured refresh
@@ -683,7 +718,8 @@ frontend/src/
 │   ├── api.ts                  The shared axios client for the authenticated pages
 │   ├── api-error.ts            Localized text for a backend error
 │   └── permissions.ts          tenantCan
-├── store/                      auth, cart, held-orders, pos-settings, theme
+├── store/                      auth, cart, charges, cloud-attention, held-orders,
+│                               orders-layout, pos-settings, session-events, theme
 └── types/                      Electron bridge declarations and the type-level contract
 ```
 
@@ -695,6 +731,7 @@ frontend/src/
 | A message key, a new locale, or a changed label | `npm run i18n:check`                                                                                                                                     |
 | A permission the renderer gates on              | `npm run test:authorization-permissions` and `npm run test:auth-ui-deterministic`                                                                        |
 | A new or renamed IPC channel                    | `npm run test:electron-api-contract` and `npm run test:printer-ipc`                                                                                      |
+| An IPC permission or settings authorization gate | `npm run test:settings-ipc-rbac` and `npm run test:update-ipc-sender-validation`                                                                         |
 | The sender check on a database channel          | `npm run test:kds-window-hardening`, which drives `pick-restore-file`, `backup-database`, `restore-backup`, and `db-initialize` from an untrusted sender |
 | A print path, template, or column width         | `npm run test:receipt-column-oracle`                                                                                                                     |
 | The courier slip                                | `npm run test:delivery-slip`                                                                                                                             |

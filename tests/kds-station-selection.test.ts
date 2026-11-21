@@ -21,17 +21,17 @@ Module._load = function (requestName: string, parent: unknown, isMain: boolean) 
   return originalLoad.apply(this, arguments as any);
 };
 
-import { startKdsServer, stopKdsServer, getKdsPort } from '../main/kds-server';
-import { initDatabase, closeDatabase, getDatabase, now, projectKdsItem } from '../main/db';
-import { clearRevokedTokens } from '../main/middleware/security';
-import { getJWTSecret } from '../main/routes/auth';
-import {
+const { startKdsServer, stopKdsServer, getKdsPort } = require('../main/kds-server');
+const { initDatabase, closeDatabase, getDatabase, now, projectKdsItem } = require('../main/db');
+const { clearRevokedTokens } = require('../main/middleware/security');
+const { getJWTSecret } = require('../main/routes/auth');
+const {
   selectedKdsStationIds,
   selectableKdsStations,
-} from '../main/services/kds-station-selection';
-import { buildActiveOrdersSnapshot } from '../main/services/kds';
-import { WebSocket } from 'ws';
-import * as jwt from 'jsonwebtoken';
+} = require('../main/services/kds-station-selection');
+const { buildActiveOrdersSnapshot } = require('../main/services/kds');
+const { WebSocket } = require('ws');
+const jwt = require('jsonwebtoken');
 const { assertOrThrow, assertEqualOrThrow } = require('./helpers/test-setup');
 
 function itemNames(snapshot: any): string[] {

@@ -46,6 +46,7 @@ class MockSocket extends EventEmitter {
 
   end(): this {
     this.ended = true;
+    process.nextTick(() => this.emit('close'));
     return this;
   }
 
@@ -142,7 +143,11 @@ async function testAbortSignalCancelsPrint(): Promise<void> {
   try {
     const controller = new AbortController();
     const largePayload = Buffer.alloc(10000, 0xcc);
-    setTimeout(() => controller.abort(), 2);
+    const abortOnceConnected = setInterval(() => {
+      if (!mock) return;
+      clearInterval(abortOnceConnected);
+      controller.abort();
+    }, 1);
     const result = await printViaNetwork('192.168.1.100', 9100, largePayload, controller.signal);
     assert.equal(result.ok, false);
     assert.match(result.detail || '', /Print cancelled during shutdown/);

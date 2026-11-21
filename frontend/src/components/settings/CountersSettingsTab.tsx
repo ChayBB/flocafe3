@@ -148,6 +148,7 @@ export function CountersSettingsTab({ isOwner }: Props) {
   };
 
   const handleOpenAddModal = () => {
+    if (!isOwner) return;
     setEditingCounter(null);
     setName('');
     setRole('ordering');
@@ -157,6 +158,7 @@ export function CountersSettingsTab({ isOwner }: Props) {
   };
 
   const handleOpenEditModal = (counter: CounterItem) => {
+    if (!isOwner) return;
     setEditingCounter(counter);
     setName(counter.name);
     setRole(counter.role);
@@ -167,6 +169,7 @@ export function CountersSettingsTab({ isOwner }: Props) {
 
   const handleSaveCounter = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isOwner) return;
     if (!name.trim()) {
       toast.error(t('counterNameRequired'));
       return;
@@ -201,6 +204,7 @@ export function CountersSettingsTab({ isOwner }: Props) {
   };
 
   const handleDeleteCounter = async (id: string) => {
+    if (!isOwner) return;
     try {
       await api.delete(`/counters/${id}`);
       toast.success(t('counterDeleted'));
@@ -238,7 +242,10 @@ export function CountersSettingsTab({ isOwner }: Props) {
     <SettingsTabShell>
       <div className="space-y-6">
         {/* Header card with toggle */}
-        <div className="bg-card rounded-xl border border-border p-6 shadow-sm">
+        <div
+          data-setting-section="multi-counter"
+          className="bg-card rounded-xl border border-border p-6 shadow-sm"
+        >
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-start gap-3">
               <div className="rounded-lg bg-brand/10 p-2.5 text-brand shrink-0">
@@ -260,7 +267,10 @@ export function CountersSettingsTab({ isOwner }: Props) {
 
         {/* Counter management section */}
         {(enabled || loadError) && (
-          <div className="bg-card rounded-xl border border-border p-6 shadow-sm space-y-4">
+          <div
+            data-setting-section="named-counters"
+            className="bg-card rounded-xl border border-border p-6 shadow-sm space-y-4"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-foreground text-base">{t('namedCounters')}</h3>

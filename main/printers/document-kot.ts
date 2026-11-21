@@ -47,6 +47,9 @@ export function buildKotPrintData(order: any, items: any[], stationName: string)
     : [];
   return {
     stationName: String(stationName ?? ''),
+    ...(typeof order?.show_large_order_number === 'boolean'
+      ? { showLargeOrderNumber: order.show_large_order_number }
+      : {}),
     order: {
       orderNumber: String(order?.order_number ?? ''),
       createdAt: kotTicketTime(order?.created_at, ticketItems),

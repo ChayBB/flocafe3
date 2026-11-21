@@ -4,6 +4,7 @@
  */
 
 import type { NextFunction, Request, Response } from 'express';
+import * as os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import {
   getDatabase,
@@ -21,6 +22,8 @@ import {
   type PostHogEnvironment,
 } from './posthog-config';
 import { getOfflineModeAbortSignal, onOfflineModeEnabled } from './offline-mode';
+import { isOperationReference } from '../lib/operation-failure';
+import { queueRefusalFromDetail } from '../printers/print-failure-facts';
 import { readCountryProvenance } from './country-provenance';
 import { getInstallSource, getRunMode } from './telemetry';
 import {
@@ -39,12 +42,14 @@ import {
   type ProductAnalyticsLevel,
 } from './posthog-identity';
 import { normalizeSupportedCurrencyCode } from '../../shared/currencies';
+import { scrubPrinterErrorText } from '../../shared/printer-error-text';
 import {
   isPostHogCapturePoint,
   redactExceptionMessage,
   sanitizeErrorName,
   scrubPostHogEvent,
   stackFrameLines,
+  type ExceptionContext,
   type PostHogCapturePoint,
   type PostHogUsageEvent,
   type ScrubbableEvent,
@@ -124,6 +129,8 @@ const CLOUD_ROUTE_PREFIX = '/api/settings/cloud';
 /** These answer 502 or 503 when a remote host is unreachable, which is normal while offline. */
 const OFFLINE_GATEWAY_ROUTES = ['/api/products/fetch-url', '/api/mobile/devices'];
 const apiFailureSentAt = new Map<string, number>();
+/** Reports already sent, so a delivery retry does not send the same window twice. */
+const sentOperationReports = new Set<string>();
 
 interface CachedConsentState {
   level: ProductAnalyticsLevel;
@@ -195,6 +202,40 @@ export function readSuperProperties(current: PostHogIdentity = identity()): Supe
     release_channel: /-beta\b/.test(appVersion()) ? 'beta' : 'stable',
     ...(current.installRef ? { install_ref: current.installRef } : {}),
     ...(current.accountRef ? { store_ref: current.accountRef } : {}),
+  };
+}
+
+/** macOS 15.6, not the Darwin kernel 24.6.0 that `os.release()` gives. */
+function osVersion(): string {
+  return typeof process.getSystemVersion === 'function' ? process.getSystemVersion() : os.release();
+}
+
+/** The OS names PostHog reports, from the Node platform. */
+const OS_NAMES: Record<string, string> = {
+  darwin: 'Mac OS X',
+  win32: 'Windows',
+  linux: 'Linux',
+};
+
+let cachedExceptionContext: ExceptionContext | undefined;
+
+/** Release, OS, install source, and process: an exception must carry them even if it arrived bare. */
+function exceptionContext(): ExceptionContext {
+  // Fixed for the life of the process; on Linux the install source reads /etc/os-release.
+  return (cachedExceptionContext ??= {
+    app_version: appVersion(),
+    platform: process.platform,
+    install_source: getInstallSource(),
+    process_type: 'main',
+    ...readOsProperties(),
+  });
+}
+
+/** The OS PostHog reports, from the Node platform. */
+export function readOsProperties(): { $os: string; $os_version: string } {
+  return {
+    $os: OS_NAMES[process.platform] ?? process.platform,
+    $os_version: osVersion(),
   };
 }
 
@@ -328,6 +369,7 @@ function createClient(token: string, host: string, abortSignal: AbortSignal): Po
         telemetryEnabled: level !== 'off',
         accountLinked: level === 'full',
         allowExceptions: diagnosticsEnabled,
+        exceptionContext: exceptionContext(),
       });
     },
   });
@@ -594,6 +636,146 @@ export function capturePostHogException(
   } catch {
     // A failed PostHog send is dropped. There is no outbox.
     return false;
+  }
+}
+
+/** The facts a failed print job carries. No queue name, no host, no path. */
+export interface PrintFailureFacts {
+  kind: string;
+  connection_type: string;
+  failure_class: string;
+  correlation_id?: string;
+  detail?: string;
+  /** Removed from the text before it is sent; the queue name itself never leaves the machine. */
+  printer_name?: string;
+  /** Enum-only facts about the queue and the failing step. */
+  diagnostics?: Record<string, string | number>;
+}
+
+/** Sends a failed print job while error sending is on. Make and model are not known here. */
+export function capturePostHogPrintFailure(facts: PrintFailureFacts): void {
+  try {
+    if (!getConsentState().diagnosticsEnabled) return;
+    const current = activeClient();
+    if (!current) return;
+    const who = identity();
+    current.capture({
+      distinctId: who.distinctId,
+      event: 'printer_failed',
+      properties: {
+        ...readSuperProperties(who),
+        ...readOsProperties(),
+        process_type: 'main',
+        ...(who.identified || who.installRef ? {} : { $process_person_profile: false }),
+        capture_point: 'printer',
+        kind: facts.kind,
+        connection_type: facts.connection_type,
+        failure_class: facts.failure_class,
+        ...(facts.correlation_id ? { correlation_id: facts.correlation_id } : {}),
+        ...(facts.detail
+          ? { error_text: scrubPrinterErrorText(facts.detail, facts.printer_name) }
+          : {}),
+        ...(facts.diagnostics ?? {}),
+      },
+    });
+  } catch {
+    // A failed PostHog send is dropped. There is no outbox.
+  }
+}
+
+/** A print the Windows queue refused and the direct print to its own port saved. */
+export function capturePostHogPrintRecovered(facts: {
+  kind: string;
+  transport?: 'direct_tcp_fallback';
+  detail?: string;
+  queuePort?: { kind: string };
+}): void {
+  try {
+    if (facts.transport !== 'direct_tcp_fallback') return;
+    if (!getConsentState().diagnosticsEnabled) return;
+    const current = activeClient();
+    if (!current) return;
+    const who = identity();
+    const queueRefusal = queueRefusalFromDetail(facts.detail);
+    current.capture({
+      distinctId: who.distinctId,
+      event: 'printer_recovered',
+      properties: {
+        ...readSuperProperties(who),
+        ...readOsProperties(),
+        process_type: 'main',
+        ...(who.identified || who.installRef ? {} : { $process_person_profile: false }),
+        capture_point: 'printer',
+        via: 'direct_tcp',
+        kind: facts.kind,
+        port_kind: facts.queuePort?.kind ?? 'unknown',
+        ...(queueRefusal ? { queue_refusal: queueRefusal } : {}),
+      },
+    });
+  } catch {
+    // A failed PostHog send is dropped. There is no outbox.
+  }
+}
+
+/**
+ * Sends one sealed operation-failure report, while error sending is on. It carries only the
+ * report's validated fields, never a correlation id, a message, or free text.
+ */
+export function capturePostHogOperationFailure(report: Record<string, unknown>): void {
+  try {
+    if (!getConsentState().diagnosticsEnabled) return;
+    const capturePoint = report.capture_point;
+    // Printer failures already leave as printer_failed from the printer capture point.
+    if (typeof capturePoint !== 'string' || capturePoint.startsWith('fc.backend.printer.')) return;
+    const current = activeClient();
+    if (!current) return;
+    const reportId = report.report_id;
+    if (isOperationReference(reportId)) {
+      if (sentOperationReports.has(reportId)) return;
+      // Bounded, so a long run cannot grow the set without end.
+      if (sentOperationReports.size >= 500) sentOperationReports.clear();
+      sentOperationReports.add(reportId);
+    }
+    const lastOccurredAt = new Date(String(report.last_occurred_at ?? ''));
+    const occurredAt = Number.isNaN(lastOccurredAt.getTime()) ? undefined : lastOccurredAt;
+    const reportAppVersion =
+      typeof report.app_version === 'string' && report.app_version.trim()
+        ? report.app_version.trim()
+        : undefined;
+    const reportPlatform =
+      typeof report.platform === 'string' && report.platform.trim()
+        ? report.platform.trim()
+        : undefined;
+    const who = identity();
+    current.capture({
+      distinctId: who.distinctId,
+      event: 'operation_failed',
+      // The report id and its last occurrence keep a resend after a restart as one event.
+      ...(isOperationReference(reportId) ? { uuid: reportId } : {}),
+      ...(occurredAt ? { timestamp: occurredAt } : {}),
+      properties: {
+        ...readSuperProperties(who),
+        ...(reportAppVersion
+          ? {
+              app_version: reportAppVersion,
+              release_channel: /-beta\b/.test(reportAppVersion) ? 'beta' : 'stable',
+            }
+          : {}),
+        ...(reportPlatform ? { platform: reportPlatform } : {}),
+        process_type: 'main',
+        ...(who.identified || who.installRef ? {} : { $process_person_profile: false }),
+        capture_point: capturePoint,
+        reason_code: report.reason_code,
+        operation: report.operation,
+        stage: report.stage,
+        outcome: report.outcome,
+        classification: report.classification,
+        count: report.count,
+        facts: report.facts,
+      },
+    });
+  } catch {
+    // A failed PostHog send is dropped. There is no outbox.
   }
 }
 

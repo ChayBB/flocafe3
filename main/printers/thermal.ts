@@ -13,9 +13,12 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import crypto from 'crypto';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { getDatabase, getSettingValue, parseDbTimestamp } from '../db';
+import { getKdsPort, getServerPort } from '../server-state';
+import { getServerAppPort } from '../server-app-state';
 import {
   PrinterCutMode,
   resolvePrinterProfile,
@@ -44,7 +47,18 @@ import {
 import { renderMerchantReceiptViaDocument } from './document-merchant';
 import { correlationId, type FloErrorCode } from '../errors';
 import { cloudSync } from '../services/cloud-sync';
+import { capturePostHogPrintFailure, capturePostHogPrintRecovered } from '../services/posthog';
 import { printLabel } from '../print/print-labels.generated';
+import { findDbProfile, findDbProfileById } from './capability-db';
+import { withNetworkPortLock } from './network-port-lock';
+import { withWindowsQueueBypass } from './windows-queue-bypass';
+import {
+  cupsQueuePort,
+  printFailureFacts,
+  recoveredFacts,
+  windowsQueuePort,
+  type QueuePort,
+} from './print-failure-facts';
 import { receiptChargeLines } from '../../shared/charges';
 import { isExcludedFromBillReceipt } from '../../shared/order-item-status';
 import type { PrintConceptId } from '../../shared/print/concepts';
@@ -186,6 +200,8 @@ export type PrintResult = {
   correlationId: string;
   stage: 'prepare' | 'dispatch';
   detail?: string;
+  transport?: 'direct_tcp_fallback';
+  queuePort?: QueuePort;
   failureClass?: PrintFailureClass;
   platformErrorCode?: number;
   jobId?: number;
@@ -207,6 +223,8 @@ export type DispatchResult = {
   bytes?: number[] | Buffer;
   preview?: boolean;
   connection_type?: string;
+  transport?: 'direct_tcp_fallback';
+  queuePort?: QueuePort;
 };
 
 export type PrintFailureClass =
@@ -360,6 +378,35 @@ export interface PrinterInfo {
   compatibility?: PrinterCompatibility;
 }
 
+export function isKnownDriverOnlyPrinter(info: {
+  name?: string | null;
+  make?: string | null;
+  model?: string | null;
+  driver?: string | null;
+  deviceUri?: string | null;
+}): boolean {
+  const haystack = [info.name, info.make, info.model, info.driver, info.deviceUri]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replace(/[_]+/g, '-');
+
+  return (
+    /\b(?:star|tsp100|tsp143|tsp650|tsp700|tsp800|sp700|mc-print|mcp20|mcp30|mcp31)\b/.test(
+      haystack,
+    ) ||
+    /\b(?:ecotank|workforce|stylus|expression|inkjet|laserjet|deskjet|officejet|pixma|maxify|imageclass)\b/.test(
+      haystack,
+    ) ||
+    /\b(?:et-\d\w*|wf-\d\w*|l3\d*|l4\d*|tm[-\s]?l\d*)\b/.test(haystack) ||
+    /\b(?:zebra|zd\d|gk420|gx420|zp450|zt\d|dymo|labelwriter|rollo|brother|ql-\d|td-\d|bixolon\s+slp|label)\b/.test(
+      haystack,
+    ) ||
+    /\b(?:canon|hewlett|hp\b|lexmark|ricoh|kyocera|xerox|konica|minolta|pantum)\b/.test(haystack) ||
+    /\b(?:pdf\w*|xps|onenote|fax|microsoft\s+print|send\s+to|save\s+as|cups-pdf)\b/.test(haystack)
+  );
+}
+
 export function classifyDetectedPrinterCompatibility(info: {
   name?: string | null;
   make?: string | null;
@@ -376,26 +423,16 @@ export function classifyDetectedPrinterCompatibility(info: {
 
   if (info.profileId === 'escpos-impact-76') return 'escpos_impact';
 
-  if (
-    /\b(?:star|tsp100|tsp143|tsp650|tsp700|tsp800|sp700|mc-print|mcp20|mcp30|mcp31)\b/.test(
-      haystack,
-    ) ||
-    /\b(?:ecotank|workforce|stylus|expression|inkjet|laserjet|deskjet|officejet|pixma|maxify|imageclass)\b/.test(
-      haystack,
-    ) ||
-    /\b(?:et-\d\w*|wf-\d\w*|l3\d*|l4\d*|tm[-\s]?l\d*)\b/.test(haystack) ||
-    /\b(?:zebra|zd\d|gk420|gx420|zp450|zt\d|dymo|labelwriter|rollo|brother|ql-\d|td-\d|bixolon\s+slp|label)\b/.test(
-      haystack,
-    ) ||
-    /\b(?:canon|hewlett|hp\b|lexmark|ricoh|kyocera|xerox|konica|minolta|pantum)\b/.test(haystack) ||
-    /\b(?:pdf\w*|xps|onenote|fax|microsoft\s+print|send\s+to|save\s+as|cups-pdf)\b/.test(haystack)
-  ) {
+  if (isKnownDriverOnlyPrinter(info)) {
     return 'driver_only';
   }
 
   const matchedProfile = info.profileId
-    ? (getSupportedPrinterProfiles().find((p) => p.id === info.profileId) ?? null)
-    : matchSupportedPrinterProfile(info.name, info.make, info.model, info.driver);
+    ? (getSupportedPrinterProfiles().find((p) => p.id === info.profileId) ??
+      findDbProfileById(info.profileId) ??
+      null)
+    : (matchSupportedPrinterProfile(info.name, info.make, info.model, info.driver) ??
+      findDbProfile([info.name, info.make, info.model, info.driver].filter(Boolean).join(' ')));
 
   if (matchedProfile?.id === 'escpos-impact-76') return 'escpos_impact';
   if (matchedProfile) return 'escpos_thermal';
@@ -412,7 +449,9 @@ export function classifyDetectedPrinterCompatibility(info: {
 }
 
 export function guessPaperWidth(name: string, model: string): string {
-  const profile = matchSupportedPrinterProfile(name, model);
+  const profile =
+    matchSupportedPrinterProfile(name, model) ??
+    findDbProfile([name, model].filter(Boolean).join(' '));
   if (profile) return profile.defaultPaperWidth;
   const s = (name + ' ' + model).toLowerCase();
   if (s.includes('58') || s.includes('tm-u') || s.includes('u220') || s.includes('76mm')) {
@@ -424,7 +463,9 @@ export function guessPaperWidth(name: string, model: string): string {
 export function annotateProfile(
   info: Omit<PrinterInfo, 'profileId' | 'compatibility'>,
 ): PrinterInfo {
-  const profile = matchSupportedPrinterProfile(info.name, info.make, info.model, info.driver);
+  const profile =
+    matchSupportedPrinterProfile(info.name, info.make, info.model, info.driver) ??
+    findDbProfile([info.name, info.make, info.model, info.driver].filter(Boolean).join(' '));
   const compatibility = classifyDetectedPrinterCompatibility({
     ...info,
     profileId: profile?.id,
@@ -1281,9 +1322,14 @@ export async function printKOT(
 
     const warnings: PrintWarning[] = [];
     const nativeCapabilities = nativeFallbackCapabilities(capabilities);
+    const showLargeOrderNumber =
+      typeof order?.show_large_order_number === 'boolean'
+        ? order.show_large_order_number
+        : getSettingValue('bill_show_large_order_number') !== 'false';
+    const kotOrder = { ...order, show_large_order_number: showLargeOrderNumber };
     let data: Buffer;
     if (rasterCapabilityEnabled(capabilities)) {
-      const documentResult = renderKotViaDocument(order, items, ticketStationName, {
+      const documentResult = renderKotViaDocument(kotOrder, items, ticketStationName, {
         columns: cols,
         language: normalizePrintLanguage(language ?? biz?.language),
         locale,
@@ -1293,7 +1339,7 @@ export async function printKOT(
         cutMode: profile.cutMode,
         capabilities,
       });
-      const nativeResult = renderKotViaDocument(order, items, ticketStationName, {
+      const nativeResult = renderKotViaDocument(kotOrder, items, ticketStationName, {
         columns: cols,
         language: normalizePrintLanguage(language ?? biz?.language),
         locale,
@@ -1323,7 +1369,7 @@ export async function printKOT(
       warnings.push(...rasterized.warnings);
     } else {
       data = formatKOT(
-        order,
+        kotOrder,
         items,
         ticketStationName,
         cols,
@@ -1656,7 +1702,13 @@ export async function printDeliverySlipDetailed(
   try {
     const dispatch = await printDeliverySlip(...args);
     const result: PrintResult = dispatch.ok
-      ? { ok: true, correlationId: id, stage: 'dispatch', warnings: dispatch.warnings }
+      ? {
+          ok: true,
+          correlationId: id,
+          stage: 'dispatch',
+          warnings: dispatch.warnings,
+          ...recoveredFacts(dispatch),
+        }
       : {
           ok: false,
           code: 'print.delivery_slip.failed',
@@ -1668,10 +1720,12 @@ export async function printDeliverySlipDetailed(
             dispatch.platformErrorCode || extractPlatformErrorCode(dispatch.detail),
           jobId: dispatch.jobId,
           driverName: dispatch.driverName,
+          queuePort: dispatch.queuePort,
           printerStatus: dispatch.printerStatus,
           warnings: dispatch.warnings,
         };
-    if (!result.ok) reportPrintFailure('delivery_slip', result);
+    if (!result.ok) reportPrintFailure('delivery_slip', result, args[4]);
+    else capturePostHogPrintRecovered({ kind: 'delivery_slip', ...result });
     return result;
   } catch (error) {
     const detail = (error as Error).message;
@@ -1684,7 +1738,7 @@ export async function printDeliverySlipDetailed(
       failureClass: classifyPrintFailure(detail),
       platformErrorCode: extractPlatformErrorCode(detail),
     };
-    reportPrintFailure('delivery_slip', result);
+    reportPrintFailure('delivery_slip', result, args[4]);
     return result;
   }
 }
@@ -2043,6 +2097,7 @@ export async function printPaymentTicketDetailed(
           bytes: dispatch.bytes,
           preview: dispatch.preview,
           connection_type: dispatch.connection_type,
+          ...recoveredFacts(dispatch),
         }
       : {
           ok: false,
@@ -2055,10 +2110,12 @@ export async function printPaymentTicketDetailed(
             dispatch.platformErrorCode || extractPlatformErrorCode(dispatch.detail),
           jobId: dispatch.jobId,
           driverName: dispatch.driverName,
+          queuePort: dispatch.queuePort,
           printerStatus: dispatch.printerStatus,
           warnings: dispatch.warnings,
         };
-    if (!result.ok) reportPrintFailure('payment_ticket', result);
+    if (!result.ok) reportPrintFailure('payment_ticket', result, args[2]?.targetPrinter);
+    else capturePostHogPrintRecovered({ kind: 'payment_ticket', ...result });
     return result;
   } catch (error) {
     const detail = (error as Error).message;
@@ -2071,7 +2128,7 @@ export async function printPaymentTicketDetailed(
       failureClass: classifyPrintFailure(detail),
       platformErrorCode: extractPlatformErrorCode(detail),
     };
-    reportPrintFailure('payment_ticket', result);
+    reportPrintFailure('payment_ticket', result, args[2]?.targetPrinter);
     return result;
   }
 }
@@ -2082,10 +2139,15 @@ export async function printPaymentTicketDetailed(
 function reportPrintFailure(
   kind: 'receipt' | 'kot' | 'delivery_slip' | 'payment_ticket',
   result: PrintResult,
+  printerOverride?: { connection_type?: unknown; name?: unknown } | null,
 ): void {
   let connectionType = 'unknown';
+  let printerName: string | undefined;
   try {
-    const configured = getPrinterConfig()?.connection_type;
+    const config = getPrinterConfig();
+    const name = printerOverride?.name ?? config?.name;
+    printerName = typeof name === 'string' ? name : undefined;
+    const configured = printerOverride?.connection_type ?? config?.connection_type;
     if (configured === 'network' || configured === 'usb' || configured === 'webusb')
       connectionType = configured;
   } catch {
@@ -2094,11 +2156,30 @@ function reportPrintFailure(
 
   const failureClass = result.failureClass || classifyPrintFailure(result.detail);
   const pointStage = failureClass === 'timeout' ? 'timeout' : 'queue';
+  const diagnostics = printFailureFacts({
+    detail: result.detail,
+    connectionType,
+    platformErrorCode: result.platformErrorCode,
+    driverName: result.driverName,
+    queuePort: result.queuePort,
+  });
   cloudSync.captureOperationFailure({
     capture_point: `fc.backend.printer.${kind}.${pointStage}`,
     outcome: result.stage === 'prepare' ? 'not_applied' : 'unknown',
     correlation_id: result.correlationId,
-    facts: { connection_type: connectionType, failure_class: failureClass, kind },
+    facts: { connection_type: connectionType, failure_class: failureClass, kind, ...diagnostics },
+  });
+  capturePostHogPrintFailure({
+    kind,
+    connection_type: connectionType,
+    failure_class: failureClass,
+    correlation_id: result.correlationId,
+    diagnostics,
+    detail:
+      result.warnings && hasFinancialPrintWarning(result.warnings)
+        ? makeFinancialPrintRefusalMessage(result.warnings, false)
+        : result.detail,
+    printer_name: printerName,
   });
 }
 
@@ -2112,7 +2193,13 @@ export async function printReceiptDetailed(
     const stage =
       !dispatch.ok && hasFinancialPrintWarning(dispatch.warnings || []) ? 'prepare' : 'dispatch';
     const result: PrintResult = dispatch.ok
-      ? { ok: true, correlationId: id, stage: 'dispatch', warnings: dispatch.warnings }
+      ? {
+          ok: true,
+          correlationId: id,
+          stage: 'dispatch',
+          warnings: dispatch.warnings,
+          ...recoveredFacts(dispatch),
+        }
       : {
           ok: false,
           code: 'print.receipt.failed',
@@ -2124,10 +2211,12 @@ export async function printReceiptDetailed(
             dispatch.platformErrorCode || extractPlatformErrorCode(dispatch.detail),
           jobId: dispatch.jobId,
           driverName: dispatch.driverName,
+          queuePort: dispatch.queuePort,
           printerStatus: dispatch.printerStatus,
           warnings: dispatch.warnings,
         };
     if (!result.ok) reportPrintFailure('receipt', result);
+    else capturePostHogPrintRecovered({ kind: 'receipt', ...result });
     return result;
   } catch (error) {
     const detail = (error as Error).message;
@@ -2150,7 +2239,13 @@ export async function printKOTDetailed(...args: Parameters<typeof printKOT>): Pr
   try {
     const dispatch = await printKOT(...args);
     const result: PrintResult = dispatch.ok
-      ? { ok: true, correlationId: id, stage: 'dispatch', warnings: dispatch.warnings }
+      ? {
+          ok: true,
+          correlationId: id,
+          stage: 'dispatch',
+          warnings: dispatch.warnings,
+          ...recoveredFacts(dispatch),
+        }
       : {
           ok: false,
           code: 'print.kot.failed',
@@ -2162,10 +2257,12 @@ export async function printKOTDetailed(...args: Parameters<typeof printKOT>): Pr
             dispatch.platformErrorCode || extractPlatformErrorCode(dispatch.detail),
           jobId: dispatch.jobId,
           driverName: dispatch.driverName,
+          queuePort: dispatch.queuePort,
           printerStatus: dispatch.printerStatus,
           warnings: dispatch.warnings,
         };
-    if (!result.ok) reportPrintFailure('kot', result);
+    if (!result.ok) reportPrintFailure('kot', result, args[4]);
+    else capturePostHogPrintRecovered({ kind: 'kot', ...result });
     return result;
   } catch (error) {
     const detail = (error as Error).message;
@@ -2178,7 +2275,7 @@ export async function printKOTDetailed(...args: Parameters<typeof printKOT>): Pr
       failureClass: classifyPrintFailure(detail),
       platformErrorCode: extractPlatformErrorCode(detail),
     };
-    reportPrintFailure('kot', result);
+    reportPrintFailure('kot', result, args[4]);
     return result;
   }
 }
@@ -5220,6 +5317,10 @@ export function escPosToText(data: Buffer | Uint8Array): string {
       }
       continue;
     }
+    if (byte === 0x1d && bytes[i + 1] === 0x21) {
+      i += 3;
+      continue;
+    }
     if (byte === 0x1d && bytes[i + 1] === 0x56) {
       flushLine();
       const mode = bytes[i + 2];
@@ -5282,6 +5383,154 @@ export const NETWORK_PRINT_CHUNK_DELAY_MS = 10;
 export const NETWORK_PRINT_CONNECT_TIMEOUT_MS = 5000;
 // A slow printer drains a large raster bill for many seconds; only a stalled socket should fail it.
 export const NETWORK_PRINT_WRITE_IDLE_TIMEOUT_MS = 30000;
+const NETWORK_PRINT_CLOSE_WAIT_MS = 1000;
+
+function expandPrinterIpv6Groups(ip: string): number[] | null {
+  let text = ip.toLowerCase();
+  const lastColon = text.lastIndexOf(':');
+  if (lastColon !== -1 && text.includes('.', lastColon + 1)) {
+    const octets = text.slice(lastColon + 1).split('.');
+    if (octets.length !== 4 || octets.some((part) => !/^\d{1,3}$/.test(part))) return null;
+    const nums = octets.map(Number);
+    if (nums.some((n) => n > 255)) return null;
+    const hi = ((nums[0] << 8) | nums[1]).toString(16);
+    const lo = ((nums[2] << 8) | nums[3]).toString(16);
+    text = `${text.slice(0, lastColon + 1)}${hi}:${lo}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const parseSide = (side: string): number[] | null => {
+    if (side === '') return [];
+    const groups: number[] = [];
+    for (const piece of side.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(piece)) return null;
+      groups.push(parseInt(piece, 16));
+    }
+    return groups;
+  };
+  const left = parseSide(halves[0]);
+  const right = parseSide(halves[1] ?? '');
+  if (left === null || right === null) return null;
+  const explicit = left.length + right.length;
+  if (explicit > 8) return null;
+  if (halves.length === 1) return explicit === 8 ? left : null;
+  return [...left, ...Array(8 - explicit).fill(0), ...right];
+}
+
+function isLocalInterfaceIp(canonicalIp: string, targetGroups: number[] | null): boolean {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const alias of interfaces[name] ?? []) {
+        const addr = String(alias.address || '')
+          .split('%')[0]
+          .trim()
+          .toLowerCase();
+        if (!addr) continue;
+        if (addr === canonicalIp) return true;
+        if (targetGroups && net.isIP(addr) === 6) {
+          const aliasGroups = expandPrinterIpv6Groups(addr);
+          if (aliasGroups && aliasGroups.every((g, idx) => g === targetGroups[idx])) {
+            return true;
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore interface enumeration failures
+  }
+  return false;
+}
+
+export function validateNetworkPrinterTarget(rawHost: string, port: number): string | null {
+  if (typeof rawHost !== 'string') return 'ip_address is required for network printers';
+  const trimmed = rawHost.trim();
+  if (!trimmed) return 'ip_address is required for network printers';
+
+  const unbracketed =
+    trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1).trim() : trimmed;
+  if (!unbracketed || /[\s\x00-\x1f\x7f]/.test(unbracketed)) {
+    return 'Invalid printer host or IP address';
+  }
+
+  const lowerHost = unbracketed.toLowerCase();
+  let hostEnd = lowerHost.length;
+  while (hostEnd > 0 && lowerHost.charCodeAt(hostEnd - 1) === 46) {
+    hostEnd -= 1;
+  }
+  const host = lowerHost.slice(0, hostEnd);
+  if (!host) {
+    return 'Invalid printer host or IP address';
+  }
+  if (host === 'metadata.google.internal' || host === 'metadata' || host === 'instance-data') {
+    return 'Printer address cannot target a cloud metadata service';
+  }
+
+  const ipCandidate = host.split('%')[0];
+  let effectiveIpv4: string | null = net.isIP(ipCandidate) === 4 ? ipCandidate : null;
+  const ipv6Groups: number[] | null =
+    net.isIP(ipCandidate) === 6 ? expandPrinterIpv6Groups(ipCandidate) : null;
+  if (effectiveIpv4 === null && ipv6Groups === null && !ipCandidate.includes(':')) {
+    try {
+      const parsedHost = new URL(`http://${ipCandidate}`).hostname;
+      if (net.isIP(parsedHost) === 4) {
+        effectiveIpv4 = parsedHost;
+      }
+    } catch {
+      // Non-URL host candidates fall through to hostname checks.
+    }
+  }
+
+  if (ipv6Groups) {
+    const isZeros = (from: number, to: number) => ipv6Groups.slice(from, to).every((g) => g === 0);
+    if (isZeros(0, 8)) {
+      return 'Printer address cannot be an unspecified or broadcast address';
+    }
+    if (
+      ipv6Groups[0] === 0xfd00 &&
+      ipv6Groups[1] === 0x0ec2 &&
+      isZeros(2, 7) &&
+      ipv6Groups[7] === 0x0254
+    ) {
+      return 'Printer address cannot target a cloud metadata service';
+    }
+    const ipv4Mapped = isZeros(0, 5) && ipv6Groups[5] === 0xffff;
+    const ipv4Compatible = isZeros(0, 6) && (ipv6Groups[6] !== 0 || ipv6Groups[7] > 1);
+    const nat64 = ipv6Groups[0] === 0x64 && ipv6Groups[1] === 0xff9b && isZeros(2, 6);
+    if (ipv4Mapped || ipv4Compatible || nat64) {
+      effectiveIpv4 = `${ipv6Groups[6] >> 8}.${ipv6Groups[6] & 0xff}.${ipv6Groups[7] >> 8}.${ipv6Groups[7] & 0xff}`;
+    }
+  }
+
+  if (effectiveIpv4) {
+    if (effectiveIpv4 === '169.254.169.254') {
+      return 'Printer address cannot target a cloud metadata service';
+    }
+    if (effectiveIpv4 === '0.0.0.0' || effectiveIpv4 === '255.255.255.255') {
+      return 'Printer address cannot be an unspecified or broadcast address';
+    }
+  }
+
+  const isLoopback =
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    (effectiveIpv4 !== null && effectiveIpv4.startsWith('127.')) ||
+    (ipv6Groups !== null && ipv6Groups.slice(0, 7).every((g) => g === 0) && ipv6Groups[7] === 1);
+
+  const isLocalHost =
+    isLoopback ||
+    (effectiveIpv4 !== null && isLocalInterfaceIp(effectiveIpv4, null)) ||
+    (ipv6Groups !== null && isLocalInterfaceIp(ipCandidate, ipv6Groups));
+
+  if (isLocalHost) {
+    const ownPorts = new Set<number>([getServerPort(), getKdsPort(), getServerAppPort()]);
+    if (ownPorts.has(port)) {
+      return 'Printer address cannot target a local FloCafe server port';
+    }
+  }
+
+  return null;
+}
 
 export async function printViaNetwork(
   ip: string,
@@ -5289,9 +5538,32 @@ export async function printViaNetwork(
   data: Buffer,
   signal?: AbortSignal,
 ): Promise<DispatchResult> {
-  return enqueuePrintJob(networkPrinterKey(ip, port), () =>
-    sendViaNetworkWithRetry(ip, port, data, signal),
-  );
+  const targetError = validateNetworkPrinterTarget(ip, port);
+  if (targetError) {
+    return {
+      ok: false,
+      detail: targetError,
+      failureClass: classifyPrintFailure(targetError),
+    };
+  }
+  const trimmedIp = ip.trim();
+  const connectHost =
+    trimmedIp.startsWith('[') && trimmedIp.endsWith(']')
+      ? trimmedIp.slice(1, -1).trim()
+      : trimmedIp;
+  // Status probes and discovery share the endpoint lock, so they never open a socket mid-job.
+  return enqueuePrintJob(networkPrinterKey(connectHost, port), async () => {
+    try {
+      return await withNetworkPortLock(
+        connectHost,
+        port,
+        () => sendViaNetworkWithRetry(connectHost, port, data, signal),
+        signal,
+      );
+    } catch {
+      return { ok: false, detail: 'Print cancelled during shutdown' };
+    }
+  });
 }
 
 // A busy printer refuses or drops new connections while it prints; none of these reach the paper.
@@ -5351,10 +5623,12 @@ async function sendViaNetwork(
     let dataStarted = false;
     let timer: NodeJS.Timeout | null = null;
     let statusTimer: NodeJS.Timeout | null = null;
+    let ending = false;
 
     const onAbort = (): void => {
       if (timer) clearTimeout(timer);
       client.destroy();
+      if (ending) return;
       finish({ ok: false, detail: 'Print cancelled during shutdown' });
     };
     const finish = (result: NetworkSendResult): void => {
@@ -5366,14 +5640,28 @@ async function sendViaNetwork(
       resolve({ ...result, retryable: !result.ok && !dataStarted && result.retryable === true });
     };
 
+    // Single-connection printers refuse a new socket until this one closes, so the endpoint lock
+    // is released only after the close (or a short cap).
+    const endThenFinish = (): void => {
+      if (settled || ending) return;
+      ending = true;
+      if (timer) clearTimeout(timer);
+      if (statusTimer) clearTimeout(statusTimer);
+      const closeCap = setTimeout(() => client.destroy(), NETWORK_PRINT_CLOSE_WAIT_MS);
+      client.once('close', () => {
+        clearTimeout(closeCap);
+        finish({ ok: true });
+      });
+      client.end();
+    };
+
     const sendData = (): void => {
       if (settled) return;
       dataStarted = true;
       // For small payloads (typical text receipts <4KB), write directly in a single pass.
       if (data.length <= NETWORK_PRINT_CHUNK_SIZE) {
         client.write(data, () => {
-          client.end();
-          finish({ ok: true });
+          endThenFinish();
         });
         return;
       }
@@ -5384,8 +5672,7 @@ async function sendViaNetwork(
       const sendNextChunk = (): void => {
         if (settled) return;
         if (offset >= data.length) {
-          client.end();
-          finish({ ok: true });
+          endThenFinish();
           return;
         }
 
@@ -5397,8 +5684,7 @@ async function sendViaNetwork(
           if (offset < data.length) {
             timer = setTimeout(sendNextChunk, NETWORK_PRINT_CHUNK_DELAY_MS);
           } else {
-            client.end();
-            finish({ ok: true });
+            endThenFinish();
           }
         };
 
@@ -5457,6 +5743,10 @@ async function sendViaNetwork(
     });
 
     client.on('error', (err: NodeJS.ErrnoException) => {
+      if (ending) {
+        client.destroy();
+        return;
+      }
       console.error(`[Printer] Network error: ${err.message}`);
       client.destroy();
       finish({
@@ -5468,6 +5758,7 @@ async function sendViaNetwork(
 
     client.setTimeout(NETWORK_PRINT_CONNECT_TIMEOUT_MS, () => {
       client.destroy();
+      if (ending) return;
       finish({
         ok: false,
         detail: connected
@@ -5501,7 +5792,9 @@ async function sendViaUSB(
   }
 
   if (process.platform === 'darwin' || process.platform === 'linux') {
-    return await printViaCups(data, printerName, signal);
+    const result = await printViaCups(data, printerName, signal);
+    if (result.ok) return result;
+    return { ...result, queuePort: await cupsQueuePort(printerName, { signal }) };
   }
 
   if (process.platform === 'win32') {
@@ -5618,10 +5911,22 @@ async function printViaCups(
     return { ok: false, detail: problem };
   }
 
-  const tmpFile = path.join(os.tmpdir(), `flo_print_${process.pid}_${Date.now()}.bin`);
+  const tmpFile = path.join(
+    os.tmpdir(),
+    `flo_print_${process.pid}_${Date.now()}_${crypto.randomUUID()}.bin`,
+  );
+  let tmpFileCreated = false;
 
   try {
-    fs.writeFileSync(tmpFile, data);
+    const fd = fs.openSync(tmpFile, 'wx', 0o600);
+    tmpFileCreated = true;
+    try {
+      fs.writeFileSync(fd, data);
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
 
     const args = printerName ? ['-d', printerName, '-o', 'raw', tmpFile] : ['-o', 'raw', tmpFile];
     const { stdout } = await execFileAsync('lp', args, {
@@ -5637,15 +5942,17 @@ async function printViaCups(
     console.error(`[Printer] CUPS print failed for "${label}": ${detail}`);
     return { ok: false, detail: detail || `CUPS print failed for "${label}"` };
   } finally {
-    try {
-      fs.unlinkSync(tmpFile);
-    } catch {}
+    if (tmpFileCreated) {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {}
+    }
   }
 }
 
 // Write raw ESC/POS directly to Windows spooler via runtime-compiled C# (Add-Type).
 // NOTE: no backslash escapes, backticks, or template expressions allowed in source.
-const WINSPOOL_HELPER_SOURCE = `
+export const WINSPOOL_HELPER_SOURCE = `
 using System;
 using System.Runtime.InteropServices;
 
@@ -5709,12 +6016,13 @@ public static class FloRawPrinter {
     private const uint PRINTER_ATTRIBUTE_WORK_OFFLINE = 0x00000400;
 
     private static string DescribeBlockingState(uint status, uint attributes) {
-        if ((attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE) != 0) return "printer is set to 'Use Printer Offline' in Windows";
-        if ((status & 0x00000080) != 0) return "printer is offline";
-        if ((status & 0x00001000) != 0) return "printer is not available";
+        // Physical faults first: an offline flag set with them must not let the TCP bypass print to a printer that cannot.
         if ((status & 0x00000010) != 0) return "printer is out of paper";
         if ((status & 0x00000008) != 0) return "printer has a paper jam";
         if ((status & 0x00400000) != 0) return "printer cover is open";
+        if ((attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE) != 0) return "printer is set to 'Use Printer Offline' in Windows";
+        if ((status & 0x00000080) != 0) return "printer is offline";
+        if ((status & 0x00001000) != 0) return "printer is not available";
         if ((status & 0x00100000) != 0) return "printer needs attention";
         if ((status & 0x00000002) != 0) return "printer reported an error";
         return null;
@@ -5794,11 +6102,21 @@ try {
   # Best-effort metadata for Tier-2 diagnostics. This is never included in the
   # anonymous telemetry payload and must not prevent the raw print attempt.
   try {
-    $printerInfo = Get-CimInstance -ClassName Win32_Printer -Property Name,PrinterStatus,DriverName |
+    $printerInfo = Get-CimInstance -ClassName Win32_Printer -Property Name,PrinterStatus,DriverName,PortName |
       Where-Object { $_.Name -eq $name } |
-      Select-Object -First 1 Name,PrinterStatus,DriverName
+      Select-Object -First 1 Name,PrinterStatus,DriverName,PortName
     if ($printerInfo) {
       Write-Output ('FLO_PRINTER_INFO=' + ($printerInfo | ConvertTo-Json -Compress))
+      # Lets a pre-spool refusal print straight to the queue's TCP/IP port.
+      try {
+        $portName = $printerInfo.PortName
+        $tcpPort = Get-CimInstance -ClassName Win32_TCPIPPrinterPort -Property Name,HostAddress,PortNumber,Protocol,SNMPEnabled |
+          Where-Object { $_.Name -eq $portName } |
+          Select-Object -First 1 HostAddress,PortNumber,Protocol,SNMPEnabled
+        if ($tcpPort) {
+          Write-Output ('FLO_PRINTER_PORT=' + ($tcpPort | ConvertTo-Json -Compress))
+        }
+      } catch { }
     }
   } catch { }
 
@@ -5936,10 +6254,22 @@ async function printViaUSBWindows(
   }
 
   // %TEMP%, not C:\Windows\Temp — the latter is not writable by a standard user.
-  const tmpFile = path.join(os.tmpdir(), `flo_print_${process.pid}_${Date.now()}.bin`);
+  const tmpFile = path.join(
+    os.tmpdir(),
+    `flo_print_${process.pid}_${Date.now()}_${crypto.randomUUID()}.bin`,
+  );
+  let tmpFileCreated = false;
 
   try {
-    fs.writeFileSync(tmpFile, data);
+    const fd = fs.openSync(tmpFile, 'wx', 0o600);
+    tmpFileCreated = true;
+    try {
+      fs.writeFileSync(fd, data);
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
 
     const { stdout } = await execFileAsync(
       'powershell',
@@ -5957,21 +6287,29 @@ async function printViaUSBWindows(
     console.log(
       `[Printer] Windows raw print accepted for "${printerName}" (${String(stdout).trim()})`,
     );
-    return { ok: true, ...metadata };
+    return { ok: true, ...metadata, queuePort: windowsQueuePort(stdout) };
   } catch (err: any) {
     const detail = describeWindowsRawPrintFailure(err, { payloadPath: tmpFile, printerName });
     console.error(`[Printer] Windows raw print failed for "${printerName}": ${detail}`);
-    return {
-      ok: false,
-      detail,
-      failureClass: classifyPrintFailure(detail),
-      platformErrorCode: extractPlatformErrorCode(detail),
-      ...parseWindowsPrintOutput(err.stdout),
-    };
+    return withWindowsQueueBypass(
+      {
+        ok: false,
+        detail,
+        failureClass: classifyPrintFailure(detail),
+        platformErrorCode: extractPlatformErrorCode(detail),
+        ...parseWindowsPrintOutput(err.stdout),
+        queuePort: windowsQueuePort(err.stdout),
+      },
+      err.stdout,
+      data,
+      { printerName, signal, printViaNetwork },
+    );
   } finally {
-    try {
-      fs.unlinkSync(tmpFile);
-    } catch {}
+    if (tmpFileCreated) {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {}
+    }
   }
 }
 

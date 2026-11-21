@@ -21,8 +21,12 @@ import type {
   ResolvedPrintLanguages,
 } from '@print/types';
 import { createTranslator } from 'use-intl/core';
-import { getCachedMessages, loadLocaleMessages } from '@/lib/i18n/loader';
+import { getCachedMessages } from '@/lib/i18n/loader';
 import { LANGUAGES, getLanguageDirection, type Language } from '@/lib/i18n/languages';
+import {
+  awaitPrintPolicyBootstrap,
+  loadPrintLocaleWithDeadline,
+} from '@/lib/print-policy-bootstrap';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import { getCountryByCode, getCurrencySymbol, resolveTenantCurrency } from '@countries';
 import { resolveTaxComponents } from './tax-components';
@@ -55,6 +59,7 @@ export interface BillBusinessOptions {
   showCustomerPhone?: boolean;
   deliveryShowCustomerPhoneAlways?: boolean;
   showTableNumber?: boolean;
+  showLargeOrderNumber?: boolean;
   isReprint?: boolean;
 }
 
@@ -85,6 +90,14 @@ export function resolveBillPrintLanguages(uiLanguage?: Language): ResolvedPrintL
   return resolveReceiptLanguages(policy, resolveActiveUiLanguage(uiLanguage));
 }
 
+/** Waits for any in-flight auth print-policy bootstrap before resolving receipt languages. */
+export async function resolveReadyBillPrintLanguages(
+  uiLanguage?: Language,
+): Promise<ResolvedPrintLanguages> {
+  await awaitPrintPolicyBootstrap();
+  return resolveBillPrintLanguages(uiLanguage);
+}
+
 /** Synchronous per-language translator backed by the shared loader cache. */
 function translatorFor(language: Language | string): ((key: string) => string) | null {
   const lang = (Object.keys(LANGUAGES) as Language[]).includes(language as Language)
@@ -113,9 +126,11 @@ export const printLabelResolver: LabelResolver = (conceptId: string, language: s
 /** Loads requested receipt language message bundles into memory before building documents. */
 export async function ensurePrintLanguagesLoaded(
   languages: ResolvedPrintLanguages,
+  timeoutMs?: number,
 ): Promise<PrintLanguageCode[]> {
+  await awaitPrintPolicyBootstrap();
   const outcomes = await Promise.allSettled(
-    languages.map((language) => loadLocaleMessages(language as Language)),
+    languages.map((language) => loadPrintLocaleWithDeadline(language as Language, timeoutMs)),
   );
   return languages.filter((_, index) => outcomes[index].status === 'rejected');
 }
@@ -258,6 +273,9 @@ export function buildBillPrintData(bill: Bill, opts: BillBusinessOptions = {}): 
       showTaxId: showTaxId ? 'force' : 'never',
       showTaxBreakdown: opts.showTaxBreakdown === true,
       showTableNumber: opts.showTableNumber !== false,
+      ...(opts.showLargeOrderNumber !== undefined
+        ? { showLargeOrderNumber: opts.showLargeOrderNumber === true }
+        : {}),
       showCustomerName: opts.showCustomerName !== false,
       showCustomerPhone: shouldShowCustomerNumber({
         showOnReceipts: opts.showCustomerPhone !== false,
@@ -332,6 +350,7 @@ export function buildFrontendKotDocument(
     columns: number;
     language: string;
     timezone?: string;
+    showLargeOrderNumber?: boolean;
   },
 ): KotDocument {
   const orderShape = order as Order & {
@@ -370,6 +389,9 @@ export function buildFrontendKotDocument(
   const items = opts.items ?? order.items ?? [];
   const printData: KotPrintData = {
     stationName: String(opts.stationName ?? ''),
+    ...(typeof opts.showLargeOrderNumber === 'boolean'
+      ? { showLargeOrderNumber: opts.showLargeOrderNumber }
+      : {}),
     order: {
       orderNumber: String(order.order_number ?? ''),
       createdAt: kotTicketTime(order.created_at, items),

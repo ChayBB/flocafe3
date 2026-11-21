@@ -70,9 +70,9 @@ async function waitForDiagnostic(
   reasonCode: string,
   matches: (metadata: any) => boolean,
 ): Promise<any | null> {
-  const deadline = Date.now() + 3000;
+  const deadline = RealDate.now() + 3000;
   let row = latestDiagnostic(db, reasonCode);
-  while ((!row || !matches(row.metadata)) && Date.now() < deadline) {
+  while ((!row || !matches(row.metadata)) && RealDate.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
     row = latestDiagnostic(db, reasonCode);
   }
@@ -89,6 +89,7 @@ function isNativeAbiMismatch(error: any): boolean {
 const RealDate = global.Date;
 const withFixedClock = async <T>(isoUtc: string, fn: () => Promise<T>): Promise<T> => {
   const fixedMs = RealDate.parse(isoUtc);
+  const prevDate = global.Date;
   class FixedDate extends RealDate {
     constructor(...args: any[]) {
       if (args.length === 0) {
@@ -105,7 +106,7 @@ const withFixedClock = async <T>(isoUtc: string, fn: () => Promise<T>): Promise<
   try {
     return await fn();
   } finally {
-    global.Date = RealDate;
+    global.Date = prevDate;
   }
 };
 
@@ -218,7 +219,7 @@ async function main() {
     });
     app.use('/api/cash-sessions', cashSessionRoutes);
     const token = (userId: string, email: string, role: string) =>
-      jwt.sign({ userId, email, role }, getJWTSecret(), { expiresIn: '1h' });
+      jwt.sign({ userId, email, role }, getJWTSecret(), { expiresIn: '365d' });
     cashierToken = token('cashier-sess', 'cashier-sess@test.local', 'cashier');
     cashier2Token = token('cashier2-sess', 'cashier2-sess@test.local', 'cashier');
     const serverToken = token('server-sess', 'server-sess@test.local', 'server');
@@ -430,7 +431,7 @@ async function main() {
   const ownerSettingsToken = jwt.sign(
     { userId: 'owner-sess', email: 'owner-sess@test.local', role: 'owner' },
     getJWTSecret(),
-    { expiresIn: '1h' },
+    { expiresIn: '365d' },
   );
 
   function seedUnpaidBill(tag: string): number {
@@ -766,7 +767,7 @@ async function main() {
   const ownedOwnerToken = jwt.sign(
     { userId: 'owner-sess', email: 'owner-sess@test.local', role: 'owner' },
     getJWTSecret(),
-    { expiresIn: '1h' },
+    { expiresIn: '365d' },
   );
   const ownedRefundBill = seedUnpaidBill('owned-refund');
   const ownedRefundPay = await request(app)
@@ -1103,19 +1104,18 @@ async function main() {
     `DELETE FROM orders WHERE order_number IN ('ORD-GUARD-SAME', 'ORD-GUARD-CANCELLED')`,
   ).run();
 
+  const oldActivity = past(8 * 86400_000);
   const activeStaleOpen = await request(app)
     .post('/api/cash-sessions/open')
     .set('Authorization', `Bearer ${cashierToken}`)
     .send({ opening_float_cents: 100 });
   assert(activeStaleOpen.status === 200, 'active stale-candidate session opens (200)');
   const activeStaleId = activeStaleOpen.body?.id;
-  db.prepare(`UPDATE cash_sessions SET opened_at = datetime('now', '-8 days') WHERE id = ?`).run(
-    activeStaleId,
-  );
+  db.prepare(`UPDATE cash_sessions SET opened_at = ? WHERE id = ?`).run(oldActivity, activeStaleId);
   db.prepare(
     `INSERT INTO cash_drawer_movements (business_date, movement_type, amount_cents, reason, created_by, created_at)
-    VALUES (?, 'pay_in', 1000, 'recent activity', 'cashier-sess', datetime('now'))`,
-  ).run(todayLocal);
+    VALUES (?, 'pay_in', 1000, 'recent activity', 'cashier-sess', ?)`,
+  ).run(todayLocal, now());
   const activeStaleBlocked = await request(app)
     .post('/api/cash-sessions/open')
     .set('Authorization', `Bearer ${cashierToken}`)
@@ -1136,7 +1136,7 @@ async function main() {
     activeStaleClose.status === 200,
     'active stale candidate closes normally after the guard test',
   );
-  db.prepare(`UPDATE cash_drawer_movements SET created_at = datetime('now', '-8 days')`).run();
+  db.prepare(`UPDATE cash_drawer_movements SET created_at = ?`).run(oldActivity);
 
   const paidBillStaleOpen = await request(app)
     .post('/api/cash-sessions/open')
@@ -1144,7 +1144,8 @@ async function main() {
     .send({ opening_float_cents: 0 });
   assert(paidBillStaleOpen.status === 200, 'paid-bill stale-candidate session opens (200)');
   const paidBillStaleId = paidBillStaleOpen.body?.id;
-  db.prepare(`UPDATE cash_sessions SET opened_at = datetime('now', '-8 days') WHERE id = ?`).run(
+  db.prepare(`UPDATE cash_sessions SET opened_at = ? WHERE id = ?`).run(
+    oldActivity,
     paidBillStaleId,
   );
   const recentPaidBill = seedUnpaidBill('stale-paid');
@@ -1174,7 +1175,6 @@ async function main() {
     'paid-bill stale candidate closes normally after the guard test',
   );
 
-  const oldActivity = past(8 * 86400_000);
   const backdateStoreActivity = () => {
     db.prepare('UPDATE bills SET paid_at = ? WHERE paid_at IS NOT NULL').run(oldActivity);
     db.prepare('UPDATE cash_drawer_movements SET created_at = ?').run(oldActivity);
@@ -1199,7 +1199,8 @@ async function main() {
     .set('Authorization', `Bearer ${cashierToken}`)
     .send({ opening_float_cents: 0 });
   assert(partialStaleOpen.status === 200, 'partial-payment stale candidate opens');
-  db.prepare(`UPDATE cash_sessions SET opened_at = datetime('now', '-8 days') WHERE id = ?`).run(
+  db.prepare(`UPDATE cash_sessions SET opened_at = ? WHERE id = ?`).run(
+    oldActivity,
     partialStaleOpen.body?.id,
   );
   const partialStaleBill = seedUnpaidBill('stale-partial');
@@ -1233,7 +1234,8 @@ async function main() {
     .set('Authorization', `Bearer ${cashierToken}`)
     .send({ opening_float_cents: 0 });
   assert(refundStaleOpen.status === 200, 'refund stale candidate opens');
-  db.prepare(`UPDATE cash_sessions SET opened_at = datetime('now', '-8 days') WHERE id = ?`).run(
+  db.prepare(`UPDATE cash_sessions SET opened_at = ? WHERE id = ?`).run(
+    oldActivity,
     refundStaleOpen.body?.id,
   );
   const refundStaleBill = seedUnpaidBill('stale-refund');
@@ -1271,9 +1273,7 @@ async function main() {
     .send({ opening_float_cents: 100 });
   assert(staleOpen.status === 200, 'stale-candidate session opens (200)');
   const staleId = staleOpen.body?.id;
-  db.prepare(`UPDATE cash_sessions SET opened_at = datetime('now', '-8 days') WHERE id = ?`).run(
-    staleId,
-  );
+  db.prepare(`UPDATE cash_sessions SET opened_at = ? WHERE id = ?`).run(oldActivity, staleId);
   // Store-wide inactivity is part of the stale rule.
   backdateStoreActivity();
   const freshOpen = await request(app)
@@ -1322,12 +1322,12 @@ async function main() {
       role: 'manager',
     },
     getJWTSecret(),
-    { expiresIn: '1h' },
+    { expiresIn: '365d' },
   );
   const chefToken = jwt.sign(
     { userId: 'chef-sess', email: 'chef-sess@test.local', role: 'chef' },
     getJWTSecret(),
-    { expiresIn: '1h' },
+    { expiresIn: '365d' },
   );
   const mcOpen = await request(app)
     .post('/api/cash-sessions/open')
@@ -1402,7 +1402,7 @@ async function main() {
   const ownerToken = jwt.sign(
     { userId: 'owner-sess', email: 'owner-sess@test.local', role: 'owner' },
     getJWTSecret(),
-    { expiresIn: '1h' },
+    { expiresIn: '365d' },
   );
   const prOpen = await request(app)
     .post('/api/cash-sessions/open')
@@ -1489,6 +1489,7 @@ async function main() {
     `day close allowed after shift closed (got ${allowedDayClose.status}, code=${allowedDayClose.body?.display_code})`,
   );
   db.prepare(`DELETE FROM cash_closures WHERE id = ?`).run(allowedDayClose.body?.zReport?.id);
+  db.prepare(`DELETE FROM cash_drawer_movements WHERE business_date = ?`).run(todayLocal);
 
   console.log('Section Phase-1 validation: multi-shift same day + pending order carry-over');
   const turnA = await request(app)
@@ -1733,6 +1734,25 @@ async function main() {
     'session uses its own float, not the movement',
   );
 
+  // Clear wall-clock ledger rows before fixed-date sections so real calendar dates never collide with fixtures.
+  for (const table of [
+    'refund_idempotency',
+    'refunds',
+    'payment_idempotency',
+    'print_logs',
+    'bill_items',
+    'bills',
+    'order_audit_log',
+    'order_item_addons',
+    'order_items',
+    'orders',
+    'cash_drawer_movements',
+    'cash_sessions',
+    'cash_closures',
+  ]) {
+    db.prepare(`DELETE FROM ${table}`).run();
+  }
+
   // ── Section 9: closed business day blocks new shift open ─────────────
   console.log('Section 9: closed business day blocks new shift open');
 
@@ -1882,6 +1902,7 @@ async function main() {
     db.prepare(
       `INSERT INTO settings (key, value, updated_at) VALUES ('business_day_start_time', '00:00', ?) ON CONFLICT(key) DO UPDATE SET value='00:00', updated_at=excluded.updated_at`,
     ).run(now());
+    db.prepare(`DELETE FROM cash_drawer_movements WHERE business_date = ?`).run(todayLocal);
   }
 
   // ── Section 10: cross-midnight shift closure business date (#1360) ───
@@ -2435,9 +2456,7 @@ async function main() {
           .send({ counted_cash_cents: 1000 });
         assert(s1Close.status === 200, '#1339 (setting off): User A closes shift (200)');
       });
-      db.prepare(
-        `DELETE FROM cash_drawer_movements WHERE business_date = '2026-11-10' AND movement_type = 'opening_float'`,
-      ).run();
+      db.prepare(`DELETE FROM cash_drawer_movements WHERE business_date = '2026-11-10'`).run();
       db.prepare(`DELETE FROM cash_sessions WHERE opened_at LIKE '2026-11-10%'`).run();
       db.prepare(`DELETE FROM cash_closures WHERE business_date = '2026-11-10'`).run();
 
@@ -2761,8 +2780,8 @@ async function main() {
           Number(detailsMgr[0]?.cash_session_id) === 0,
           '#1339: sessionless actor payment stores cash_session_id = 0 (NO_CASH_SESSION_ID) and does not leak into Shift A or B',
         );
-        // If the manager subsequently opens a shift and attempts to correct that sessionless payment line (cash_session_id === 0),
-        // it must be rejected with 409 shift_closed rather than moving into the manager's open shift.
+        // If the manager subsequently opens a shift and corrects that sessionless cash payment line (cash_session_id === 0)
+        // to card, it succeeds while keeping cash_session_id = 0 so the manager's open shift expected_cash stays 0.
         const openMgrShift = await request(app)
           .post('/api/cash-sessions/open')
           .set('Authorization', `Bearer ${s11ManagerToken}`)
@@ -2778,11 +2797,22 @@ async function main() {
             override_pin: '1234',
           });
         assert(
-          correctSessionless.status === 409 && correctSessionless.body?.reason === 'shift_closed',
-          `#1339: correcting a sessionless payment line (cash_session_id=0) is rejected with 409 shift_closed (got ${correctSessionless.status} ${correctSessionless.body?.reason})`,
+          correctSessionless.status === 200 &&
+            correctSessionless.body?.bill?.payment_details?.[0]?.cash_session_id === 0,
+          `#1339: correcting a sessionless cash payment line (cash_session_id=0) to card succeeds (200) and keeps cash_session_id=0 (got ${correctSessionless.status} sid=${correctSessionless.body?.bill?.payment_details?.[0]?.cash_session_id})`,
+        );
+        const curMgrShift = await request(app)
+          .get('/api/cash-sessions/current')
+          .set('Authorization', `Bearer ${s11ManagerToken}`);
+        assert(
+          curMgrShift.status === 200 && curMgrShift.body?.expected_cash_cents === 0,
+          `#1339: manager open shift expected_cash_cents stays 0 after pre-shift cash -> card correction (got ${curMgrShift.body?.expected_cash_cents})`,
         );
         db.prepare('DELETE FROM cash_sessions WHERE id = ?').run(openMgrShift.body?.id);
         // Delete the unscoped manager test bill so day close compares purely Shift A + Shift B
+        db.prepare(
+          `DELETE FROM order_audit_log WHERE order_id = (SELECT order_id FROM bills WHERE id = ?)`,
+        ).run(billMgrId);
         db.prepare('DELETE FROM bills WHERE id = ?').run(billMgrId);
         db.prepare(`DELETE FROM orders WHERE order_number = 'ORD-1339-MGR'`).run();
       });
@@ -4998,10 +5028,13 @@ async function main() {
 
   console.log('='.repeat(50));
   console.log(`Passed ${passed}/${total}, failed ${failed}`);
-  process.exit(failed > 0 ? 1 : 0);
 }
 
-main().catch((error) => {
-  console.error('FATAL', error);
-  process.exit(1);
-});
+withFixedClock('2026-05-15T12:00:00.000Z', main)
+  .then(() => {
+    process.exit(failed > 0 ? 1 : 0);
+  })
+  .catch((error) => {
+    console.error('FATAL', error);
+    process.exit(1);
+  });

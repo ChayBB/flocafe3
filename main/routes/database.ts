@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import Database from 'better-sqlite3';
 import {
+  GOOGLE_DRIVE_PRIVATE_SETTING_KEYS,
   backfillWhatsAppMessageAttempts,
   captureKitchenStationSecurityState,
   captureKdsEnabledSetting,
@@ -42,7 +43,6 @@ import * as path from 'path';
 import { asyncHandler } from '../middleware/async-handler';
 import { getHttpRequestSignal, trackHttpRequestWork } from '../shutdown';
 import { parsePhoneE164 } from '../lib/phone';
-import { isRole } from '../../shared/role-permissions';
 import { randomUUID } from 'node:crypto';
 import { googleDrive } from '../services/google-drive';
 import {
@@ -56,6 +56,7 @@ const router = Router();
 // allow token forgery or cloud credential theft (vuln-0005).
 const EXPORT_SETTINGS_REDACT = new Set([
   'jwt_secret',
+  'auth_clock_high_water_ms',
   'cloud_api_key',
   'cloud_device_secret',
   'cloud_pos_hash',
@@ -70,6 +71,7 @@ const EXPORT_SETTINGS_REDACT = new Set([
   'guest_qr_secret',
   // Cloud Connector bearer token: exports and backups must never carry it, not even its marker.
   'qr_cloud_connector_token',
+  ...GOOGLE_DRIVE_PRIVATE_SETTING_KEYS,
 ]);
 
 // User columns stripped from export — hashes must never leave the server.
@@ -87,6 +89,14 @@ const EXPORT_EXCLUDE_TABLES = new Set([
   'local_diagnostics',
   'kds_pairing_tokens',
   'customer_display_tokens',
+  'revoked_tokens',
+]);
+
+const IMPORT_BLOCKED_SECURITY_TABLES = new Set([
+  'role_permission_overrides',
+  'user_permission_overrides',
+  'authorization_audit_log',
+  'auth_audit_log',
 ]);
 
 // Parse schema version; invalid or missing versions collapse to -1 or 0 to trigger mismatch handling.
@@ -341,30 +351,26 @@ router.post(
             }
           }
 
-          // Preserve existing accounts and create inactive placeholders for redacted users without hashes.
+          // Preserve existing accounts and create inactive placeholders for missing imported users.
           const importedUserRows = Array.isArray(importData.users) ? importData.users : [];
-          const credentialedUserIds = new Set(
-            importedUserRows
-              .filter((row) => typeof row?.password === 'string' && row.password.length > 0)
-              .map((row) => String(row.id)),
+          const existingUserIds = new Set(
+            (db.prepare('SELECT id FROM users').all() as { id: string }[]).map((row) =>
+              String(row.id),
+            ),
           );
-          const redactedUserIds = new Set(
+          const redactedPlaceholderIds = new Set(
             importedUserRows
               .filter(
                 (row) =>
                   row &&
                   typeof row === 'object' &&
                   row.id != null &&
-                  !credentialedUserIds.has(String(row.id)),
+                  String(row.id) !== '' &&
+                  !existingUserIds.has(String(row.id)),
               )
               .map((row) => String(row.id)),
           );
-          const importProvidedUserIds = new Set([...credentialedUserIds, ...redactedUserIds]);
-          const existingUserIds = new Set(
-            (db.prepare('SELECT id FROM users').all() as { id: string }[]).map((row) =>
-              String(row.id),
-            ),
-          );
+          const importProvidedUserIds = redactedPlaceholderIds;
           const unresolvedUserIds = new Set<string>();
           for (const [tableName, rows] of Object.entries(importData)) {
             if (
@@ -372,7 +378,8 @@ router.post(
               !Array.isArray(rows) ||
               !isSafeIdentifier(tableName) ||
               !allowedTables.has(tableName) ||
-              EXPORT_EXCLUDE_TABLES.has(tableName)
+              EXPORT_EXCLUDE_TABLES.has(tableName) ||
+              IMPORT_BLOCKED_SECURITY_TABLES.has(tableName)
             )
               continue;
             const userReferenceColumns = (
@@ -435,6 +442,8 @@ router.post(
               for (const tableName of importedTables) {
                 throwIfDatabaseMaintenanceAborted(signal);
                 if (!allowedTables.has(tableName) || EXPORT_EXCLUDE_TABLES.has(tableName)) continue;
+                if (IMPORT_BLOCKED_SECURITY_TABLES.has(tableName) || tableName === 'users')
+                  continue;
                 // Validate table name to prevent SQL injection
                 if (!isSafeIdentifier(tableName)) {
                   console.warn(`[DB Import] Skipping unsafe table name: ${tableName}`);
@@ -559,6 +568,8 @@ router.post(
                   throwIfDatabaseMaintenanceAborted(signal);
                   // Exported secret fields are deliberately redacted. Never import the
                   // marker itself as a real credential (which would make it known).
+                  if (tableName === 'settings' && String(row.key) === 'auth_clock_high_water_ms')
+                    continue;
                   if (
                     tableName === 'settings' &&
                     EXPORT_SETTINGS_REDACT.has(String(row.key)) &&
@@ -761,7 +772,6 @@ function restoreRedactedUserPlaceholders(
 
   for (const row of importedUserRows) {
     if (!row || typeof row !== 'object') continue;
-    if (typeof row.password === 'string' && row.password.length > 0) continue;
 
     const id = row.id == null ? '' : String(row.id);
     if (!id || existingUserIds.has(id)) continue;
@@ -770,8 +780,8 @@ function restoreRedactedUserPlaceholders(
       typeof row.updated_at === 'string' && row.updated_at
         ? row.updated_at
         : new Date().toISOString();
-    const roleValue = String(row.role);
-    const role = isRole(roleValue) ? roleValue : 'cashier';
+    const role =
+      row.role === 'server' || row.role === 'chef' || row.role === 'cashier' ? row.role : 'cashier';
     const values: Record<string, unknown> = {
       id,
       name: typeof row.name === 'string' && row.name.trim() ? row.name : `Imported staff ${id}`,
@@ -955,7 +965,7 @@ router.get(
           return;
         }
         try {
-          res.download(snapshotPath, filename, (error) => settle(error));
+          res.download(snapshotPath, filename, { dotfiles: 'allow' }, (error) => settle(error));
         } catch (error) {
           settle(error as Error);
         }
@@ -968,6 +978,11 @@ router.get(
         })
         .catch((error) => {
           console.error('[DB Download] Stream error:', (error as Error).message);
+          if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+            res.status(500).json({ error: 'Download failed' });
+          } else if (!res.writableEnded && !res.destroyed) {
+            res.destroy();
+          }
         });
     } catch (error: any) {
       res.locals.postHogError = error;

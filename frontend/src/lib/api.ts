@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_BASE_URL } from './api-base';
+import type { NetworkFailureClass } from './transport-failure';
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
@@ -21,14 +22,6 @@ export type ClientFailurePhase =
   | 'retry_cleanup'
   | 'retry_state_update'
   | 'held_cleanup';
-export type NetworkFailureClass =
-  | 'timeout'
-  | 'dns'
-  | 'connection_refused'
-  | 'offline'
-  | 'unreachable'
-  | 'invalid_response'
-  | 'unknown';
 
 export function createOperationReference(): string | null {
   const cryptoApi = globalThis.crypto;

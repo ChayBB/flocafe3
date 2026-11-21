@@ -216,12 +216,29 @@ test('a structured stock rejection displays the specific item name to the cashie
     });
 
     await addOneProduct(page);
+    await page.evaluate(() => {
+      (window as unknown as { electronAPI?: Record<string, unknown> }).electronAPI = {
+        getLogTail: async () => ({
+          text: '[2026-11-09 12:00:00] [warn] Stock check rejected Double Cheeseburger',
+          truncated: false,
+        }),
+      };
+    });
     await page.getByRole('button', { name: 'Place Order' }).click();
 
+    const supportPanel = page.getByTestId('pos-support-error-panel');
+    await expect(supportPanel).toHaveAttribute('data-variant', 'validation');
+    await expect(supportPanel).toHaveAttribute('data-classification', 'expected_rejection');
     await expect(
       page.getByRole('main').getByText('Insufficient stock for "Double Cheeseburger"'),
     ).toBeVisible();
     await expect(page.getByText('Correct the details, then submit the order again.')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Open Products & Stock' })).toHaveAttribute(
+      'href',
+      /^\/products\/?$/,
+    );
+    const attachLogCheckbox = page.locator('#pos-support-attach-log');
+    await expect(attachLogCheckbox).toBeChecked();
 
     const getHelp = page.getByRole('button', { name: 'Get help', exact: true });
     await getHelp.click();
@@ -230,6 +247,11 @@ test('a structured stock rejection displays the specific item name to the cashie
       supportSubmissions[0].message,
       'support ticket receives the item-specific stock rejection message',
     ).toBe('Insufficient stock for "Double Cheeseburger"');
+    expect(supportSubmissions[0].category).toBe('general');
+    expect(supportSubmissions[0].subject).toBe('FloCafe inventory or stock validation help');
+    expect(supportSubmissions[0].log_tail).toBe(
+      '[2026-11-09 12:00:00] [warn] Stock check rejected Double Cheeseburger',
+    );
     expect(supportSubmissions[0].correlation_id).toBe(originalOperationId);
     expect(supportSubmissions[0].operation_failure).toEqual({
       capture_point: 'fc.backend.order.create.stock_validation',
@@ -292,6 +314,15 @@ test('a lost prepaid payment response replays the same saved request after bill 
       });
     });
     let loseReply = true;
+    let loseFirstStatus = true;
+    await page.route('**/api/bills/*', async (route) => {
+      if (route.request().method() === 'GET' && loseFirstStatus) {
+        loseFirstStatus = false;
+        await route.abort('timedout');
+        return;
+      }
+      await route.continue();
+    });
     await page.route('**/api/bills/*/payments', async (route) => {
       if (route.request().method() !== 'POST' || !loseReply) {
         await route.continue();
@@ -319,13 +350,19 @@ test('a lost prepaid payment response replays the same saved request after bill 
     await page.getByRole('button', { name: 'Cash', exact: true }).click();
     await page.getByRole('button', { name: /Confirm Payment/ }).click();
 
+    const checkout = page.getByTestId('prepaid-checkout-modal');
+    await expect(checkout).toBeVisible();
     await expect(
-      page
-        .getByRole('main')
-        .getByText('FloCafe could not confirm whether the order or payment was saved.', {
-          exact: true,
-        }),
+      checkout.getByText('FloCafe could not confirm whether the order or payment was saved.', {
+        exact: true,
+      }),
     ).toBeVisible();
+    await checkout.getByText('Technical details', { exact: true }).click();
+    await expect(checkout.getByText(/payment\.create/)).toBeVisible();
+    await expect(checkout.getByRole('button', { name: 'Close', exact: true })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(checkout).toBeVisible();
+    await expect(checkout.getByRole('button', { name: 'Cash', exact: true })).toBeDisabled();
     expect(paymentRequests).toHaveLength(1);
     expect(captures).toHaveLength(1);
     expect(captures[0]).toMatchObject({
@@ -335,11 +372,25 @@ test('a lost prepaid payment response replays the same saved request after bill 
     });
     expect(captures[0].operation_id).toBe(paymentRequests[0].operationId);
 
-    await page.getByRole('button', { name: 'Place Order' }).click();
-    await expect(page.getByRole('button', { name: /^Tax / })).toBeVisible();
-    await page.getByRole('button', { name: 'Cash', exact: true }).click();
-    await page.getByRole('button', { name: /Confirm Payment/ }).click();
+    await checkout.getByRole('button', { name: 'Check payment status' }).click();
+    await expect(checkout.getByRole('button', { name: 'Check payment status' })).toBeEnabled();
+    await expect(checkout.getByRole('button', { name: 'Close', exact: true })).toBeDisabled();
+    expect(paymentRequests).toHaveLength(1);
+    await checkout.getByRole('button', { name: 'Check payment status' }).click();
+    await expect(checkout.getByRole('button', { name: 'Send same payment' })).toBeVisible();
+    expect(paymentRequests).toHaveLength(1);
+    await expect(
+      checkout.getByText(
+        'Retrying sends the same saved payment with the same request key. Do not start a different payment.',
+      ),
+    ).toBeVisible();
+    await checkout.getByRole('button', { name: 'Send same payment' }).evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     await expect(page.getByText(/Order #.+ paid!/)).toBeVisible();
+    await expect(checkout.getByText('Payment recorded!', { exact: true })).toBeVisible();
+    await expect(checkout.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
     expect(
       paymentRequests,
       'the committed payment is resolved by replaying the saved request',
@@ -357,6 +408,54 @@ test('a lost prepaid payment response replays the same saved request after bill 
         : JSON.parse(String(recoveredPayments || '[]')),
       'the recovered bill still records one payment',
     ).toHaveLength(1);
+    await checkout.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(checkout).not.toBeVisible();
+  } finally {
+    await restoreBusiness(page, originalBusiness);
+  }
+});
+
+test('prepaid confirmation offers a receipt for the paid customer', async ({ page }) => {
+  const originalBusiness = await setBillingType(page, 'prepaid');
+  const phone = `+668${String(Date.now()).slice(-8)}`;
+  try {
+    const response = await page.request.post(`${BASE}/api/customers`, {
+      headers: { Authorization: `Bearer ${MANAGER_TOKEN}` },
+      data: { name: 'Checkout Receipt Customer', phone, country_code: '+66' },
+    });
+    expect(response.ok()).toBeTruthy();
+    await loginAndOpenPos(page);
+    await page.getByTestId('pos-customer-search-input').first().fill(phone);
+    await page
+      .getByRole('button')
+      .filter({ has: page.getByText(phone, { exact: true }) })
+      .first()
+      .click();
+    await addOneProduct(page);
+    await page.getByRole('button', { name: 'Place Order' }).click();
+    const checkout = page.getByTestId('prepaid-checkout-modal');
+    await expect(checkout.getByRole('button', { name: /^Tax / })).toBeVisible();
+    await checkout.getByRole('button', { name: 'Cash', exact: true }).click();
+    await checkout.getByRole('button', { name: /Confirm Payment/ }).click();
+    await expect(checkout.getByText('Payment recorded!', { exact: true })).toBeVisible();
+    await page.evaluate(() => {
+      const target = window as Window & { receiptShareUrl?: string };
+      window.open = (() => ({
+        opener: null,
+        location: {
+          set href(value: string) {
+            target.receiptShareUrl = value;
+          },
+        },
+      })) as typeof window.open;
+    });
+    await checkout.getByRole('button', { name: 'Share via WhatsApp' }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as Window & { receiptShareUrl?: string }).receiptShareUrl),
+      )
+      .toContain(phone.replace('+', ''));
+    await checkout.getByRole('button', { name: 'Done', exact: true }).click();
   } finally {
     await restoreBusiness(page, originalBusiness);
   }
@@ -542,7 +641,12 @@ test('an unrelated payment does not resolve another cashier’s pending payment 
       }),
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send same payment' })).toBeEnabled();
+  const retryPaymentResponse = page.waitForResponse(
+    (res) =>
+      res.url().endsWith(`/api/bills/${bill.id}/payments`) && res.request().method() === 'POST',
+  );
   await page.getByRole('button', { name: 'Send same payment' }).click();
+  expect((await retryPaymentResponse).ok()).toBeTruthy();
   await expect(
     page
       .getByRole('main')
@@ -566,4 +670,141 @@ test('an unrelated payment does not resolve another cashier’s pending payment 
     latestPaymentDetails,
     'the UI retries its saved key after the unrelated payment and both payments remain accounted for',
   ).toHaveLength(2);
+});
+
+test('a KOT print failure preserves backend failure_class and sanitized detail in Get Help and omits log_tail when unchecked', async ({
+  page,
+}) => {
+  const originalBusiness = await setBillingType(page, 'postpaid');
+
+  try {
+    await page.route('**/api/settings/kot_printing_enabled', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          setting: {
+            key: 'kot_printing_enabled',
+            value: 'true',
+            updated_at: '2026-11-09T12:00:00Z',
+          },
+        }),
+      });
+    });
+    await page.route('**/api/settings/auto_print_kot', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          setting: { key: 'auto_print_kot', value: 'true', updated_at: '2026-11-09T12:00:00Z' },
+        }),
+      });
+    });
+    await page.route('**/api/printers', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          printers: [
+            {
+              id: 1,
+              name: 'Kitchen USB Printer',
+              connection_type: 'usb',
+              is_default: 1,
+              paper_width: '80mm',
+            },
+          ],
+        }),
+      });
+    });
+
+    const kotCorrelationId = '4a8c9d01-1234-4b5c-89ab-cdef01234567';
+    await page.route('**/api/printers/print-kot', async (route) => {
+      await route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'Print failed',
+          detail:
+            'Command failed: powershell -NoProfile -EncodedCommand SQBuAHYAbwBrAGUA\nKitchen USB printer queue is paused',
+          failure_class: 'needs_attention',
+          connection_type: 'usb',
+          code: 'print.kot.failed',
+          stage: 'dispatch',
+          correlation_id: kotCorrelationId,
+        }),
+      });
+    });
+
+    const supportSubmissions: Array<Record<string, unknown>> = [];
+    await page.route('**/api/support-ticket', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      supportSubmissions.push(payload);
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ client_ticket_id: payload.client_ticket_id }),
+      });
+    });
+
+    await loginAndOpenPos(page);
+    await page.evaluate(() => {
+      (window as unknown as { electronAPI?: Record<string, unknown> }).electronAPI = {
+        getLogTail: async () => ({
+          text: '[2026-11-09 12:05:00] [error] should be omitted when unchecked',
+          truncated: false,
+        }),
+      };
+    });
+
+    await addOneProduct(page);
+    await page.getByRole('button', { name: 'Place Order' }).click();
+
+    const supportPanel = page.getByTestId('pos-support-error-panel');
+    await expect(supportPanel).toBeVisible();
+    await expect(supportPanel).toHaveAttribute('data-variant', 'error');
+    await expect(supportPanel).toContainText('Kitchen USB printer queue is paused');
+    await expect(supportPanel).not.toContainText('EncodedCommand');
+
+    const attachLogCheckbox = page.locator('#pos-support-attach-log');
+    await expect(attachLogCheckbox).toBeChecked();
+    await attachLogCheckbox.uncheck();
+    await expect(attachLogCheckbox).not.toBeChecked();
+
+    await page.getByRole('button', { name: 'Get help', exact: true }).click();
+    await expect.poll(() => supportSubmissions.length).toBe(1);
+    expect('log_tail' in supportSubmissions[0]).toBe(false);
+    expect(supportSubmissions[0].category).toBe('printer');
+    expect(supportSubmissions[0].subject).toBe('FloCafe printer problem');
+    expect(supportSubmissions[0].correlation_id).toBe(kotCorrelationId);
+    expect(supportSubmissions[0].message).toBe('Kitchen USB printer queue is paused');
+    expect(supportSubmissions[0].operation_failure).toEqual({
+      capture_point: 'fc.backend.printer.kot.queue',
+      operation_id: kotCorrelationId,
+      outcome: 'unknown',
+      facts: {
+        kind: 'kot',
+        failure_class: 'needs_attention',
+        connection_type: 'usb',
+      },
+    });
+  } finally {
+    await restoreBusiness(page, originalBusiness);
+  }
 });

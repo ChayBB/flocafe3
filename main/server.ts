@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import jwt from 'jsonwebtoken';
 import { registerRoutes } from './routes';
+import { malformedOrderBodyPayload } from './routes/orders';
 import { getJWTSecret } from './security/jwt-secret';
 import {
   databaseMaintenanceMiddleware,
@@ -18,7 +19,7 @@ import {
   isDatabaseMaintenanceActive,
   isKdsEnabled,
 } from './db';
-import { setupKdsWebSocket } from './services/kds';
+import { checkKdsWebSocketAdmission, setupKdsWebSocket } from './services/kds';
 import expressRateLimit from 'express-rate-limit';
 import {
   staticRouteRateLimit,
@@ -316,12 +317,14 @@ export function startServer(): Promise<void> {
     app.use(
       (
         err: Error & { status?: number; type?: string },
-        _req: Request,
+        req: Request,
         res: Response,
         _next: NextFunction,
       ) => {
         if (err.type === 'entity.parse.failed') {
-          return res.status(400).json({ error: 'Malformed JSON request body' });
+          return res
+            .status(400)
+            .json(malformedOrderBodyPayload(req) ?? { error: 'Malformed JSON request body' });
         }
         const status =
           typeof err.status === 'number' && err.status >= 400 && err.status < 500
@@ -391,6 +394,15 @@ export function startServer(): Promise<void> {
             if (!isKdsEnabled()) {
               // Return 404 when disabled to avoid revealing KDS presence to LAN clients.
               socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+              socket.destroy();
+              return;
+            }
+
+            const admission = checkKdsWebSocketAdmission(request);
+            if (!admission.allowed) {
+              socket.write(
+                `HTTP/1.1 ${admission.statusCode} ${admission.statusText}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+              );
               socket.destroy();
               return;
             }

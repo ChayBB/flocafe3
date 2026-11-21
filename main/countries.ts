@@ -211,6 +211,13 @@ const SUPPORTED: Record<string, Row> = {
   LV: { locale: 'lv-LV', currency: 'EUR', tz: 'Europe/Riga' },
   LT: { locale: 'lt-LT', currency: 'EUR', tz: 'Europe/Vilnius' },
   HR: { locale: 'hr-HR', currency: 'EUR', tz: 'Europe/Zagreb' },
+  AD: { locale: 'ca-AD', currency: 'EUR', tz: 'Europe/Andorra' },
+  AX: { locale: 'sv-AX', currency: 'EUR', tz: 'Europe/Mariehamn' },
+  MC: { locale: 'fr-MC', currency: 'EUR', tz: 'Europe/Monaco' },
+  ME: { locale: 'sr-ME', currency: 'EUR', tz: 'Europe/Podgorica' },
+  SM: { locale: 'it-SM', currency: 'EUR', tz: 'Europe/San_Marino' },
+  VA: { locale: 'it-VA', currency: 'EUR', tz: 'Europe/Vatican' },
+  XK: { locale: 'sq-XK', currency: 'EUR', tz: 'Europe/Belgrade' },
 
   // Europe (non-euro)
   CH: { locale: 'de-CH', currency: 'CHF', tz: 'Europe/Zurich' },
@@ -232,6 +239,15 @@ const SUPPORTED: Record<string, Row> = {
   GE: { locale: 'ka-GE', currency: 'GEL', tz: 'Asia/Tbilisi' },
   AM: { locale: 'hy-AM', currency: 'AMD', tz: 'Asia/Yerevan' },
   AZ: { locale: 'az-AZ', currency: 'AZN', tz: 'Asia/Baku' },
+  BY: { locale: 'be-BY', currency: 'BYN', tz: 'Europe/Minsk' },
+  FO: { locale: 'fo-FO', currency: 'DKK', tz: 'Atlantic/Faroe' },
+  GG: { locale: 'en-GG', currency: 'GBP', tz: 'Europe/Guernsey' },
+  GI: { locale: 'en-GI', currency: 'GIP', tz: 'Europe/Gibraltar' },
+  IM: { locale: 'en-IM', currency: 'GBP', tz: 'Europe/Isle_of_Man' },
+  JE: { locale: 'en-JE', currency: 'GBP', tz: 'Europe/Jersey' },
+  LI: { locale: 'de-LI', currency: 'CHF', tz: 'Europe/Vaduz' },
+  RU: { locale: 'ru-RU', currency: 'RUB', tz: 'Europe/Moscow' },
+  SJ: { locale: 'nb-SJ', currency: 'NOK', tz: 'Arctic/Longyearbyen' },
 
   // Middle East (GCC & Levant)
   QA: { locale: 'ar-QA', currency: 'QAR', tz: 'Asia/Qatar' },
@@ -240,8 +256,10 @@ const SUPPORTED: Record<string, Row> = {
   OM: { locale: 'ar-OM', currency: 'OMR', tz: 'Asia/Muscat' },
   JO: { locale: 'ar-JO', currency: 'JOD', tz: 'Asia/Amman' },
   LB: { locale: 'ar-LB', currency: 'LBP', tz: 'Asia/Beirut' },
+  SY: { locale: 'ar-SY', currency: 'SYP', tz: 'Asia/Damascus' },
   IQ: { locale: 'ar-IQ', currency: 'IQD', tz: 'Asia/Baghdad' },
   YE: { locale: 'ar-YE', currency: 'YER', tz: 'Asia/Aden' },
+  PS: { locale: 'ar-PS', currency: 'ILS', tz: 'Asia/Hebron' },
 
   // Africa
   GH: { locale: 'en-GH', currency: 'GHS', tz: 'Africa/Accra' },
@@ -260,6 +278,46 @@ const SUPPORTED: Record<string, Row> = {
   NA: { locale: 'en-NA', currency: 'NAD', tz: 'Africa/Windhoek' },
   MZ: { locale: 'pt-MZ', currency: 'MZN', tz: 'Africa/Maputo' },
   AO: { locale: 'pt-AO', currency: 'AOA', tz: 'Africa/Luanda' },
+  AC: { locale: 'en-AC', currency: 'SHP', tz: 'Atlantic/St_Helena' },
+  BF: { locale: 'fr-BF', currency: 'XOF', tz: 'Africa/Ouagadougou' },
+  BI: { locale: 'fr-BI', currency: 'BIF', tz: 'Africa/Bujumbura' },
+  BJ: { locale: 'fr-BJ', currency: 'XOF', tz: 'Africa/Porto-Novo' },
+  CD: { locale: 'fr-CD', currency: 'CDF', tz: 'Africa/Kinshasa' },
+  CF: { locale: 'fr-CF', currency: 'XAF', tz: 'Africa/Bangui' },
+  CG: { locale: 'fr-CG', currency: 'XAF', tz: 'Africa/Brazzaville' },
+  // pt-PT avoids CLDR's U+200B zero-width-space narrowSymbol for CVE in pt-CV.
+  CV: { locale: 'pt-PT', currency: 'CVE', tz: 'Atlantic/Cape_Verde' },
+  DJ: { locale: 'fr-DJ', currency: 'DJF', tz: 'Africa/Djibouti' },
+  EH: { locale: 'ar-EH', currency: 'MAD', tz: 'Africa/El_Aaiun' },
+  ER: { locale: 'ti-ER', currency: 'ERN', tz: 'Africa/Asmara' },
+  GA: { locale: 'fr-GA', currency: 'XAF', tz: 'Africa/Libreville' },
+  GM: { locale: 'en-GM', currency: 'GMD', tz: 'Africa/Banjul' },
+  GN: { locale: 'fr-GN', currency: 'GNF', tz: 'Africa/Conakry' },
+  GQ: { locale: 'es-GQ', currency: 'XAF', tz: 'Africa/Malabo' },
+  GW: { locale: 'pt-GW', currency: 'XOF', tz: 'Africa/Bissau' },
+  KM: { locale: 'fr-KM', currency: 'KMF', tz: 'Indian/Comoro' },
+  LR: { locale: 'en-LR', currency: 'LRD', tz: 'Africa/Monrovia' },
+  LS: { locale: 'en-LS', currency: 'LSL', tz: 'Africa/Maseru' },
+  LY: { locale: 'ar-LY', currency: 'LYD', tz: 'Africa/Tripoli' },
+  MG: { locale: 'fr-MG', currency: 'MGA', tz: 'Indian/Antananarivo' },
+  ML: { locale: 'fr-ML', currency: 'XOF', tz: 'Africa/Bamako' },
+  MR: { locale: 'ar-MR', currency: 'MRU', tz: 'Africa/Nouakchott' },
+  MW: { locale: 'en-MW', currency: 'MWK', tz: 'Africa/Blantyre' },
+  NE: { locale: 'fr-NE', currency: 'XOF', tz: 'Africa/Niamey' },
+  RE: { locale: 'fr-RE', currency: 'EUR', tz: 'Indian/Reunion' },
+  SC: { locale: 'en-SC', currency: 'SCR', tz: 'Indian/Mahe' },
+  SD: { locale: 'ar-SD', currency: 'SDG', tz: 'Africa/Khartoum' },
+  SH: { locale: 'en-SH', currency: 'SHP', tz: 'Atlantic/St_Helena' },
+  SL: { locale: 'en-SL', currency: 'SLE', tz: 'Africa/Freetown' },
+  SO: { locale: 'so-SO', currency: 'SOS', tz: 'Africa/Mogadishu' },
+  SS: { locale: 'en-SS', currency: 'SSP', tz: 'Africa/Juba' },
+  ST: { locale: 'pt-ST', currency: 'STN', tz: 'Africa/Sao_Tome' },
+  SZ: { locale: 'en-SZ', currency: 'SZL', tz: 'Africa/Mbabane' },
+  TA: { locale: 'en-TA', currency: 'GBP', tz: 'Atlantic/St_Helena' },
+  TD: { locale: 'fr-TD', currency: 'XAF', tz: 'Africa/Ndjamena' },
+  TG: { locale: 'fr-TG', currency: 'XOF', tz: 'Africa/Lome' },
+  YT: { locale: 'fr-YT', currency: 'EUR', tz: 'Indian/Mayotte' },
+  ZW: { locale: 'en-ZW', currency: 'USD', tz: 'Africa/Harare' },
 
   // Asia (remaining)
   KZ: { locale: 'kk-KZ', currency: 'KZT', tz: 'Asia/Almaty' },
@@ -273,6 +331,14 @@ const SUPPORTED: Record<string, Row> = {
   MV: { locale: 'dv-MV', currency: 'MVR', tz: 'Indian/Maldives' },
   BT: { locale: 'dz-BT', currency: 'BTN', tz: 'Asia/Thimphu' },
   AF: { locale: 'fa-AF', currency: 'AFN', tz: 'Asia/Kabul' },
+  CC: { locale: 'en-CC', currency: 'AUD', tz: 'Indian/Cocos' },
+  CX: { locale: 'en-CX', currency: 'AUD', tz: 'Indian/Christmas' },
+  IO: { locale: 'en-IO', currency: 'USD', tz: 'Indian/Chagos' },
+  KG: { locale: 'ky-KG', currency: 'KGS', tz: 'Asia/Bishkek' },
+  KP: { locale: 'ko-KP', currency: 'KPW', tz: 'Asia/Pyongyang' },
+  TJ: { locale: 'tg-TJ', currency: 'TJS', tz: 'Asia/Dushanbe' },
+  TL: { locale: 'pt-TL', currency: 'USD', tz: 'Asia/Dili' },
+  TM: { locale: 'tk-TM', currency: 'TMT', tz: 'Asia/Ashgabat' },
 
   // Americas (remaining)
   GT: { locale: 'es-GT', currency: 'GTQ', tz: 'America/Guatemala' },
@@ -293,10 +359,59 @@ const SUPPORTED: Record<string, Row> = {
   CO: { locale: 'es-CO', currency: 'COP', tz: 'America/Bogota' },
   PE: { locale: 'es-PE', currency: 'PEN', tz: 'America/Lima' },
   VE: { locale: 'es-VE', currency: 'VES', tz: 'America/Caracas' },
+  AG: { locale: 'en-AG', currency: 'XCD', tz: 'America/Antigua' },
+  AI: { locale: 'en-AI', currency: 'XCD', tz: 'America/Anguilla' },
+  AW: { locale: 'nl-AW', currency: 'AWG', tz: 'America/Aruba' },
+  BL: { locale: 'fr-BL', currency: 'EUR', tz: 'America/St_Barthelemy' },
+  BM: { locale: 'en-BM', currency: 'BMD', tz: 'Atlantic/Bermuda' },
+  BQ: { locale: 'nl-BQ', currency: 'USD', tz: 'America/Kralendijk' },
+  CU: { locale: 'es-CU', currency: 'CUP', tz: 'America/Havana' },
+  CW: { locale: 'nl-CW', currency: 'XCG', tz: 'America/Curacao' },
+  DM: { locale: 'en-DM', currency: 'XCD', tz: 'America/Dominica' },
+  FK: { locale: 'en-FK', currency: 'FKP', tz: 'Atlantic/Stanley' },
+  GD: { locale: 'en-GD', currency: 'XCD', tz: 'America/Grenada' },
+  GF: { locale: 'fr-GF', currency: 'EUR', tz: 'America/Cayenne' },
+  GL: { locale: 'kl-GL', currency: 'DKK', tz: 'America/Nuuk' },
+  GP: { locale: 'fr-GP', currency: 'EUR', tz: 'America/Guadeloupe' },
+  GY: { locale: 'en-GY', currency: 'GYD', tz: 'America/Guyana' },
+  KN: { locale: 'en-KN', currency: 'XCD', tz: 'America/St_Kitts' },
+  KY: { locale: 'en-KY', currency: 'KYD', tz: 'America/Cayman' },
+  LC: { locale: 'en-LC', currency: 'XCD', tz: 'America/St_Lucia' },
+  MF: { locale: 'fr-MF', currency: 'EUR', tz: 'America/Marigot' },
+  MQ: { locale: 'fr-MQ', currency: 'EUR', tz: 'America/Martinique' },
+  MS: { locale: 'en-MS', currency: 'XCD', tz: 'America/Montserrat' },
+  PM: { locale: 'fr-PM', currency: 'EUR', tz: 'America/Miquelon' },
+  PR: { locale: 'es-PR', currency: 'USD', tz: 'America/Puerto_Rico' },
+  SR: { locale: 'nl-SR', currency: 'SRD', tz: 'America/Paramaribo' },
+  SX: { locale: 'en-SX', currency: 'XCG', tz: 'America/Lower_Princes' },
+  TC: { locale: 'en-TC', currency: 'USD', tz: 'America/Grand_Turk' },
+  VC: { locale: 'en-VC', currency: 'XCD', tz: 'America/St_Vincent' },
+  VG: { locale: 'en-VG', currency: 'USD', tz: 'America/Tortola' },
+  VI: { locale: 'en-VI', currency: 'USD', tz: 'America/St_Thomas' },
 
   // Oceania (remaining)
   FJ: { locale: 'en-FJ', currency: 'FJD', tz: 'Pacific/Fiji' },
   PG: { locale: 'en-PG', currency: 'PGK', tz: 'Pacific/Port_Moresby' },
+  AS: { locale: 'en-AS', currency: 'USD', tz: 'Pacific/Pago_Pago' },
+  CK: { locale: 'en-CK', currency: 'NZD', tz: 'Pacific/Rarotonga' },
+  FM: { locale: 'en-FM', currency: 'USD', tz: 'Pacific/Pohnpei' },
+  GU: { locale: 'en-GU', currency: 'USD', tz: 'Pacific/Guam' },
+  KI: { locale: 'en-KI', currency: 'AUD', tz: 'Pacific/Tarawa' },
+  MH: { locale: 'en-MH', currency: 'USD', tz: 'Pacific/Majuro' },
+  MP: { locale: 'en-MP', currency: 'USD', tz: 'Pacific/Saipan' },
+  NC: { locale: 'fr-NC', currency: 'XPF', tz: 'Pacific/Noumea' },
+  NF: { locale: 'en-NF', currency: 'AUD', tz: 'Pacific/Norfolk' },
+  NR: { locale: 'en-NR', currency: 'AUD', tz: 'Pacific/Nauru' },
+  NU: { locale: 'en-NU', currency: 'NZD', tz: 'Pacific/Niue' },
+  PF: { locale: 'fr-PF', currency: 'XPF', tz: 'Pacific/Tahiti' },
+  PW: { locale: 'en-PW', currency: 'USD', tz: 'Pacific/Palau' },
+  SB: { locale: 'en-SB', currency: 'SBD', tz: 'Pacific/Guadalcanal' },
+  TK: { locale: 'en-TK', currency: 'NZD', tz: 'Pacific/Fakaofo' },
+  TO: { locale: 'to-TO', currency: 'TOP', tz: 'Pacific/Tongatapu' },
+  TV: { locale: 'en-TV', currency: 'AUD', tz: 'Pacific/Funafuti' },
+  VU: { locale: 'en-VU', currency: 'VUV', tz: 'Pacific/Efate' },
+  WF: { locale: 'fr-WF', currency: 'XPF', tz: 'Pacific/Wallis' },
+  WS: { locale: 'en-WS', currency: 'WST', tz: 'Pacific/Apia' },
 };
 
 function build(code: string): Country {
@@ -385,14 +500,35 @@ export function resolveStoredLocalePreference(
   return NEUTRAL_LOCALE_PREFERENCES[key];
 }
 
-export const getCurrencySymbol = (currency: string, locale = 'en-US'): string => {
-  if (!currency) return currency;
+// Non-sterling pound currencies collapse to bare '£' under Intl narrowSymbol.
+const NON_STERLING_POUND_CURRENCIES = new Set(['SYP', 'SSP']);
+
+/** Resolves Intl currencyDisplay so non-sterling pound currencies never render bare '£'. */
+export function resolveIntlCurrencyDisplay(
+  currency: string,
+  locale = 'en-US',
+): 'narrowSymbol' | 'symbol' | 'code' {
+  const normalized = typeof currency === 'string' ? currency.trim().toUpperCase() : '';
+  if (!NON_STERLING_POUND_CURRENCIES.has(normalized)) return 'narrowSymbol';
   try {
     const symbol = new Intl.NumberFormat(locale, {
       style: 'currency',
-      currency,
-      currencyDisplay: 'narrowSymbol',
+      currency: normalized,
+      currencyDisplay: 'symbol',
     })
+      .formatToParts(0)
+      .find((part) => part.type === 'currency')?.value;
+    return symbol && symbol !== '£' && symbol !== '¤' ? 'symbol' : 'code';
+  } catch {
+    return 'code';
+  }
+}
+
+export const getCurrencySymbol = (currency: string, locale = 'en-US'): string => {
+  if (!currency) return currency;
+  try {
+    const currencyDisplay = resolveIntlCurrencyDisplay(currency, locale);
+    const symbol = new Intl.NumberFormat(locale, { style: 'currency', currency, currencyDisplay })
       .formatToParts(0)
       .find((p) => p.type === 'currency')?.value;
     return symbol && symbol !== '¤' ? symbol : currency;
@@ -424,11 +560,10 @@ const normalizePreferences = (prefs?: LocalePreferences): Required<LocalePrefere
 export const formatCurrency = (amount: number, currency: string, locale = 'en-US'): string => {
   if (!currency) return amount.toFixed(2);
   try {
-    return new Intl.NumberFormat(locale, {
-      style: 'currency',
-      currency,
-      currencyDisplay: 'narrowSymbol',
-    }).format(amount);
+    const currencyDisplay = resolveIntlCurrencyDisplay(currency, locale);
+    return new Intl.NumberFormat(locale, { style: 'currency', currency, currencyDisplay }).format(
+      amount,
+    );
   } catch {
     return `${currency} ${amount.toFixed(2)}`;
   }
@@ -461,7 +596,7 @@ export const formatMoney = (
     const formatted = new Intl.NumberFormat(locale, {
       style: 'currency',
       currency,
-      currencyDisplay: 'narrowSymbol',
+      currencyDisplay: resolveIntlCurrencyDisplay(currency, locale),
       numberingSystem,
       minimumFractionDigits: fractionDigits,
       maximumFractionDigits: fractionDigits,
@@ -700,10 +835,11 @@ export interface RegionalSnapshot {
 // Whether the currency symbol renders before or after the amount for this locale/currency pair.
 function regionalCurrencyPosition(locale: string, currency: string): 'prefix' | 'suffix' {
   try {
+    const currencyDisplay = resolveIntlCurrencyDisplay(currency, locale);
     const parts = new Intl.NumberFormat(locale, {
       style: 'currency',
       currency,
-      currencyDisplay: 'narrowSymbol',
+      currencyDisplay,
     }).formatToParts(1);
     return parts.findIndex((part) => part.type === 'currency') <
       parts.findIndex((part) => part.type === 'integer')

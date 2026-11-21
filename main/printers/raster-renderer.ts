@@ -183,6 +183,8 @@ export class ChromiumRasterRenderer {
   }
 
   private isSurfaceSender(sender: Electron.WebContents): boolean {
+    // Reading webContents on a closed window throws, so check the surface first.
+    if (this.isDestroyed()) return false;
     return sender === this.surface.webContents;
   }
 

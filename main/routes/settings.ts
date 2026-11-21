@@ -1,5 +1,6 @@
 import { Router, Request, Response, RequestHandler } from 'express';
 import expressRateLimit from 'express-rate-limit';
+import { isAllowedPrivateIp } from '../middleware/security';
 import { randomUUID } from 'crypto';
 import {
   getDatabase,
@@ -24,6 +25,7 @@ import {
   CloudRequestError,
   cloudSync,
   DEFAULT_CLOUD_SERVER_URL,
+  isCloudDeletionBlocking,
   normalizeCloudServerUrl,
 } from '../services/cloud-sync';
 import {
@@ -65,6 +67,7 @@ import {
   isOfflineMode,
   notifyOfflineModeEnabled,
 } from '../services/offline-mode';
+import { getRefundPolicySettings, isRefundManagerWindow } from '../services/refund';
 import * as whatsapp from '../services/whatsapp';
 import {
   PRODUCT_ANALYTICS_LEVEL_SETTING,
@@ -106,6 +109,7 @@ import {
   Z_REPORT_LANGUAGE_POLICY_KEY,
   LANGUAGE_POLICY_SETTING_KEYS,
   defaultLanguagePolicySettingJson,
+  parseStoredLanguagePolicy,
   validateLanguagePolicySetting,
 } from '../lib/print-language-settings';
 import { isThemeMode, isThemeVariant, THEME_VARIANT_KEYS } from '../title-bar-theme';
@@ -130,6 +134,7 @@ const settingsReadRateLimit = expressRateLimit({
       : 120,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
 });
 const configuredSettingsWriteLimit = Number.parseInt(
   process.env.FLO_SETTINGS_WRITE_RATE_LIMIT_MAX || '',
@@ -143,6 +148,7 @@ const settingsWriteRateLimit = expressRateLimit({
       : 60,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req: Request) => isAllowedPrivateIp(req.ip || req.socket.remoteAddress || ''),
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -177,6 +183,7 @@ function validBusinessLocation(timezone: unknown, currency: unknown, country: un
 const SENSITIVE_SETTING_KEYS = new Set([
   'mobile_pairing_code',
   'jwt_secret',
+  'auth_clock_high_water_ms',
   'cloud_api_key',
   'cloud_device_secret',
   'cloud_deletion_status_token',
@@ -197,6 +204,7 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   bill_template: 'classic',
   bill_footer_message: '',
   bill_show_logo: 'false',
+  bill_show_large_order_number: 'true',
   receipt_logo: '',
   receipt_logo_raster: '',
   printer_trim_decimals: 'false',
@@ -233,6 +241,8 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   pos_item_sort: 'saved',
   // Idle auto-lock timeout in minutes ('0' = off).
   auto_lock_minutes: '0',
+  refund_manager_enabled: 'true',
+  refund_manager_window: '1h',
 };
 
 const VALID_AUTO_LOCK_MINUTES = new Set(['0', '1', '5', '15', '30']);
@@ -261,8 +271,11 @@ function maskSetting(key: string, value: string): string {
 function publicSettingsShape(settings: Record<string, string>): Record<string, string> {
   const publicSettings: Record<string, string> = {};
   for (const [key, value] of Object.entries(settings)) {
-    if (isGoogleDriveSettingKey(key)) continue;
+    if (isGoogleDriveSettingKey(key) || key === 'auth_clock_high_water_ms') continue;
     publicSettings[key] = maskSetting(key, value);
+  }
+  if (publicSettings.bill_show_large_order_number === undefined) {
+    publicSettings.bill_show_large_order_number = 'true';
   }
   return publicSettings;
 }
@@ -281,7 +294,7 @@ function bool01Flag(value: unknown): string | undefined {
   return flag === undefined ? undefined : flag === 'true' ? '1' : '0';
 }
 
-function deriveCurrencySymbol(currency: string, country: string): string {
+export function deriveCurrencySymbol(currency: string, country: string): string {
   return getCurrencySymbol(currency || '', getCountryByCode(country)?.locale) || currency || '';
 }
 
@@ -318,6 +331,7 @@ function businessShape(s: Record<string, string>) {
     bill_delivery_show_customer_phone_always:
       s.bill_delivery_show_customer_phone_always !== 'false',
     bill_show_table_number: s.bill_show_table_number !== 'false',
+    bill_show_large_order_number: s.bill_show_large_order_number !== 'false',
     bill_show_logo: s.bill_show_logo === 'true',
     receipt_logo: s.receipt_logo || '',
     receipt_logo_raster: s.receipt_logo_raster || '',
@@ -408,6 +422,7 @@ router.put('/business', requirePermission('settings.manage'), (req: Request, res
       bill_show_customer_name,
       bill_show_customer_phone,
       bill_show_table_number,
+      bill_show_large_order_number,
       bill_delivery_show_customer_phone_always,
       receipt_logo,
       receipt_logo_raster,
@@ -556,6 +571,7 @@ router.put('/business', requirePermission('settings.manage'), (req: Request, res
       bill_show_customer_name,
       bill_show_customer_phone,
       bill_show_table_number,
+      bill_show_large_order_number,
       bill_delivery_show_customer_phone_always,
       bill_show_logo: boolFlag(bill_show_logo),
       receipt_logo: normalizedReceiptLogo,
@@ -764,38 +780,48 @@ router.put('/discount', requirePermission('settings.manage'), (req: Request, res
 // ─── KDS settings (must come BEFORE /:key wildcard) ─────────────────────────
 
 // Mirrors KDS default view for the dashboard settings page.
-router.get('/kds', requirePermission('settings.view'), (_req: Request, res: Response) => {
-  try {
-    const s = getAllSettings(getDatabase());
-    res.json({
-      kds_default_view: s.kds_default_view === 'kanban' ? 'kanban' : 'tabs',
-    });
-  } catch (error: any) {
-    res.locals.postHogError = error;
-    console.error('[API] Internal error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+router.get(
+  '/kds',
+  settingsReadRateLimit,
+  requireAnyPermission('settings.view', 'kitchen.use'),
+  (_req: Request, res: Response) => {
+    try {
+      const s = getAllSettings(getDatabase());
+      res.json({
+        kds_default_view: s.kds_default_view === 'tabs' ? 'tabs' : 'kanban',
+      });
+    } catch (error: any) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
-router.put('/kds', requirePermission('settings.manage'), (req: Request, res: Response) => {
-  try {
-    const { kds_default_view } = req.body;
-    if (kds_default_view !== undefined && !['tabs', 'kanban'].includes(kds_default_view)) {
-      return res.status(400).json({ error: 'kds_default_view must be "tabs" or "kanban"' });
+router.put(
+  '/kds',
+  settingsWriteRateLimit,
+  requireAnyPermission('settings.manage', 'kitchen.use'),
+  (req: Request, res: Response) => {
+    try {
+      const { kds_default_view } = req.body;
+      if (kds_default_view !== undefined && !['tabs', 'kanban'].includes(kds_default_view)) {
+        return res.status(400).json({ error: 'kds_default_view must be "tabs" or "kanban"' });
+      }
+      if (kds_default_view !== undefined) {
+        upsertSettings(getDatabase(), { kds_default_view });
+      }
+      const s = getAllSettings(getDatabase());
+      res.json({
+        kds_default_view: s.kds_default_view === 'tabs' ? 'tabs' : 'kanban',
+      });
+    } catch (error: any) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
     }
-    if (kds_default_view !== undefined) {
-      upsertSettings(getDatabase(), { kds_default_view });
-    }
-    const s = getAllSettings(getDatabase());
-    res.json({
-      kds_default_view: s.kds_default_view === 'kanban' ? 'kanban' : 'tabs',
-    });
-  } catch (error: any) {
-    res.locals.postHogError = error;
-    console.error('[API] Internal error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  },
+);
 
 // ─── Store logo and cover photo (must come BEFORE /:key wildcard) ───────────
 
@@ -2119,6 +2145,69 @@ router.get(
   },
 );
 
+router.get(
+  '/refunds',
+  settingsReadRateLimit,
+  requireAuthenticatedStaff,
+  (_req: Request, res: Response) => {
+    try {
+      res.json(getRefundPolicySettings(getDatabase()));
+    } catch (error) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.put(
+  '/refunds',
+  settingsWriteRateLimit,
+  requirePermission('settings.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const callerUser = (req as Request & { user?: { role?: string } }).user;
+      if (callerUser?.role !== 'owner') {
+        return res.status(403).json({ error: 'Only the store owner can modify refund policy' });
+      }
+      const { refund_manager_enabled, refund_manager_window } = req.body ?? {};
+      if (refund_manager_enabled === undefined && refund_manager_window === undefined) {
+        return res
+          .status(400)
+          .json({ error: 'refund_manager_enabled or refund_manager_window is required' });
+      }
+      const entries: Record<string, string> = {};
+      if (refund_manager_enabled !== undefined) {
+        if (
+          refund_manager_enabled !== true &&
+          refund_manager_enabled !== false &&
+          refund_manager_enabled !== 'true' &&
+          refund_manager_enabled !== 'false'
+        ) {
+          return res.status(400).json({ error: 'refund_manager_enabled must be a boolean' });
+        }
+        entries.refund_manager_enabled =
+          refund_manager_enabled === true || refund_manager_enabled === 'true' ? 'true' : 'false';
+      }
+      if (refund_manager_window !== undefined) {
+        if (!isRefundManagerWindow(refund_manager_window)) {
+          return res.status(400).json({
+            error: 'refund_manager_window must be 30m, 1h, 2h, 4h, or same_business_day',
+          });
+        }
+        entries.refund_manager_window = refund_manager_window;
+      }
+      const db = getDatabase();
+      upsertSettings(db, entries);
+      return res.json(getRefundPolicySettings(db));
+    } catch (error) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
 // ── Generic key-value routes (wildcard — must be last) ─────────────────────
 
 // Only non-sensitive keys may be updated via the wildcard route.
@@ -2142,6 +2231,7 @@ const ALLOWED_WILDCARD_KEYS = new Set([
   'bill_show_customer_name',
   'bill_show_customer_phone',
   'bill_show_table_number',
+  'bill_show_large_order_number',
   'tax_scheme',
   'taxes_enabled',
   'loyalty_enabled',
@@ -2186,6 +2276,8 @@ const ALLOWED_WILDCARD_KEYS = new Set([
   'payment_card_enabled',
   'payment_wallet_enabled',
   'auto_lock_minutes',
+  'refund_manager_enabled',
+  'refund_manager_window',
 ]);
 
 /**
@@ -2278,6 +2370,7 @@ const PRINTING_BOOLEAN_KEYS = [
 
 const OPTIONAL_PRINTING_BOOLEAN_KEYS = [
   'bill_show_logo',
+  'bill_show_large_order_number',
   'auto_print_kot',
   'printer_use_unicode',
   'printer_arabic_shaping',
@@ -2292,6 +2385,77 @@ const PRINTING_BATCH_KEYS = new Set<string>([
   'cash_drawer_pulse_enabled',
   'cash_drawer_pulse_methods',
 ]);
+
+function parseCashDrawerPulseMethods(raw: string | undefined): string[] {
+  if (!raw) return ['cash', 'card'];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return ['cash', 'card'];
+    const valid = parsed.filter(
+      (method: unknown): method is string => typeof method === 'string' && method.trim().length > 0,
+    );
+    return parsed.length > 0 && valid.length === 0 ? ['cash', 'card'] : valid;
+  } catch {
+    return ['cash', 'card'];
+  }
+}
+
+function printingShape(s: Record<string, string>) {
+  return {
+    auto_print_kot: s.auto_print_kot === 'true',
+    printer_use_unicode: s.printer_use_unicode === 'true',
+    printer_arabic_shaping: s.printer_arabic_shaping === 'true',
+    printer_trim_decimals: s.printer_trim_decimals === 'true',
+    bill_language_policy: parseStoredLanguagePolicy(
+      BILL_LANGUAGE_POLICY_KEY,
+      s[BILL_LANGUAGE_POLICY_KEY],
+    ),
+    kot_language_policy: parseStoredLanguagePolicy(
+      KOT_LANGUAGE_POLICY_KEY,
+      s[KOT_LANGUAGE_POLICY_KEY],
+    ),
+    z_report_language_policy: s[Z_REPORT_LANGUAGE_POLICY_KEY]
+      ? parseStoredLanguagePolicy(Z_REPORT_LANGUAGE_POLICY_KEY, s[Z_REPORT_LANGUAGE_POLICY_KEY])
+      : null,
+    bill_show_logo: s.bill_show_logo === 'true',
+    bill_show_name: s.bill_show_name !== 'false',
+    bill_show_address: s.bill_show_address !== 'false',
+    bill_show_phone: s.bill_show_phone !== 'false',
+    bill_show_tax_id: s.bill_show_tax_id === 'true',
+    bill_show_tax_breakdown: s.bill_show_tax_breakdown !== 'false',
+    bill_show_customer_name: s.bill_show_customer_name !== 'false',
+    bill_show_customer_phone: s.bill_show_customer_phone !== 'false',
+    bill_delivery_show_customer_phone_always:
+      s.bill_delivery_show_customer_phone_always !== 'false',
+    bill_show_table_number: s.bill_show_table_number !== 'false',
+    bill_show_large_order_number: s.bill_show_large_order_number !== 'false',
+    cash_drawer_pulse_enabled:
+      s.cash_drawer_pulse_enabled === 'true'
+        ? true
+        : s.cash_drawer_pulse_enabled === 'false'
+          ? false
+          : null,
+    cash_drawer_pulse_methods: parseCashDrawerPulseMethods(s.cash_drawer_pulse_methods),
+    kot_printing_enabled: s.kot_printing_enabled !== 'false',
+    kds_enabled: s.kds_enabled !== 'false',
+  };
+}
+
+router.get(
+  '/printing',
+  settingsReadRateLimit,
+  requireAnyPermission('printers.manage', 'settings.view'),
+  (_req: Request, res: Response) => {
+    try {
+      const s = getAllSettings(getDatabase());
+      res.json(printingShape(s));
+    } catch (error: any) {
+      res.locals.postHogError = error;
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 router.put(
   '/printing',
@@ -2501,7 +2665,8 @@ router.put(
         req.params.key === 'scheduled_orders_enabled' ||
         req.params.key === 'payment_cash_enabled' ||
         req.params.key === 'payment_card_enabled' ||
-        req.params.key === 'payment_wallet_enabled'
+        req.params.key === 'payment_wallet_enabled' ||
+        req.params.key === 'refund_manager_enabled'
       ) {
         if (req.params.key === 'multi_counter_enabled') {
           const callerUser = (req as Request & { user?: { role?: string } }).user;
@@ -2511,10 +2676,28 @@ router.put(
               .json({ error: 'Only the store owner can modify counter configuration' });
           }
         }
+        if (req.params.key === 'refund_manager_enabled') {
+          const callerUser = (req as Request & { user?: { role?: string } }).user;
+          if (callerUser?.role !== 'owner') {
+            return res.status(403).json({ error: 'Only the store owner can modify refund policy' });
+          }
+        }
         if (value !== true && value !== false && value !== 'true' && value !== 'false') {
           return res.status(400).json({ error: `${req.params.key} must be a boolean` });
         }
         valueToPersist = value === true || value === 'true' ? 'true' : 'false';
+      }
+      if (req.params.key === 'refund_manager_window') {
+        const callerUser = (req as Request & { user?: { role?: string } }).user;
+        if (callerUser?.role !== 'owner') {
+          return res.status(403).json({ error: 'Only the store owner can modify refund policy' });
+        }
+        if (!isRefundManagerWindow(value)) {
+          return res.status(400).json({
+            error: 'refund_manager_window must be 30m, 1h, 2h, 4h, or same_business_day',
+          });
+        }
+        valueToPersist = value;
       }
       const diagnosticsChoice =
         req.params.key === 'diagnostics_consent' ||
@@ -2551,9 +2734,7 @@ router.put(
       if (
         diagnosticsChoice &&
         valueToPersist === 'true' &&
-        ['pending', 'processing', 'approved', 'completed', 'deleted', 'failed', 'unknown'].includes(
-          getAllSettings(db).cloud_deletion_status || '',
-        )
+        isCloudDeletionBlocking(getAllSettings(db).cloud_deletion_status)
       ) {
         return res.status(409).json({ error: 'cloud_deletion_pending' });
       }

@@ -16,6 +16,9 @@ interface ThemeState {
   darkVariant: ThemeVariant;
   setMode: (mode: ThemeMode) => void;
   setDarkVariant: (variant: ThemeVariant) => void;
+  serverSynced: boolean;
+  setServerMode: (mode: ThemeMode) => void;
+  selectMode: (mode: ThemeMode) => void;
   markUserSelected: () => void;
 }
 
@@ -27,5 +30,8 @@ export const useThemeMode = create<ThemeState>((set) => ({
   darkVariant: '1',
   setMode: (mode) => set({ mode }),
   setDarkVariant: (darkVariant) => set({ darkVariant }),
+  serverSynced: false,
+  setServerMode: (mode) => set({ mode, serverSynced: true }),
+  selectMode: (mode) => set({ mode, userSelected: true }),
   markUserSelected: () => set({ userSelected: true }),
 }));

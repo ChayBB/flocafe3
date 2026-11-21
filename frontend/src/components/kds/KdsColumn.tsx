@@ -32,7 +32,7 @@ export function KdsColumn({ status, count, children }: KdsColumnProps) {
       >
         <div className={`w-2 h-2 rounded-full ${config.color}`} />
         <span className={`text-base font-semibold ${config.text}`}>{statusLabel}</span>
-        <span className="ms-auto text-xs px-1.5 py-0.5 rounded-full bg-card/70 text-foreground font-medium tabular-nums">
+        <span className="ms-auto text-xs px-2 py-0.5 rounded-full bg-card/80 text-foreground font-semibold tabular-nums shadow-2xs">
           {count}
         </span>
       </div>
@@ -44,7 +44,7 @@ export function KdsColumn({ status, count, children }: KdsColumnProps) {
       >
         {children}
         {count === 0 && (
-          <div className="flex flex-col items-center justify-center py-6 text-gray-400 text-xs">
+          <div className="flex flex-col items-center justify-center py-6 text-slate-700 dark:text-slate-300 text-xs">
             <span>{t('emptyColumn')}</span>
           </div>
         )}

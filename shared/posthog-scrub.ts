@@ -3,15 +3,36 @@
  * only the `full` level, and exceptions follow diagnostics transmission.
  */
 
+import { scrubPrinterErrorText } from './printer-error-text';
+import {
+  BYPASS_OUTCOMES,
+  DRIVER_KINDS,
+  FAILURE_STEPS,
+  PORT_KINDS,
+  QUEUE_REFUSALS,
+  SNMP_STATES,
+  WIN32_ERROR_MAX,
+} from './print/printer-facts';
+
 export const POSTHOG_CAPTURE_POINTS = [
   'uncaughtException',
   'unhandledRejection',
   'renderer-autocapture',
   'react-error-boundary',
   'api-5xx',
+  'printer',
 ] as const;
 
 export type PostHogCapturePoint = (typeof POSTHOG_CAPTURE_POINTS)[number];
+
+/** Diagnostics events that follow error-sending consent, not the usage level. */
+export const POSTHOG_DIAGNOSTIC_EVENTS = [
+  'printer_failed',
+  'printer_recovered',
+  'operation_failed',
+] as const;
+
+export type PostHogDiagnosticEvent = (typeof POSTHOG_DIAGNOSTIC_EVENTS)[number];
 
 export const POSTHOG_USAGE_EVENTS = [
   'app_launch',
@@ -21,6 +42,8 @@ export const POSTHOG_USAGE_EVENTS = [
   'first_order_created',
   'first_bill_paid',
   'api_slow_request',
+  'diagnostics_prompt_shown',
+  'diagnostics_prompt_accepted',
 ] as const;
 
 export type PostHogUsageEvent = (typeof POSTHOG_USAGE_EVENTS)[number];
@@ -104,6 +127,7 @@ export const POSTHOG_STAFF_KEYS = ['staff_role', 'staff_ref'] as const;
 const PAGEVIEW_KEYS = new Set(['screen', 'settings_tab', 'repeat_views']);
 
 const CAPTURE_POINT_SET = new Set<string>(POSTHOG_CAPTURE_POINTS);
+const DIAGNOSTIC_EVENT_SET = new Set<string>(POSTHOG_DIAGNOSTIC_EVENTS);
 const USAGE_EVENT_SET = new Set<string>(POSTHOG_USAGE_EVENTS);
 const PERSON_KEY_SET = new Set<string>(POSTHOG_PERSON_KEYS);
 const USAGE_PROPERTY_KEY_SET = new Set<string>(POSTHOG_USAGE_PROPERTY_KEYS);
@@ -136,6 +160,52 @@ const CONTEXT_KEYS = new Set<string>([
 ]);
 
 const API_FAILURE_KEYS = new Set(['http_method', 'http_route', 'http_status']);
+
+/** Closed sets for a print failure, so a queue or staff name can never ride along. */
+const PRINT_ENUM_KEYS: Record<string, Set<string>> = {
+  kind: new Set(['receipt', 'kot', 'delivery_slip', 'payment_ticket']),
+  connection_type: new Set(['network', 'usb', 'webusb', 'unknown']),
+  failure_class: new Set([
+    'not_configured',
+    'offline',
+    'needs_attention',
+    'queue_unavailable',
+    'spooler_error',
+    'driver_error',
+    'permission_denied',
+    'timeout',
+    'write_error',
+    'unsupported',
+    'unknown',
+  ]),
+  port_kind: new Set(PORT_KINDS),
+  queue_refusal: new Set(QUEUE_REFUSALS),
+  failure_step: new Set(FAILURE_STEPS),
+  snmp_enabled: new Set(SNMP_STATES),
+  driver_kind: new Set(DRIVER_KINDS),
+  bypass: new Set(BYPASS_OUTCOMES),
+  via: new Set(['direct_tcp']),
+};
+
+/** Bounded integers a print failure may carry, keyed to their largest allowed value. */
+const PRINT_INTEGER_KEYS: Record<string, number> = { win32_error: WIN32_ERROR_MAX };
+const DIAGNOSTIC_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** An operation failure is code-shaped only: ids from the operation registry, a count, flat facts. */
+const OPERATION_CAPTURE_POINT = /^fc(?:\.[a-z][a-z0-9_]*){2,5}$/;
+const OPERATION_CODE = /^[a-z][a-z0-9]*(?:[._][a-z][a-z0-9]*){0,5}$/;
+const OPERATION_CLASSES = new Set(['expected_rejection', 'unexpected_failure']);
+const OPERATION_OUTCOMES = new Set([
+  'not_applied',
+  'applied',
+  'partial',
+  'unknown',
+  'not_applicable',
+]);
+const FACT_KEY = /^[a-z][a-z0-9_]{0,40}$/;
+const FACT_TEXT = /^[A-Za-z0-9_-]{1,64}$/;
+const MAX_FACTS = 12;
+const MAX_FACT_NUMBER = 1_000_000_000;
 
 const PROJECT_MARKERS = [
   'frontend/src/',
@@ -175,6 +245,17 @@ export interface PostHogScrubOptions {
   accountLinked: boolean;
   /** Exceptions. Follows diagnostics transmission. */
   allowExceptions: boolean;
+  /** Release and device facts an exception may arrive without; the sender knows them. */
+  exceptionContext?: ExceptionContext;
+}
+
+export interface ExceptionContext {
+  app_version?: string;
+  platform?: string;
+  install_source?: string;
+  process_type?: string;
+  $os?: string;
+  $os_version?: string;
 }
 
 export function isPostHogCapturePoint(value: unknown): value is PostHogCapturePoint {
@@ -280,7 +361,10 @@ function nonNegativeInteger(value: unknown): number | null {
   return Number.isInteger(number) && number >= 0 && number <= 10_000 ? number : null;
 }
 
-function scrubFrame(frame: unknown): Record<string, unknown> | null {
+function scrubFrame(
+  frame: unknown,
+  fallbackPlatform: string | null,
+): Record<string, unknown> | null {
   if (!frame || typeof frame !== 'object') return null;
   const item = frame as Record<string, unknown>;
   const filename = typeof item.filename === 'string' ? projectRelativeFile(item.filename) : null;
@@ -295,6 +379,8 @@ function scrubFrame(frame: unknown): Record<string, unknown> | null {
   if (typeof item.in_app === 'boolean') next.in_app = item.in_app;
   if (typeof item.platform === 'string' && /^[\w:]{1,40}$/.test(item.platform)) {
     next.platform = item.platform;
+  } else if (fallbackPlatform) {
+    next.platform = fallbackPlatform;
   }
   if (typeof item.chunk_id === 'string' && CHUNK_ID.test(item.chunk_id)) {
     next.chunk_id = item.chunk_id;
@@ -320,7 +406,8 @@ function scrubMechanism(value: unknown): Record<string, unknown> | undefined {
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function scrubExceptionList(value: unknown): Array<Record<string, unknown>> {
+function scrubExceptionList(value: unknown, platform?: unknown): Array<Record<string, unknown>> {
+  const fallback = typeof platform === 'string' && /^[\w:]{1,40}$/.test(platform) ? platform : null;
   const entries = Array.isArray(value) && value.length > 0 ? value.slice(0, 5) : [{}];
   return entries.map((entry) => {
     const record = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {};
@@ -330,15 +417,15 @@ function scrubExceptionList(value: unknown): Array<Record<string, unknown>> {
         : {};
     const rawFrames = Array.isArray(stacktrace.frames) ? stacktrace.frames : [];
     const frames = rawFrames
-      .map(scrubFrame)
+      .map((frame) => scrubFrame(frame, fallback))
       .filter((frame): frame is Record<string, unknown> => frame !== null)
       .slice(-MAX_FRAMES);
     const next: Record<string, unknown> = {
       type: sanitizeErrorName(record.type),
       stacktrace: { type: 'raw', frames },
     };
-    const message = redactExceptionMessage(record.value);
-    if (message) next.value = message;
+    // PostHog needs a message on every exception, so an empty one falls back to the type.
+    next.value = redactExceptionMessage(record.value) || String(next.type);
     const mechanism = scrubMechanism(record.mechanism);
     if (mechanism) next.mechanism = mechanism;
     return next;
@@ -509,14 +596,23 @@ function scrubPageview(event: ScrubbableEvent): ScrubbableEvent | null {
 
 function scrubException(
   event: ScrubbableEvent,
-  defaultCapturePoint: PostHogCapturePoint | undefined,
+  options: PostHogScrubOptions & { defaultCapturePoint?: PostHogCapturePoint },
 ): ScrubbableEvent | null {
   const source = event.properties ?? {};
-  const capturePoint = source.capture_point ?? defaultCapturePoint;
+  const capturePoint = source.capture_point ?? options.defaultCapturePoint;
   if (!isPostHogCapturePoint(capturePoint)) return null;
-  const list = scrubExceptionList(source.$exception_list);
+  const context = contextProperties(source);
+  // An exception captured outside FloCafe's own calls arrives without these fields.
+  for (const [key, value] of Object.entries(options.exceptionContext ?? {})) {
+    if (context[key] === undefined && typeof value === 'string' && value) context[key] = value;
+  }
+  // PostHog parses a frame by its language tag, not the OS; main-process frames are Node.
+  const list = scrubExceptionList(
+    source.$exception_list,
+    options.exceptionContext ? 'node:javascript' : undefined,
+  );
   const properties: Record<string, unknown> = {
-    ...contextProperties(source),
+    ...context,
     capture_point: capturePoint,
     $exception_list: list,
   };
@@ -540,6 +636,83 @@ function scrubException(
     if (value !== undefined && value !== null) properties[key] = value;
   }
   return { ...withoutPersonOperators(event), properties };
+}
+
+function scrubDiagnosticEvent(event: ScrubbableEvent): ScrubbableEvent | null {
+  const source = event.properties ?? {};
+  const capturePoint = source.capture_point;
+  if (!isPostHogCapturePoint(capturePoint)) return null;
+  const properties: Record<string, unknown> = {
+    ...contextProperties(source),
+    capture_point: capturePoint,
+  };
+  for (const [key, allowed] of Object.entries(PRINT_ENUM_KEYS)) {
+    const value = source[key];
+    if (typeof value === 'string' && allowed.has(value)) properties[key] = value;
+  }
+  if (typeof source.correlation_id === 'string' && DIAGNOSTIC_ID.test(source.correlation_id)) {
+    properties.correlation_id = source.correlation_id;
+  }
+  for (const [key, max] of Object.entries(PRINT_INTEGER_KEYS)) {
+    const value = source[key];
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= max) {
+      properties[key] = value;
+    }
+  }
+  const errorText = scrubPrinterErrorText(source.error_text);
+  if (errorText) properties.error_text = errorText;
+  return { ...withoutPersonOperators(event), properties };
+}
+
+function scrubFailureFacts(value: unknown): Record<string, string | number> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const kept: Record<string, string | number> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (Object.keys(kept).length >= MAX_FACTS) break;
+    if (!FACT_KEY.test(key)) continue;
+    if (typeof entry === 'number' && Number.isFinite(entry) && Math.abs(entry) <= MAX_FACT_NUMBER) {
+      kept[key] = entry;
+    } else if (typeof entry === 'string' && FACT_TEXT.test(entry)) {
+      kept[key] = entry;
+    }
+  }
+  return Object.keys(kept).length > 0 ? kept : null;
+}
+
+function scrubOperationFailure(event: ScrubbableEvent): ScrubbableEvent | null {
+  const source = event.properties ?? {};
+  const capturePoint = source.capture_point;
+  if (typeof capturePoint !== 'string' || !OPERATION_CAPTURE_POINT.test(capturePoint)) return null;
+  const properties: Record<string, unknown> = {
+    ...contextProperties(source),
+    capture_point: capturePoint,
+  };
+  for (const key of ['reason_code', 'operation', 'stage'] as const) {
+    const value = source[key];
+    if (typeof value === 'string' && OPERATION_CODE.test(value)) properties[key] = value;
+  }
+  if (typeof source.classification === 'string' && OPERATION_CLASSES.has(source.classification))
+    properties.classification = source.classification;
+  if (typeof source.outcome === 'string' && OPERATION_OUTCOMES.has(source.outcome))
+    properties.outcome = source.outcome;
+  const count = source.count;
+  if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 1 && count <= 100_000)
+    properties.count = count;
+  const facts = scrubFailureFacts(source.facts);
+  if (facts) properties.facts = facts;
+  // A correlation id names one attempt, not a window, so it is never part of this event.
+  return { ...withoutPersonOperators(event), properties };
+}
+
+/** With telemetry off nothing may link an exception or a failure to the device or the store. */
+function withoutLinkedRefs(
+  scrubbed: ScrubbableEvent | null,
+  telemetryEnabled: boolean,
+): ScrubbableEvent | null {
+  if (scrubbed && !telemetryEnabled) {
+    for (const key of ['install_ref', 'store_ref', 'staff_ref']) delete scrubbed.properties?.[key];
+  }
+  return scrubbed;
 }
 
 /**
@@ -584,13 +757,15 @@ function scrubAllowed(
   }
   if (event.event === '$exception') {
     if (!options.allowExceptions) return null;
-    const scrubbed = scrubException(event, options.defaultCapturePoint);
-    // With telemetry off nothing may link an exception to the device, the store, or a staff member.
-    if (scrubbed && !options.telemetryEnabled) {
-      for (const key of ['install_ref', 'store_ref', 'staff_ref'])
-        delete scrubbed.properties?.[key];
-    }
-    return scrubbed;
+    return withoutLinkedRefs(scrubException(event, options), options.telemetryEnabled);
+  }
+  if (event.event === 'operation_failed') {
+    if (!options.allowExceptions) return null;
+    return withoutLinkedRefs(scrubOperationFailure(event), options.telemetryEnabled);
+  }
+  if (DIAGNOSTIC_EVENT_SET.has(event.event)) {
+    if (!options.allowExceptions) return null;
+    return withoutLinkedRefs(scrubDiagnosticEvent(event), options.telemetryEnabled);
   }
   if (!options.telemetryEnabled) return null;
   if (event.event === '$pageview') return scrubPageview(event);

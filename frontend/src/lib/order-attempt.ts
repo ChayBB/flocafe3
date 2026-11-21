@@ -1,9 +1,12 @@
 import type { AppendAttemptStorage } from './append-attempt';
+import { ORDER_CREATE_DISPLAY_CODES } from '../../../shared/order-create-display-codes';
 import {
   cartItemToOrderItem,
   type OrderItemPayload,
   type OrderItemSource,
 } from './cart-order-item';
+
+export { ORDER_CREATE_DISPLAY_CODES };
 
 /** Global key used by builds before prepaid attempts became user scoped. */
 export const PREPAID_ATTEMPT_STORAGE_KEY = 'flo.prepaid.checkout.attempt';
@@ -34,6 +37,78 @@ interface CompletedOrderAttempt {
  * request a fresh idempotency key. */
 export function getPrepaidOrderAttemptStorageKey(userId: string): string {
   return `${PREPAID_ATTEMPT_STORAGE_KEY}${ORDER_ATTEMPT_USER_SUFFIX}${encodeURIComponent(userId)}`;
+}
+
+export const POSTPAID_PAYMENT_ATTEMPT_STORAGE_KEY = 'flo.postpaid.payment.attempt';
+
+export interface StoredPostpaidPaymentAttempt {
+  userId: string;
+  storeId?: string | number;
+  billId: string;
+  idempotencyKey: string;
+  paymentFingerprint: string;
+  receiptIdempotencyKey?: string;
+}
+
+/** Postpaid payment attempts are scoped by cashier user, store, and bill id so
+ * switching staff or counters never replays another cashier's pending payment key. */
+export function getPostpaidPaymentAttemptStorageKey(
+  userId: string,
+  storeId: string | number | null | undefined,
+  billId: string,
+): string {
+  const normalizedStore = normalizeAttemptStoreId(storeId) || 'default';
+  return `${POSTPAID_PAYMENT_ATTEMPT_STORAGE_KEY}${ORDER_ATTEMPT_USER_SUFFIX}${encodeURIComponent(userId)}.store.${encodeURIComponent(normalizedStore)}.bill.${encodeURIComponent(billId)}`;
+}
+
+export function loadPostpaidPaymentAttempt(
+  storage: Pick<Storage, 'getItem'> | null | undefined,
+  key: string,
+): StoredPostpaidPaymentAttempt | null {
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredPostpaidPaymentAttempt> | null;
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      typeof parsed.userId !== 'string' ||
+      typeof parsed.billId !== 'string' ||
+      typeof parsed.idempotencyKey !== 'string' ||
+      typeof parsed.paymentFingerprint !== 'string'
+    ) {
+      return null;
+    }
+    return parsed as StoredPostpaidPaymentAttempt;
+  } catch {
+    return null;
+  }
+}
+
+export function savePostpaidPaymentAttempt(
+  storage: Pick<Storage, 'setItem'> | null | undefined,
+  key: string,
+  attempt: StoredPostpaidPaymentAttempt,
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(key, JSON.stringify(attempt));
+  } catch {
+    // Session storage quota/unavailable falls back to in-memory attempt ref.
+  }
+}
+
+export function clearPostpaidPaymentAttempt(
+  storage: Pick<Storage, 'removeItem'> | null | undefined,
+  key: string,
+): void {
+  if (!storage) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Ignore storage cleanup errors.
+  }
 }
 
 export interface CartStateForFingerprint {
@@ -318,6 +393,8 @@ export type OperationFailureMetadata = {
   classification: 'expected_rejection' | 'unexpected_failure' | null;
   correlationId: string | null;
   displayCode: string | null;
+  failureClass: string | null;
+  stockRefusal: { stock_scope: string; stock_shortfall: string } | null;
   serverError: string | null;
   trusted: boolean;
 };
@@ -621,6 +698,17 @@ const CHARGE_DISPLAY_CODES = [
   'charge_not_waivable',
   'charge_always_applied',
 ] as const;
+const STOCK_SCOPES = ['product', 'variant', 'addon'] as const;
+const STOCK_SHORTFALLS = ['out_of_stock', 'partial'] as const;
+const PERSISTENCE_FAILURE_CLASSES = [
+  'busy_or_locked',
+  'constraint',
+  'read_only',
+  'disk_full',
+  'io_error',
+  'schema_or_migration',
+  'unknown',
+] as const;
 
 export function isSupportedFailureOperation(value: string): value is OperationName {
   return Object.prototype.hasOwnProperty.call(STRUCTURED_FAILURES, value);
@@ -719,6 +807,8 @@ export function classifyOrderRequestFailure(
     classification: null,
     correlationId: null,
     displayCode: null,
+    failureClass: null,
+    stockRefusal: null,
     serverError: null,
     trusted: false,
   };
@@ -731,11 +821,46 @@ export function classifyOrderRequestFailure(
     typeof payload.stage !== 'string'
   )
     return fallback;
-  if (
-    payload.facts !== undefined &&
-    (!plainRecord(payload.facts) || Object.keys(payload.facts).length > 0)
-  )
-    return fallback;
+  const allowsPersistenceFailureClass =
+    payload.reason_code === 'persistence.failed' &&
+    payload.stage === 'persistence' &&
+    (expected.operation === 'order.create' || expected.operation === 'bill.generate');
+  const allowsStockRefusal =
+    payload.reason_code === 'order.stock_insufficient' &&
+    payload.stage === 'validation' &&
+    expected.operation === 'order.create';
+  let failureClass: string | null = null;
+  let stockRefusal: OperationFailureMetadata['stockRefusal'] = null;
+  if (payload.facts !== undefined) {
+    if (!plainRecord(payload.facts)) return fallback;
+    const factKeys = Object.keys(payload.facts);
+    if (factKeys.length > 0) {
+      if (allowsStockRefusal) {
+        const { stock_scope: scope, stock_shortfall: shortfall } = payload.facts;
+        if (
+          factKeys.length !== 2 ||
+          typeof scope !== 'string' ||
+          typeof shortfall !== 'string' ||
+          !(STOCK_SCOPES as readonly string[]).includes(scope) ||
+          !(STOCK_SHORTFALLS as readonly string[]).includes(shortfall)
+        ) {
+          return fallback;
+        }
+        stockRefusal = { stock_scope: scope, stock_shortfall: shortfall };
+      } else {
+        if (
+          !allowsPersistenceFailureClass ||
+          factKeys.length !== 1 ||
+          factKeys[0] !== 'failure_class' ||
+          typeof payload.facts.failure_class !== 'string' ||
+          !(PERSISTENCE_FAILURE_CLASSES as readonly string[]).includes(payload.facts.failure_class)
+        ) {
+          return fallback;
+        }
+        failureClass = payload.facts.failure_class;
+      }
+    }
+  }
   const operationDefinitions = STRUCTURED_FAILURES[expected.operation];
   if (!Object.prototype.hasOwnProperty.call(operationDefinitions, payload.stage)) return fallback;
   const stageDefinitions = operationDefinitions[payload.stage];
@@ -749,13 +874,17 @@ export function classifyOrderRequestFailure(
     payload.reason_code === 'payment.invalid' && expected.operation === 'payment.create';
   const isChargeRejection =
     payload.reason_code === 'bill.charge_rejected' && expected.operation === 'bill.charge.update';
+  const isOrderCreateRejection =
+    payload.reason_code === 'validation.rejected' && expected.operation === 'order.create';
   const allowedDisplayCodes: readonly string[] = isDiscountRejection
     ? DISCOUNT_DISPLAY_CODES
     : isPaymentRejection
       ? PAYMENT_DISPLAY_CODES
       : isChargeRejection
         ? CHARGE_DISPLAY_CODES
-        : [];
+        : isOrderCreateRejection
+          ? ORDER_CREATE_DISPLAY_CODES
+          : [];
   if (
     !definition ||
     payload.stage !== definition.stage ||
@@ -782,6 +911,8 @@ export function classifyOrderRequestFailure(
     classification: definition.classification,
     correlationId: expected.correlationId,
     displayCode: typeof displayCode === 'string' ? displayCode : null,
+    failureClass,
+    stockRefusal,
     serverError,
     detail,
     trusted: true,

@@ -79,3 +79,23 @@ export function projectBoardStatusFromItems(
   if (derived === null || derived === 'served') return null;
   return derived;
 }
+
+export const COMPLETED_KDS_PROJECTION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export function completedKdsProjectionCutoff(nowMs: number = Date.now()): string {
+  return new Date(nowMs - COMPLETED_KDS_PROJECTION_WINDOW_MS)
+    .toISOString()
+    .replace('T', ' ')
+    .replace(/\..*$/, '');
+}
+
+export function isWithinCompletedKdsProjectionWindow(
+  createdAt: string | null | undefined,
+  nowMs: number = Date.now(),
+): boolean {
+  if (typeof createdAt !== 'string' || createdAt.trim().length === 0) {
+    return true;
+  }
+  const normalized = createdAt.trim().replace('T', ' ').replace(/\..*$/, '').replace(/Z$/, '');
+  return normalized >= completedKdsProjectionCutoff(nowMs);
+}

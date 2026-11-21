@@ -8,6 +8,7 @@ import {
   getCountryByCode,
   getCurrencyFractionDigits,
   getCurrencySymbol,
+  resolveIntlCurrencyDisplay,
   formatCurrencyForTenant,
   formatNumberForTenant,
   formatDateForTenant,
@@ -21,6 +22,7 @@ import {
   ensurePrintLanguagesLoaded,
   printLabelResolver,
   resolveBillPrintLanguages,
+  resolveReadyBillPrintLanguages,
 } from './print-document';
 import { LANGUAGES, type Language } from '@/lib/i18n/languages';
 import {
@@ -92,6 +94,8 @@ export interface WebPrintOptions {
   showCustomerPhone?: boolean;
   deliveryShowCustomerPhoneAlways?: boolean;
   showTableNumber?: boolean;
+  /** Print the Order Number in a large bold callout banner on customer receipts. */
+  showLargeOrderNumber?: boolean;
   /** Ignored for browser receipts: HTML uses locale currency formatting and code fallback. */
   useUnicode?: boolean;
   /** Show a large "REPRINT" banner so a reprinted bill can't be mistaken for the original. */
@@ -153,8 +157,6 @@ export async function printWebBill(
   opts: WebPrintOptions = {},
   reservedWindow?: Window | null,
 ): Promise<PrintWarning[]> {
-  const languages = resolvePrintLanguages(opts);
-
   // 1. Open popup window synchronously to maintain transient user activation
   const printWindow =
     reservedWindow === undefined
@@ -167,10 +169,11 @@ export async function printWebBill(
     throw new Error('Popup window was blocked by browser');
   }
 
-  // Ensure print languages are loaded before synchronous document build.
+  // Ensure print policy and language bundles are loaded before synchronous document build.
   let warnings: PrintWarning[];
   let html: string;
   try {
+    const languages = opts.languages ?? (await resolveReadyBillPrintLanguages(opts.language));
     const failedLanguages = await ensurePrintLanguagesLoaded(languages);
     const loadedQr = opts.paymentQrDataUrl
       ? undefined
@@ -343,6 +346,7 @@ export function generateBillHtml(
     showCustomerPhone,
     deliveryShowCustomerPhoneAlways,
     showTableNumber,
+    showLargeOrderNumber: opts.showLargeOrderNumber,
     isReprint,
     trimDecimals,
     languages,
@@ -404,6 +408,10 @@ export function generateBillHtml(
     formatNumberForTenant(Number(value) || 0, tenant.country, { digits: tenant.number_digits });
 
   const hasTax = totals?.tax != null || (breakdown != null && breakdown.lines.length > 0);
+  const largeOrderNumber =
+    meta?.showLargeOrderNumber === true
+      ? (meta.orderNumber?.text ?? '').trim().replace(/^#/, '')
+      : '';
 
   return `<!DOCTYPE html>
 <html lang="${localeTag}" dir="${dir}">
@@ -432,6 +440,7 @@ export function generateBillHtml(
     </div>
 
     <!-- Bill Details -->
+    ${largeOrderNumber ? `<div class="order-number-banner" dir="ltr" style="direction: ltr; unicode-bidi: isolate; font-size: 1.5em; font-weight: 800; text-align: center; border: 2px solid #000; padding: 4px 8px; margin: 6px 0;">#${escapeHtml(largeOrderNumber)}</div>` : ''}
     <div class="bill-details">
       <table>
         <tr><td colspan="2"><strong>${escapeHtml(invoiceNumberLabel)}</strong> ${meta ? directionalValue(meta.invoiceNumber, base) : ''}</td></tr>
@@ -675,19 +684,6 @@ export function getPaperStyles(size: PaperSize, textSize?: PrinterTextSize): str
             ? '12px'
             : '11px';
       const bodyWeight = normalizedTextSize === 'extra_large' ? 700 : 600;
-      const extraLargeRowRules =
-        normalizedTextSize === 'extra_large'
-          ? `
-        .bill-container { overflow-wrap: anywhere; word-break: break-word; }
-        .items-table thead, .items-table tbody { display: block; width: 100%; }
-        .items-table thead tr, .items-table tbody tr { display: flex; flex-wrap: wrap; width: 100%; border-bottom: 1px dashed #000; }
-        .items-table thead tr { border-bottom: 1px solid #000; }
-        .items-table th, .items-table td { border-bottom: none; overflow-wrap: anywhere; word-break: break-word; }
-        .items-table th:first-child, .items-table td:first-child { flex: 1 1 100%; width: 100%; max-width: 100%; }
-        .items-table th:not(:first-child), .items-table td:not(:first-child) { flex: 1 1 auto; min-width: 0; }
-        .items-table td.num { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
-      `
-          : '';
       return (
         baseStyles +
         `
@@ -705,8 +701,15 @@ export function getPaperStyles(size: PaperSize, textSize?: PrinterTextSize): str
         .powered-by { color: #000; font-size: ${poweredByFontSize}; font-weight: 600; }
         .tax-table, .payments-table { width: 100%; margin-inline-start: 0; }
         .items-table th, .items-table td, .tax-table td, .totals-table td, .payments-table td { padding: 2px 4px; }
-      ` +
-        extraLargeRowRules
+        .bill-container { overflow-wrap: anywhere; word-break: break-word; }
+        .items-table thead, .items-table tbody { display: block; width: 100%; }
+        .items-table thead tr, .items-table tbody tr { display: flex; flex-wrap: wrap; width: 100%; border-bottom: 1px dashed #000; }
+        .items-table thead tr { border-bottom: 1px solid #000; }
+        .items-table th, .items-table td { border-bottom: none; overflow-wrap: anywhere; word-break: break-word; }
+        .items-table th:first-child, .items-table td:first-child { flex: 1 1 100%; width: 100%; max-width: 100%; }
+        .items-table th:not(:first-child), .items-table td:not(:first-child) { flex: 1 1 auto; min-width: 0; }
+        .items-table td.num { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+      `
       );
     }
     case 'thermal80': {
@@ -785,7 +788,10 @@ function formatAmount(value: number, tenant: ReceiptTenant, trimDecimals = false
       return new Intl.NumberFormat(locale, {
         style: 'currency',
         currency,
-        currencyDisplay: getCurrencySymbol(currency, locale) === currency ? 'code' : 'narrowSymbol',
+        currencyDisplay:
+          getCurrencySymbol(currency, locale) === currency
+            ? 'code'
+            : resolveIntlCurrencyDisplay(currency, locale),
         ...(numberingSystem ? { numberingSystem } : {}),
         minimumFractionDigits: 0,
         maximumFractionDigits: 0,

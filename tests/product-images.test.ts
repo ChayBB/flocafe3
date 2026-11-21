@@ -252,15 +252,56 @@ async function main() {
       );
     }
 
-    // C2: 304 Not Modified
+    // C2: 304 Not Modified (checked BEFORE Buffer.from Base64 decoding)
     const etag = imgResponse.headers.get('etag');
-    const notModifiedResponse = await (globalThis as any).fetch(
-      `${baseUrl}/api/products/prod-1/image`,
-      {
-        headers: { ...authHeader, 'If-None-Match': etag },
-      },
-    );
-    assertEqual(notModifiedResponse.status, 304, 'C2: 304 Not Modified on matching ETag');
+    const validPngBase64 = VALID_PNG.split(',')[1];
+    const oversizedBase64 = OVERSIZED_IMAGE.split(',')[1];
+    const originalBufferFrom = Buffer.from;
+    let base64DecodeCalls = 0;
+    (Buffer as any).from = function (value: any, encoding?: any, ...rest: any[]) {
+      if (encoding === 'base64' && (value === validPngBase64 || value === oversizedBase64)) {
+        base64DecodeCalls += 1;
+      }
+      return originalBufferFrom.call(Buffer, value, encoding, ...rest);
+    };
+    try {
+      const notModifiedResponse = await (globalThis as any).fetch(
+        `${baseUrl}/api/products/prod-1/image`,
+        {
+          headers: { ...authHeader, 'If-None-Match': etag },
+        },
+      );
+      assertEqual(notModifiedResponse.status, 304, 'C2: 304 Not Modified on matching ETag');
+      assertEqual(base64DecodeCalls, 0, 'C2b: 304 Not Modified returns before decoding Base64');
+    } finally {
+      (Buffer as any).from = originalBufferFrom;
+    }
+
+    // C2c: Oversized stored image_url in DB is rejected before decoding Base64
+    db.prepare('UPDATE products SET image_url = ? WHERE id = ?').run(OVERSIZED_IMAGE, 'prod-1');
+    base64DecodeCalls = 0;
+    (Buffer as any).from = function (value: any, encoding?: any, ...rest: any[]) {
+      if (encoding === 'base64' && (value === validPngBase64 || value === oversizedBase64)) {
+        base64DecodeCalls += 1;
+      }
+      return originalBufferFrom.call(Buffer, value, encoding, ...rest);
+    };
+    try {
+      const oversizedResponse = await (globalThis as any).fetch(
+        `${baseUrl}/api/products/prod-1/image`,
+        {
+          headers: authHeader,
+        },
+      );
+      assertEqual(oversizedResponse.status, 404, 'C2c: Oversized stored image_url returns 404');
+      assertEqual(
+        base64DecodeCalls,
+        0,
+        'C2d: Oversized stored image_url is rejected before Base64 decoding',
+      );
+    } finally {
+      (Buffer as any).from = originalBufferFrom;
+    }
 
     // C3: Legacy external URL must not become an open redirect
     // Manually set image_url to a legacy URL

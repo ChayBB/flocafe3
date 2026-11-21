@@ -21,7 +21,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { strict as assert } from 'node:assert';
 import * as vm from 'node:vm';
-import * as ts from 'typescript';
+import * as esbuild from 'esbuild';
 
 const Module = require('module');
 const originalLoad = Module._load;
@@ -80,7 +80,11 @@ Module._load = function (request: string, parent: any, isMain: boolean) {
   }
   // Stubs required by main/ipc.ts imports (mirrors theme-mode-settings.test.ts).
   if (request === './middleware/security') {
-    return { clearInMemoryRevokedTokens: () => {}, clearUserAuthCache: () => {} };
+    return {
+      clearInMemoryRevokedTokens: () => {},
+      clearUserAuthCache: () => {},
+      isTokenStale: () => false,
+    };
   }
   if (request === './routes/auth') return { clearJWTSecretCache: () => {} };
   if (request === './server') return { getLocalIP: () => '127.0.0.1' };
@@ -153,9 +157,12 @@ async function testPreferenceRecovery() {
     path.join(__dirname, '../frontend/src/hooks/useOrdersLayout.ts'),
     'utf8',
   );
-  const code = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  const code = esbuild.transformSync(source, {
+    loader: 'tsx',
+    format: 'cjs',
+    jsx: 'automatic',
+    target: 'es2022',
+  }).code;
   const state = {
     layout: 'split',
     userSelected: false,
@@ -200,6 +207,7 @@ async function testPreferenceRecovery() {
     exports: {} as { useOrdersLayoutPreference: () => { save: (value: string) => Promise<void> } },
   };
   vm.runInNewContext(code, {
+    module,
     exports: module.exports,
     require: (name: string) => {
       if (name === 'react')
@@ -208,9 +216,9 @@ async function testPreferenceRecovery() {
           useCallback: (callback: unknown) => callback,
         };
       if (name === 'react-hot-toast')
-        return { default: { error: (value: string) => errors.push(value) } };
+        return { __esModule: true, default: { error: (value: string) => errors.push(value) } };
       if (name === 'use-intl') return { useTranslations: () => (key: string) => key };
-      if (name === '@/lib/api') return { default: api };
+      if (name === '@/lib/api') return { __esModule: true, default: api };
       if (name === '@/store/orders-layout')
         return {
           useOrdersLayoutStore: store,
@@ -380,10 +388,24 @@ async function main() {
 
     console.log('\n3. IPC set-setting("orders_layout", <invalid>) → { success: false }');
     {
+      const jwt = require('jsonwebtoken');
+      const { getJWTSecret } = require('../main/security/jwt-secret');
+      const ownerToken = jwt.sign(
+        { userId: 'orders-layout-owner', role: 'owner', iat: Math.floor(Date.now() / 1000) },
+        getJWTSecret(),
+        { algorithm: 'HS256' },
+      );
+
       const handler = registered.get('set-setting');
       assert.ok(!!handler, 'set-setting IPC handler is registered');
+
+      // Calling without auth token must fail closed post-setup
+      const unauthResult = await handler(trustedSender, 'orders_layout', 'split');
+      assert.equal(unauthResult?.success, false, 'unauthenticated set-setting fails closed');
+      assert.equal(unauthResult?.error, 'Authentication required');
+
       for (const value of INVALID_STRINGS) {
-        const result = await handler(trustedSender, 'orders_layout', value);
+        const result = await handler(trustedSender, 'orders_layout', value, ownerToken);
         assert.equal(result?.success, false, `rejects ${JSON.stringify(value)}`);
         assert.ok(
           String(result?.error).includes('orders_layout'),
@@ -392,7 +414,7 @@ async function main() {
       }
       // Non-string payloads never reach the enum check; the type guard rejects them.
       for (const value of INVALID_TYPES) {
-        const result = await handler(trustedSender, 'orders_layout', value);
+        const result = await handler(trustedSender, 'orders_layout', value, ownerToken);
         assert.equal(result?.success, false, `rejects non-string ${JSON.stringify(value)}`);
       }
       assert.equal(
@@ -404,9 +426,17 @@ async function main() {
 
     console.log('\n4. IPC set-setting("orders_layout", "split" | "cards") → { success: true }');
     {
+      const jwt = require('jsonwebtoken');
+      const { getJWTSecret } = require('../main/security/jwt-secret');
+      const ownerToken = jwt.sign(
+        { userId: 'orders-layout-owner', role: 'owner', iat: Math.floor(Date.now() / 1000) },
+        getJWTSecret(),
+        { algorithm: 'HS256' },
+      );
+
       const handler = registered.get('set-setting');
       for (const value of VALID) {
-        const result = await handler(trustedSender, 'orders_layout', value);
+        const result = await handler(trustedSender, 'orders_layout', value, ownerToken);
         assert.equal(result?.success, true, `accepts ${value}`);
         assert.equal(readStored('orders_layout'), value, `IPC persisted ${value}`);
       }

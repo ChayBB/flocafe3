@@ -79,6 +79,7 @@ async function run() {
 
   const {
     getLandingPage,
+    resolveSafeRedirect,
     LANDING_PAGE_CANDIDATES,
     PAGE_PERMISSIONS,
   } = require('../frontend/src/components/layout/AuthGuard');
@@ -98,6 +99,39 @@ async function run() {
     '/auth/login',
     'staff without a page permission fall back to login',
   );
+  assert.equal(
+    resolveSafeRedirect('/customer-display'),
+    '/customer-display',
+    'resolveSafeRedirect accepts /customer-display',
+  );
+  assert.equal(
+    resolveSafeRedirect('/customer-display/'),
+    '/customer-display',
+    'resolveSafeRedirect normalizes trailing slash on /customer-display/',
+  );
+  for (const unsafeRedirect of [
+    null,
+    undefined,
+    '',
+    '   ',
+    'https://evil.com',
+    '//evil.com',
+    '/\\evil.com',
+    '/\t/evil.com',
+    '/\r/evil.com',
+    '/\n\\evil.com',
+    '/..//evil.com',
+    '/auth',
+    '/auth/login',
+    '/setup',
+    '/setup/',
+  ]) {
+    assert.equal(
+      resolveSafeRedirect(unsafeRedirect),
+      null,
+      `resolveSafeRedirect rejects ${JSON.stringify(unsafeRedirect)}`,
+    );
+  }
 
   const pagePermissionsByRoute = new Map<string, string>(PAGE_PERMISSIONS);
   assert.equal(
@@ -321,6 +355,17 @@ async function run() {
       return el;
     };
 
+    let mockStaffTenant = {
+      id: 1,
+      role: 'owner',
+      permission_ids: [
+        'authorization.manage',
+        'staff.operational.manage',
+        'staff.privileged.manage',
+        'staff.credentials.reset',
+      ],
+    };
+
     Module._load = function (request: string, parent: unknown, isMain: boolean) {
       if (request === 'react') return reactHooks;
       if (request === 'react/jsx-runtime') {
@@ -340,6 +385,7 @@ async function run() {
           RotateCcw: IconStub,
           Eye: IconStub,
           EyeOff: IconStub,
+          KeyRound: IconStub,
         };
       }
       if (request === '@/components/ui/button') return { Button: ButtonStub };
@@ -361,15 +407,7 @@ async function run() {
       if (request === '@/store/auth') {
         return {
           useAuthStore: () => ({
-            currentTenant: {
-              id: 1,
-              role: 'owner',
-              permission_ids: [
-                'authorization.manage',
-                'staff.operational.manage',
-                'staff.privileged.manage',
-              ],
-            },
+            currentTenant: mockStaffTenant,
           }),
         };
       }
@@ -526,6 +564,58 @@ async function run() {
       'window keydown listener is cleaned up after Reset Password',
     );
 
+    const resetPinButton = findButtonByLabel(tree, 'staff.resetPinButton');
+    assert.ok(resetPinButton, 'Reset PIN button renders when staff.credentials.reset is granted');
+    focusedElement = null;
+    resetPinButton.props.onClick({ currentTarget: resetPinButton });
+
+    tree = renderStaffPage();
+    assert.ok(findDialog(tree), 'Reset PIN dialog opens when Reset PIN is clicked');
+    assert.equal(keydownListeners.size, 1, 'exactly one keydown listener is active in Reset PIN');
+
+    dispatchKeydown('Escape');
+    tree = renderStaffPage();
+    assert.equal(findDialog(tree), undefined, 'pressing Escape closes the Reset PIN dialog');
+    assert.equal(focusedElement, resetPinButton, 'closing Reset PIN restores focus to Reset PIN');
+    assert.equal(keydownListeners.size, 0, 'window keydown listener is cleaned up after Reset PIN');
+
+    // Manager without staff.credentials.reset can edit operational staff details,
+    // without seeing Reset Password, Reset PIN, or Edit Staff credential override fields.
+    mockStaffTenant = {
+      id: 1,
+      role: 'manager',
+      permission_ids: ['staff.operational.manage'],
+    };
+    tree = renderStaffPage();
+    assert.equal(
+      findButtonByLabel(tree, 'staff.resetPwButton'),
+      undefined,
+      'Reset Password button is hidden without staff.credentials.reset',
+    );
+    assert.equal(
+      findButtonByLabel(tree, 'staff.resetPinButton'),
+      undefined,
+      'Reset PIN button is hidden without staff.credentials.reset',
+    );
+    const managerEditBtn = findButtonByLabel(tree, 'common.edit');
+    assert.ok(managerEditBtn, 'Manager with staff.operational.manage still sees Edit button');
+    managerEditBtn.props.onClick({ currentTarget: managerEditBtn });
+    tree = renderStaffPage();
+    const managerEditDialog = findDialog(tree);
+    assert.ok(managerEditDialog, 'Manager can open Edit Staff dialog');
+    const passwordInputsInManagerEdit = collectElements(
+      managerEditDialog,
+      (el) => el.type === 'input' && el.props?.type === 'password',
+    );
+    assert.equal(
+      passwordInputsInManagerEdit.length,
+      0,
+      'Edit Staff dialog hides password and PIN override inputs without staff.credentials.reset',
+    );
+    dispatchKeydown('Escape');
+    tree = renderStaffPage();
+    assert.equal(findDialog(tree), undefined, 'pressing Escape closes Manager Edit Staff dialog');
+
     for (const slot of effectSlots) {
       if (slot && typeof slot.cleanup === 'function') slot.cleanup();
     }
@@ -647,6 +737,408 @@ async function run() {
       ['/auth/login'],
       'non-bootstrap 401 still redirects to /auth/login via window.location.assign',
     );
+
+    // 5a.1 loadFromStorage() preserves saved tokens on transient network error
+    memStorage.set('token', 'valid-kds-session-token');
+    memStorage.set('tenant', JSON.stringify({ id: 1, business_name: 'Cafe' }));
+    realAuthStore.setState({
+      user: null,
+      token: null,
+      loading: true,
+    });
+    realApi.defaults.adapter = async (config: any) => {
+      throw new axiosPkg.AxiosError('Network Error', 'ERR_NETWORK', config, null, undefined);
+    };
+    await realAuthStore.getState().loadFromStorage();
+    assert.equal(
+      memStorage.get('token'),
+      'valid-kds-session-token',
+      'transient network error preserves token in localStorage',
+    );
+    assert.equal(
+      memStorage.get('tenant'),
+      JSON.stringify({ id: 1, business_name: 'Cafe' }),
+      'transient network error preserves tenant in localStorage',
+    );
+    assert.equal(
+      realAuthStore.getState().loading,
+      false,
+      'loading is set to false after transient network error',
+    );
+
+    // 5a.2 loadFromStorage() preserves saved tokens on transient HTTP 503
+    memStorage.set('token', 'valid-kds-session-token');
+    memStorage.set('tenant', JSON.stringify({ id: 1, business_name: 'Cafe' }));
+    realAuthStore.setState({
+      user: null,
+      token: null,
+      loading: true,
+    });
+    realApi.defaults.adapter = async (config: any) => {
+      throw new axiosPkg.AxiosError('Service Unavailable', 'ERR_BAD_RESPONSE', config, null, {
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: {},
+        config,
+        data: { error: 'Service Unavailable' },
+      });
+    };
+    await realAuthStore.getState().loadFromStorage();
+    assert.equal(
+      memStorage.get('token'),
+      'valid-kds-session-token',
+      'transient HTTP 503 preserves token in localStorage',
+    );
+    assert.equal(
+      memStorage.get('tenant'),
+      JSON.stringify({ id: 1, business_name: 'Cafe' }),
+      'transient HTTP 503 preserves tenant in localStorage',
+    );
+    assert.equal(
+      realAuthStore.getState().loading,
+      false,
+      'loading is set to false after transient HTTP 503',
+    );
+
+    // 5a.3 loadFromStorage() clears tokens on HTTP 403 Forbidden
+    memStorage.set('token', 'forbidden-token');
+    memStorage.set('tenant', JSON.stringify({ id: 1, business_name: 'Cafe' }));
+    realAuthStore.setState({
+      user: { id: 'u1', name: 'Server', email: 'server@cafe.local', role: 'server' },
+      token: 'forbidden-token',
+      loading: true,
+    });
+    realApi.defaults.adapter = async (config: any) => {
+      throw new axiosPkg.AxiosError('Forbidden', 'ERR_BAD_REQUEST', config, null, {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: {},
+        config,
+        data: { error: 'Forbidden' },
+      });
+    };
+    await realAuthStore.getState().loadFromStorage();
+    assert.equal(memStorage.get('token'), undefined, 'HTTP 403 removes token from localStorage');
+    assert.equal(memStorage.get('tenant'), undefined, 'HTTP 403 removes tenant from localStorage');
+    assert.equal(realAuthStore.getState().user, null, 'user is cleared after HTTP 403');
+    assert.equal(realAuthStore.getState().token, null, 'token is cleared after HTTP 403');
+    assert.equal(realAuthStore.getState().loading, false, 'loading is set to false after HTTP 403');
+
+    // 5a.4 syncAuthenticatedSession() synchronously syncs user, token, and storage
+    realAuthStore.setState({
+      isLocked: true,
+      loading: true,
+    });
+    realAuthStore.getState().syncAuthenticatedSession({
+      token: 'synced-token-chef',
+      user: { id: 'u-chef', name: 'Chef Bob', email: 'bob@cafe.local', role: 'chef' },
+      currentTenant: { id: 1, business_name: 'Cafe Kitchen', language: 'en' },
+      tenants: [{ id: 1, business_name: 'Cafe Kitchen', language: 'en' }],
+    });
+    assert.equal(
+      memStorage.get('token'),
+      'synced-token-chef',
+      'syncAuthenticatedSession updates localStorage token',
+    );
+    assert.equal(
+      realAuthStore.getState().user?.name,
+      'Chef Bob',
+      'syncAuthenticatedSession updates user',
+    );
+    assert.equal(
+      realAuthStore.getState().token,
+      'synced-token-chef',
+      'syncAuthenticatedSession updates token',
+    );
+    assert.equal(
+      realAuthStore.getState().isLocked,
+      false,
+      'syncAuthenticatedSession clears isLocked',
+    );
+    assert.equal(
+      realAuthStore.getState().loading,
+      false,
+      'syncAuthenticatedSession sets loading to false',
+    );
+
+    // 5a.5 syncAuthenticatedSession() increments authOperation so in-flight loadFromStorage() 401 does not purge new session
+    memStorage.set('token', 'expired-token-before-kds');
+    memStorage.set('tenant', JSON.stringify({ id: 1 }));
+    let rejectMeRequest: (() => void) | null = null;
+    let resolveMeRequest: ((data: any) => void) | null = null;
+    realApi.defaults.adapter = async (config: any) => {
+      return new Promise((resolve, reject) => {
+        rejectMeRequest = () =>
+          reject(
+            new axiosPkg.AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, null, {
+              status: 401,
+              statusText: 'Unauthorized',
+              headers: {},
+              config,
+              data: { error: 'Token expired' },
+            }),
+          );
+        resolveMeRequest = (data: any) =>
+          resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {},
+            config,
+            data,
+          });
+      });
+    };
+
+    let loadPromise = realAuthStore.getState().loadFromStorage();
+    await new Promise((r) => setImmediate(r));
+
+    realAuthStore.getState().syncAuthenticatedSession({
+      token: 'valid-new-chef-token',
+      user: { id: 'chef-mario', name: 'Chef Mario', role: 'chef' },
+      currentTenant: { id: 1, business_name: 'Main' },
+      tenants: [{ id: 1, business_name: 'Main' }],
+    });
+
+    rejectMeRequest!();
+    await loadPromise;
+
+    assert.equal(
+      realAuthStore.getState().user?.name,
+      'Chef Mario',
+      'Chef session preserved after in-flight 401 resolution',
+    );
+    assert.equal(
+      realAuthStore.getState().token,
+      'valid-new-chef-token',
+      'Chef token preserved in store after in-flight 401 resolution',
+    );
+    assert.equal(
+      memStorage.get('token'),
+      'valid-new-chef-token',
+      'Chef token preserved in localStorage after in-flight 401 resolution',
+    );
+
+    // 5a.6 in-flight loadFromStorage() 200 resolution does not overwrite syncAuthenticatedSession
+    memStorage.set('token', 'old-server-token');
+    loadPromise = realAuthStore.getState().loadFromStorage();
+    await new Promise((r) => setImmediate(r));
+
+    realAuthStore.getState().syncAuthenticatedSession({
+      token: 'valid-chef-token-2',
+      user: { id: 'chef-luigi', name: 'Chef Luigi', role: 'chef' },
+      currentTenant: { id: 1, business_name: 'Main' },
+      tenants: [{ id: 1, business_name: 'Main' }],
+    });
+
+    resolveMeRequest!({
+      user: { id: 'stale-user', name: 'Server Sam', role: 'server' },
+      tenants: [{ id: 1, business_name: 'Main' }],
+    });
+    await loadPromise;
+
+    assert.equal(
+      realAuthStore.getState().user?.name,
+      'Chef Luigi',
+      'Chef session preserved after in-flight 200 resolution of previous user',
+    );
+    assert.equal(
+      realAuthStore.getState().token,
+      'valid-chef-token-2',
+      'Chef token preserved in store after in-flight 200 resolution of previous token',
+    );
+
+    // 5a.7 replaceSessionToken increments authOperation so in-flight loadFromStorage() 401 does not destroy replacement
+    memStorage.set('token', 'expired-token-before-replace');
+    loadPromise = realAuthStore.getState().loadFromStorage();
+    await new Promise((r) => setImmediate(r));
+
+    realAuthStore.getState().replaceSessionToken('valid-replaced-token', { has_pin: true });
+    rejectMeRequest!();
+    await loadPromise;
+
+    assert.equal(
+      realAuthStore.getState().token,
+      'valid-replaced-token',
+      'Replaced token preserved after in-flight 401 resolution',
+    );
+    assert.equal(
+      memStorage.get('token'),
+      'valid-replaced-token',
+      'Replaced token preserved in localStorage after in-flight 401 resolution',
+    );
+
+    // 5a.8 loadFromStorage() 401 does not remove a newer token written directly to localStorage
+    memStorage.set('token', 'expired-token-external-swap');
+    memStorage.set('tenant', JSON.stringify({ id: 1, business_name: 'Cafe' }));
+    realAuthStore.setState({
+      user: { id: 'u1', name: 'Server', email: 'server@cafe.local', role: 'server' },
+      token: 'expired-token-external-swap',
+      loading: true,
+    });
+    loadPromise = realAuthStore.getState().loadFromStorage();
+    await new Promise((r) => setImmediate(r));
+
+    memStorage.set('token', 'newer-external-token');
+    rejectMeRequest!();
+    await loadPromise;
+
+    assert.equal(
+      memStorage.get('token'),
+      'newer-external-token',
+      '401 for old token preserves newer token written to localStorage',
+    );
+    assert.equal(
+      memStorage.get('tenant'),
+      JSON.stringify({ id: 1, business_name: 'Cafe' }),
+      '401 for old token preserves tenant when localStorage token already changed',
+    );
+
+    // 5a.9 syncAuthenticatedSession clears bill template provenance, warms print policies, and guards against logout
+    const prevPosGetState = posSettingsMock.getState;
+    const { LANGUAGES: i18nLanguages } = require('../frontend/src/lib/i18n/languages');
+    const origFrLoad = i18nLanguages.fr?.load;
+    const origEsLoad = i18nLanguages.es?.load;
+    try {
+      const provenanceCalls: Array<[string, unknown]> = [];
+      let appliedBillPolicy: any = null;
+      let appliedKotPolicy: any = null;
+      (posSettingsMock as any).getState = () => ({
+        setLanguage: () => {},
+        setBillTemplateSource: (src: unknown) => provenanceCalls.push(['source', src]),
+        setAutoLockMinutes: (mins: unknown) => provenanceCalls.push(['autoLock', mins]),
+        setBillLanguagePolicy: (p: unknown) => {
+          appliedBillPolicy = p;
+        },
+        setKotLanguagePolicy: (p: unknown) => {
+          appliedKotPolicy = p;
+        },
+      });
+
+      let resolveFr!: (mod: { default: Record<string, unknown> }) => void;
+      i18nLanguages.fr.load = () =>
+        new Promise((resolve) => {
+          resolveFr = resolve;
+        });
+
+      realAuthStore.getState().syncAuthenticatedSession({
+        token: 'kds-print-policy-tok',
+        user: { id: 'chef-1', name: 'Chef', email: 'chef@cafe.local', role: 'chef' },
+        currentTenant: {
+          id: 1,
+          business_name: 'Cafe',
+          language: 'en',
+          bill_language_policy: JSON.stringify({
+            primary: { mode: 'fixed', language: 'fr' },
+            additional: [],
+          }),
+          kot_language_policy: JSON.stringify({
+            primary: { mode: 'fixed', language: 'en' },
+            additional: [],
+          }),
+        },
+      });
+
+      assert.deepEqual(
+        provenanceCalls,
+        [
+          ['source', null],
+          ['autoLock', 0],
+        ],
+        'syncAuthenticatedSession clears bill template provenance immediately',
+      );
+      resolveFr({ default: { ok: true } });
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      assert.equal(
+        appliedBillPolicy?.primary?.mode,
+        'fixed',
+        'syncAuthenticatedSession applies bill policy mode',
+      );
+      assert.equal(
+        appliedBillPolicy?.primary?.language,
+        'fr',
+        'syncAuthenticatedSession applies bill policy language',
+      );
+      assert.equal(
+        appliedKotPolicy?.primary?.mode,
+        'fixed',
+        'syncAuthenticatedSession applies KOT policy mode',
+      );
+      assert.equal(
+        appliedKotPolicy?.primary?.language,
+        'en',
+        'syncAuthenticatedSession applies KOT policy language',
+      );
+      assert.deepEqual(
+        realAuthStore.getState().printLanguageLoadErrors,
+        [],
+        'printLanguageLoadErrors stays empty when bootstrap locales load',
+      );
+
+      let rejectEs!: (err: Error) => void;
+      i18nLanguages.es.load = () =>
+        new Promise((_, reject) => {
+          rejectEs = reject;
+        });
+      realAuthStore.getState().syncAuthenticatedSession({
+        token: 'kds-print-fail-tok',
+        user: { id: 'chef-1', name: 'Chef', email: 'chef@cafe.local', role: 'chef' },
+        currentTenant: {
+          id: 1,
+          business_name: 'Cafe',
+          language: 'en',
+          bill_language_policy: JSON.stringify({
+            primary: { mode: 'fixed', language: 'es' },
+            additional: [],
+          }),
+          kot_language_policy: JSON.stringify({
+            primary: { mode: 'fixed', language: 'en' },
+            additional: [],
+          }),
+        },
+      });
+      rejectEs(new Error('chunk missing'));
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      assert.deepEqual(
+        realAuthStore.getState().printLanguageLoadErrors,
+        ['es'],
+        'printLanguageLoadErrors captures failed locale warmup',
+      );
+
+      realAuthStore.setState({ printLanguageLoadErrors: [] });
+      realAuthStore.getState().syncAuthenticatedSession({
+        token: 'kds-print-supersede-tok',
+        user: { id: 'chef-2', name: 'Chef 2', email: 'chef2@cafe.local', role: 'chef' },
+        currentTenant: {
+          id: 1,
+          business_name: 'Cafe',
+          language: 'en',
+          bill_language_policy: JSON.stringify({
+            primary: { mode: 'fixed', language: 'es' },
+            additional: [],
+          }),
+          kot_language_policy: JSON.stringify({
+            primary: { mode: 'fixed', language: 'en' },
+            additional: [],
+          }),
+        },
+      });
+      realAuthStore.getState().clearLocalSession();
+      rejectEs(new Error('late chunk failure after logout'));
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      assert.deepEqual(
+        realAuthStore.getState().printLanguageLoadErrors,
+        [],
+        'superseded syncAuthenticatedSession print bootstrap ignores late errors after logout',
+      );
+    } finally {
+      if (origFrLoad) i18nLanguages.fr.load = origFrLoad;
+      if (origEsLoad) i18nLanguages.es.load = origEsLoad;
+      posSettingsMock.getState = prevPosGetState;
+    }
 
     // 5b. AuthGuard setup-status check retries on transient error and falls back to /auth/login (never /setup)
     const pushedRoutes: string[] = [];
@@ -1150,6 +1642,9 @@ async function run() {
               }),
             };
           }
+          if (request === '@/lib/printer/warnings-toast') {
+            return { showPrintLanguageLoadErrorsToast: () => {} };
+          }
           if (request === '@/components/ui/button') return { Button: ButtonStub };
           if (request === '@/components/ui/input') return { Input: IconStub };
           if (request === '@/components/ui/label') return { Label: IconStub };
@@ -1219,6 +1714,801 @@ async function run() {
           ['/setup'],
           'LoginPage redirects to /setup when retry confirms needsSetup: true',
         );
+
+        // Subcase 4b: LoginPage honors safe ?redirect=/customer-display after login and falls back to getLandingPage(currentTenant) for unsafe redirects (#1514)
+        let mockLoginSearchParams = new URLSearchParams('redirect=/customer-display');
+        const loginAuthState = {
+          login: async () => {},
+          pinLogin: async () => {},
+          selectTenant: async () => {},
+          user: { id: 'u1', name: 'Owner', email: 'owner@cafe.local', role: 'owner' },
+          tenants: [{ id: 1, business_name: 'Cafe', role: 'owner', permission_ids: ['pos.use'] }],
+          currentTenant: {
+            id: 1,
+            business_name: 'Cafe',
+            role: 'owner',
+            permission_ids: ['pos.use'],
+          },
+          loadFromStorage: () => {},
+        };
+        (globalThis as any).fetch = async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({ needsSetup: false, status: 'ok', users: [] }),
+        });
+
+        Module._load = function (request: string, parent: unknown, isMain: boolean) {
+          if (request === 'react') {
+            return {
+              ...reactHooks,
+              Suspense: 'Suspense',
+              useCallback: (fn: unknown, deps?: unknown[]) => {
+                const slot = reactHooks.useRef({ fn, deps });
+                const prev = slot.current as { fn: unknown; deps?: unknown[] };
+                const depsChanged =
+                  !deps ||
+                  !prev.deps ||
+                  deps.length !== prev.deps.length ||
+                  deps.some((d, i) => !Object.is(d, prev.deps![i]));
+                if (depsChanged) {
+                  slot.current = { fn, deps };
+                }
+                return (slot.current as { fn: unknown }).fn;
+              },
+              useLayoutEffect: reactHooks.useEffect,
+              useMemo: (fn: () => unknown) => fn(),
+            };
+          }
+          if (request === 'react/jsx-runtime') {
+            return { jsx: jsxElement, jsxs: jsxElement, Fragment: 'Fragment' };
+          }
+          if (request === 'next/navigation') {
+            return {
+              usePathname: () => '/auth/login',
+              useRouter: () => ({
+                push: (url: string) => pushedRoutes.push(url),
+                replace: (url: string) => pushedRoutes.push(url),
+              }),
+              useSearchParams: () => mockLoginSearchParams,
+            };
+          }
+          if (request === 'use-intl') {
+            return {
+              useTranslations: (ns: string) => (key: string) => `${ns}.${key}`,
+            };
+          }
+          if (request === '@/hooks/useFormatDate') {
+            return { useFormatDate: () => ({ formatTime: () => '' }) };
+          }
+          if (request === '@/lib/customer-display-token') {
+            return {
+              clearStoredDisplayToken: () => {},
+              consumeDisplayTokenFromUrl: () => null,
+              readStoredDisplayToken: () => null,
+            };
+          }
+          if (request === '@/store/auth') {
+            return {
+              StorageUnavailableError,
+              useAuthStore: () => loginAuthState,
+            };
+          }
+          if (request === '@/lib/permissions') {
+            return {
+              tenantCan: (
+                tenant: { permission_ids?: string[] } | null | undefined,
+                permission: string,
+              ) => tenant?.permission_ids?.includes(permission) === true,
+            };
+          }
+          if (request === '@/lib/printer/warnings-toast') {
+            return { showPrintLanguageLoadErrorsToast: () => {} };
+          }
+          if (request === '@/components/ui/button') return { Button: ButtonStub };
+          if (request === '@/components/ui/input') return { Input: IconStub };
+          if (request === '@/components/ui/label') return { Label: IconStub };
+          if (request === '@/components/ui/card') return { Card: IconStub, CardContent: IconStub };
+          if (request === '@/components/ui/dialog') {
+            return {
+              Dialog: IconStub,
+              DialogContent: IconStub,
+              DialogHeader: IconStub,
+              DialogTitle: IconStub,
+            };
+          }
+          if (request === '@/components/ui/dropdown-menu') {
+            return {
+              DropdownMenu: IconStub,
+              DropdownMenuContent: IconStub,
+              DropdownMenuItem: IconStub,
+              DropdownMenuTrigger: IconStub,
+            };
+          }
+          if (request === '@/components/support/SupportTicketForm') {
+            return { SupportTicketForm: IconStub, PRE_LOGIN_SUPPORT_ENDPOINTS: {} };
+          }
+          if (request === 'lucide-react') return new Proxy({}, { get: () => IconStub });
+          if (request === 'react-hot-toast') {
+            return { __esModule: true, default: { success: () => {}, error: () => {} } };
+          }
+          return originalLoad.apply(this, arguments as any);
+        };
+
+        delete require.cache[path.resolve(rootDir, 'frontend/src/components/layout/AuthGuard.tsx')];
+        delete require.cache[path.resolve(rootDir, 'frontend/src/app/auth/login/page.tsx')];
+        delete require.cache[path.resolve(rootDir, 'frontend/src/app/customer-display/page.tsx')];
+        const CustomerDisplayPage = require('../frontend/src/app/customer-display/page').default;
+        const LoginPageWithRedirect = require('../frontend/src/app/auth/login/page').default;
+
+        // First verify unauthenticated/unpaired /customer-display redirects to /auth/login?redirect=/customer-display
+        for (const slot of effectSlots) {
+          if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+        }
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pushedRoutes.length = 0;
+        scheduledTimers.length = 0;
+        pendingEffects.length = 0;
+        const savedUser = loginAuthState.user;
+        const savedTenant = loginAuthState.currentTenant;
+        (loginAuthState as { user: unknown; currentTenant: unknown; loading?: boolean }).user =
+          null;
+        (
+          loginAuthState as { user: unknown; currentTenant: unknown; loading?: boolean }
+        ).currentTenant = null;
+        (loginAuthState as { loading?: boolean }).loading = false;
+
+        const renderCustomerDisplay = () => {
+          currentStateIdx = 0;
+          currentRefIdx = 0;
+          currentEffectIdx = 0;
+          pendingEffects.length = 0;
+          CustomerDisplayPage();
+          while (pendingEffects.length > 0) {
+            const runEffect = pendingEffects.shift()!;
+            runEffect();
+          }
+        };
+
+        renderCustomerDisplay();
+        while (scheduledTimers.some((t) => !t.cleared)) {
+          const nextTimer = scheduledTimers.find((t) => !t.cleared)!;
+          nextTimer.cleared = true;
+          nextTimer.fn();
+        }
+        renderCustomerDisplay();
+
+        assert.deepEqual(
+          pushedRoutes,
+          ['/auth/login?redirect=/customer-display'],
+          'Unauthenticated unpaired CustomerDisplayPage redirects to /auth/login?redirect=/customer-display',
+        );
+        const customerDisplayLoginUrl = pushedRoutes[0];
+        const customerDisplayQuery = customerDisplayLoginUrl.split('?')[1] ?? '';
+
+        // Next verify authenticated unpaired /customer-display without currentTenant redirects to /auth/login?select_tenant=true&redirect=/customer-display
+        for (const slot of effectSlots) {
+          if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+        }
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pushedRoutes.length = 0;
+        scheduledTimers.length = 0;
+        pendingEffects.length = 0;
+        loginAuthState.user = savedUser;
+        (
+          loginAuthState as { user: unknown; currentTenant: unknown; loading?: boolean }
+        ).currentTenant = null;
+        (loginAuthState as { loading?: boolean }).loading = false;
+
+        renderCustomerDisplay();
+        while (scheduledTimers.some((t) => !t.cleared)) {
+          const nextTimer = scheduledTimers.find((t) => !t.cleared)!;
+          nextTimer.cleared = true;
+          nextTimer.fn();
+        }
+        renderCustomerDisplay();
+
+        assert.deepEqual(
+          pushedRoutes,
+          ['/auth/login?select_tenant=true&redirect=/customer-display'],
+          'Authenticated unpaired CustomerDisplayPage without currentTenant redirects to /auth/login?select_tenant=true&redirect=/customer-display',
+        );
+        const selectTenantQuery = pushedRoutes[0].split('?')[1] ?? '';
+
+        loginAuthState.user = savedUser;
+        loginAuthState.currentTenant = savedTenant;
+
+        const runLoginRedirectCase = (query: string) => {
+          for (const slot of effectSlots) {
+            if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+          }
+          states.length = 0;
+          refs.length = 0;
+          effectSlots.length = 0;
+          pushedRoutes.length = 0;
+          pendingEffects.length = 0;
+          currentStateIdx = 0;
+          currentRefIdx = 0;
+          currentEffectIdx = 0;
+          mockLoginSearchParams = new URLSearchParams(query);
+          const wrapper = LoginPageWithRedirect();
+          wrapper.props.children.type(wrapper.props.children.props);
+          while (pendingEffects.length > 0) {
+            const runEffect = pendingEffects.shift()!;
+            runEffect();
+          }
+        };
+
+        runLoginRedirectCase(customerDisplayQuery);
+        assert.deepEqual(
+          pushedRoutes,
+          ['/customer-display'],
+          'LoginPage navigates to /customer-display after login when redirect=/customer-display',
+        );
+
+        runLoginRedirectCase(selectTenantQuery);
+        assert.deepEqual(
+          pushedRoutes,
+          ['/customer-display'],
+          'LoginPage navigates to /customer-display after tenant selection when select_tenant=true&redirect=/customer-display',
+        );
+
+        for (const unsafe of [
+          'https://evil.com',
+          '//evil.com',
+          '/\\evil.com',
+          '/\t/evil.com',
+          '/\n\\evil.com',
+          '/auth/login',
+          '/setup',
+        ]) {
+          runLoginRedirectCase(`redirect=${encodeURIComponent(unsafe)}`);
+          assert.deepEqual(
+            pushedRoutes,
+            ['/pos'],
+            `LoginPage falls back to getLandingPage (/pos) when redirect=${unsafe}`,
+          );
+        }
+
+        // Subcase 4c: OrderBoardSection on /customer-display renders multi-page indicator, overflow pill, and 10s timer bar only when hasMultiplePages === true (#1527)
+        {
+          for (const slot of effectSlots) {
+            if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+          }
+          states.length = 0;
+          refs.length = 0;
+          effectSlots.length = 0;
+          pendingEffects.length = 0;
+
+          const intervalTimers: Array<{ fn: () => void; ms: number; cleared: boolean }> = [];
+          const originalDocument = (globalThis as any).document;
+          const originalResizeObserver = (globalThis as any).ResizeObserver;
+          const prevSetInterval = (globalThis as any).window.setInterval;
+          const prevClearInterval = (globalThis as any).window.clearInterval;
+          const prevMatchMedia = (globalThis as any).window.matchMedia;
+          const prevGetComputedStyle = (globalThis as any).window.getComputedStyle;
+
+          try {
+            (globalThis as any).document = {
+              visibilityState: 'visible',
+              addEventListener: () => {},
+              removeEventListener: () => {},
+            };
+            (globalThis as any).ResizeObserver = class {
+              observe() {}
+              disconnect() {}
+            };
+            (globalThis as any).window.matchMedia = () => ({
+              matches: true,
+              addEventListener: () => {},
+              removeEventListener: () => {},
+            });
+            (globalThis as any).window.getComputedStyle = () => ({
+              paddingTop: '0',
+              paddingBottom: '0',
+              rowGap: '12',
+            });
+            (globalThis as any).window.setInterval = (fn: () => void, ms: number) => {
+              const entry = { fn, ms, cleared: false };
+              intervalTimers.push(entry);
+              return entry;
+            };
+            (globalThis as any).window.clearInterval = (entry: { cleared?: boolean } | null) => {
+              if (entry && typeof entry === 'object') entry.cleared = true;
+            };
+
+            let listHeight = 160;
+            const attachElementMocks = (node: any): void => {
+              if (Array.isArray(node)) {
+                for (const child of node) attachElementMocks(child);
+                return;
+              }
+              if (!node || typeof node !== 'object') return;
+              if (
+                node.props?.['data-testid'] === 'customer-display-preparing-scroll' ||
+                node.props?.['data-testid'] === 'customer-display-ready-scroll'
+              ) {
+                node.clientHeight = listHeight;
+              }
+              if (node.props?.['data-testid'] === 'customer-display-order-row') {
+                node.getBoundingClientRect = () => ({ height: 72 });
+              }
+              const ref = node.props?.ref;
+              if (typeof ref === 'function') {
+                ref(node);
+              } else if (ref && typeof ref === 'object' && 'current' in ref) {
+                ref.current = node;
+              }
+              if (node.props?.children !== undefined) {
+                attachElementMocks(node.props.children);
+              }
+            };
+
+            const renderTree = (tree: any): any => {
+              if (Array.isArray(tree)) return tree.map(renderTree);
+              if (!tree || typeof tree !== 'object') return tree;
+              if (typeof tree.type === 'function') {
+                const rendered = tree.type(tree.props);
+                return renderTree(rendered);
+              }
+              if (tree.props?.children !== undefined) {
+                return {
+                  ...tree,
+                  props: {
+                    ...tree.props,
+                    children: renderTree(tree.props.children),
+                  },
+                };
+              }
+              return tree;
+            };
+
+            const flattenText = (node: unknown): string => {
+              if (node === null || node === undefined || typeof node === 'boolean') return '';
+              if (typeof node === 'string' || typeof node === 'number') return String(node);
+              if (Array.isArray(node)) return node.map(flattenText).join('');
+              if (typeof node === 'object' && 'props' in (node as Record<string, unknown>)) {
+                return flattenText((node as { props?: { children?: unknown } }).props?.children);
+              }
+              return '';
+            };
+
+            // Render OrderBoardSection directly by locating it inside CustomerDisplayPage's rendered tree
+            states.length = 0;
+            refs.length = 0;
+            effectSlots.length = 0;
+            pendingEffects.length = 0;
+
+            let boardSectionComponent: ((props: any) => any) | null = null;
+            // Temporarily set CustomerDisplayPage state so it renders the board sections:
+            // useState order in CustomerDisplayPage:
+            // 0: orders, 1: newlyReadyOrderIds, 2: pairedToken, 3: unpaired, 4: businessName, 5: loading, 6: error, 7: lastUpdated, 8: config
+            states[0] = [
+              { id: '1', number: '101', status: 'preparing' },
+              { id: '2', number: '102', status: 'preparing' },
+            ];
+            states[1] = new Set<string>();
+            states[2] = 'paired-token';
+            states[3] = false;
+            states[4] = 'Flo Cafe';
+            states[5] = false;
+            states[6] = false;
+            states[7] = new Date();
+            states[8] = {
+              statuses: ['pending', 'preparing', 'ready'],
+              refresh_seconds: 5,
+              show_updated: true,
+            };
+
+            currentStateIdx = 0;
+            currentRefIdx = 0;
+            currentEffectIdx = 0;
+            const pageTree = CustomerDisplayPage();
+            const sectionNodes = findNodes(
+              pageTree,
+              (el) => typeof el.type === 'function' && el.props?.accent === 'blue',
+            );
+            assert.equal(
+              sectionNodes.length,
+              1,
+              'CustomerDisplayPage renders blue OrderBoardSection',
+            );
+            boardSectionComponent = sectionNodes[0].type as (props: any) => any;
+
+            for (const slot of effectSlots) {
+              if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+            }
+            states.length = 0;
+            refs.length = 0;
+            effectSlots.length = 0;
+            pendingEffects.length = 0;
+            intervalTimers.length = 0;
+
+            let currentIsReady = false;
+            let currentNewlyReadyIds = new Set<string>();
+            let currentOnPriorityOrdersShown: (orderIds: string[]) => void = () => {};
+            const renderBoardSection = (
+              ordersList: Array<{ id: string; number: string; status: 'preparing' | 'ready' }>,
+            ) => {
+              let tree: any = null;
+              for (let pass = 0; pass < 4; pass += 1) {
+                currentStateIdx = 0;
+                currentRefIdx = 0;
+                currentEffectIdx = 0;
+                pendingEffects.length = 0;
+                tree = renderTree(
+                  boardSectionComponent!({
+                    accent: currentIsReady ? 'emerald' : 'blue',
+                    emptyMessage: 'Empty',
+                    hint: 'Hint',
+                    isReady: currentIsReady,
+                    newlyReadyOrderIds: currentNewlyReadyIds,
+                    onPriorityOrdersShown: currentOnPriorityOrdersShown,
+                    orders: ordersList,
+                    title: currentIsReady ? 'Ready' : 'Preparing',
+                  }),
+                );
+                attachElementMocks(tree);
+                if (pendingEffects.length === 0) break;
+                while (pendingEffects.length > 0) {
+                  const runEffect = pendingEffects.shift()!;
+                  runEffect();
+                }
+              }
+              return tree;
+            };
+
+            // Case 1: Single page (2 orders of 72px + 12px gap = 156px <= 160px availableHeight)
+            const singlePageOrders = [
+              { id: '1', number: '101', status: 'preparing' as const },
+              { id: '2', number: '102', status: 'preparing' as const },
+            ];
+            const singleTree = renderBoardSection(singlePageOrders);
+            assert.equal(
+              findNodes(
+                singleTree,
+                (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+              ).length,
+              0,
+              'single-page OrderBoardSection does not render customer-display-page-indicator',
+            );
+            assert.equal(
+              findNodes(
+                singleTree,
+                (el) => el.props?.['data-testid'] === 'customer-display-page-timer',
+              ).length,
+              0,
+              'single-page OrderBoardSection does not render customer-display-page-timer',
+            );
+
+            // Case 2: Multi-page (5 orders of 72px with availableHeight=160 -> 2 orders per page -> 3 pages: [1,2], [3,4], [5])
+            const multiPageOrders = [
+              { id: '1', number: '101', status: 'preparing' as const },
+              { id: '2', number: '102', status: 'preparing' as const },
+              { id: '3', number: '103', status: 'preparing' as const },
+              { id: '4', number: '104', status: 'preparing' as const },
+              { id: '5', number: '105', status: 'preparing' as const },
+            ];
+            const multiTreePage1 = renderBoardSection(multiPageOrders);
+            const indicatorsPage1 = findNodes(
+              multiTreePage1,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+            );
+            assert.equal(
+              indicatorsPage1.length,
+              1,
+              'multi-page OrderBoardSection renders customer-display-page-indicator',
+            );
+            assert.ok(
+              flattenText(indicatorsPage1[0]).includes('1 / 3'),
+              'page 1 indicator shows 1 / 3',
+            );
+            const overflowBadgesPage1 = findNodes(
+              multiTreePage1,
+              (el) => el.props?.['data-testid'] === 'customer-display-overflow-count',
+            );
+            assert.equal(
+              overflowBadgesPage1.length,
+              1,
+              'multi-page OrderBoardSection renders customer-display-overflow-count',
+            );
+            assert.equal(
+              flattenText(overflowBadgesPage1[0]),
+              '+3',
+              'page 1 overflow count shows +3 hidden orders (5 total - 2 visible)',
+            );
+            const dotsPage1 = findNodes(
+              multiTreePage1,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-dot',
+            );
+            assert.equal(dotsPage1.length, 3, 'multi-page indicator renders 3 page dots');
+            assert.deepEqual(
+              dotsPage1.map((d) => d.props?.['data-active']),
+              ['true', 'false', 'false'],
+              'page 1 activates first page dot',
+            );
+            const timersPage1 = findNodes(
+              multiTreePage1,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer',
+            );
+            assert.equal(
+              timersPage1.length,
+              1,
+              'multi-page OrderBoardSection renders timer bar container',
+            );
+            const timerBarsPage1 = findNodes(
+              multiTreePage1,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer-bar',
+            );
+            assert.equal(
+              timerBarsPage1.length,
+              1,
+              'multi-page OrderBoardSection renders animated timer bar',
+            );
+            const page1TimerKey = timerBarsPage1[0].key;
+            assert.equal(
+              timerBarsPage1[0].props?.style?.animationDuration,
+              '10000ms',
+              'timer bar animates over 10000ms',
+            );
+
+            // Advance 10s interval timer to rotate to page 2
+            const activeInterval = intervalTimers.find((t) => !t.cleared && t.ms === 10_000);
+            assert.ok(activeInterval, '10s page rotation interval is scheduled');
+            activeInterval.fn();
+            const multiTreePage2 = renderBoardSection(multiPageOrders);
+            const indicatorsPage2 = findNodes(
+              multiTreePage2,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+            );
+            assert.ok(
+              flattenText(indicatorsPage2[0]).includes('2 / 3'),
+              'advancing interval updates page indicator to 2 / 3',
+            );
+            const dotsPage2 = findNodes(
+              multiTreePage2,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-dot',
+            );
+            assert.deepEqual(
+              dotsPage2.map((d) => d.props?.['data-active']),
+              ['false', 'true', 'false'],
+              'page 2 activates second page dot',
+            );
+            const timerBarsPage2 = findNodes(
+              multiTreePage2,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer-bar',
+            );
+            assert.notEqual(
+              timerBarsPage2[0].key,
+              page1TimerKey,
+              'advancing page updates timer bar key to restart animation',
+            );
+
+            // Advance to page 3 (1 visible order, 4 hidden orders -> +4)
+            const nextInterval = intervalTimers.find((t) => !t.cleared && t.ms === 10_000);
+            assert.ok(nextInterval, '10s page rotation interval remains active');
+            nextInterval.fn();
+            const multiTreePage3 = renderBoardSection(multiPageOrders);
+            const indicatorsPage3 = findNodes(
+              multiTreePage3,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+            );
+            assert.ok(
+              flattenText(indicatorsPage3[0]).includes('3 / 3'),
+              'advancing interval updates page indicator to 3 / 3',
+            );
+            const overflowBadgesPage3 = findNodes(
+              multiTreePage3,
+              (el) => el.props?.['data-testid'] === 'customer-display-overflow-count',
+            );
+            assert.equal(
+              flattenText(overflowBadgesPage3[0]),
+              '+4',
+              'page 3 overflow count shows +4 hidden orders (5 total - 1 visible)',
+            );
+
+            // Case 3: Poll updates mid-interval keep timer bar and setInterval in sync
+            // Rotate back to page 1 ([1, 2])
+            const page3Interval = intervalTimers.find((t) => !t.cleared && t.ms === 10_000);
+            assert.ok(page3Interval, '10s interval is active on page 3');
+            page3Interval.fn();
+            const rotatedBackTree = renderBoardSection(multiPageOrders);
+            const rotatedBackTimerBar = findNodes(
+              rotatedBackTree,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer-bar',
+            )[0];
+            const rotatedBackInterval = intervalTimers.find((t) => !t.cleared && t.ms === 10_000);
+            assert.ok(rotatedBackInterval, 'fresh 10s interval scheduled after rotating to page 1');
+
+            // 3a: Order 1 completes on a poll while order 2 on the active page remains (retainedIds = ['2'])
+            const afterOneOrderCompleted = multiPageOrders.filter((o) => o.id !== '1');
+            const retainedTree = renderBoardSection(afterOneOrderCompleted);
+            const retainedTimerBar = findNodes(
+              retainedTree,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer-bar',
+            )[0];
+            assert.equal(
+              retainedTimerBar.key,
+              rotatedBackTimerBar.key,
+              'in-place retainedIds filtering on poll does not remount timer bar',
+            );
+            assert.equal(
+              rotatedBackInterval.cleared,
+              false,
+              'in-place retainedIds filtering on poll does not reset 10s interval',
+            );
+
+            // 3b: Remaining order 2 on active page also completes on a poll (retainedIds = []) -> immediate switch to next page
+            const afterActivePageCleared = afterOneOrderCompleted.filter((o) => o.id !== '2');
+            const switchedTree = renderBoardSection(afterActivePageCleared);
+            const switchedTimerBar = findNodes(
+              switchedTree,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer-bar',
+            )[0];
+            assert.notEqual(
+              switchedTimerBar.key,
+              retainedTimerBar.key,
+              'switching page when active page orders are removed remounts timer bar',
+            );
+            assert.equal(
+              rotatedBackInterval.cleared,
+              true,
+              'switching page when active page orders are removed clears previous 10s interval',
+            );
+            const postSwitchInterval = intervalTimers.find((t) => !t.cleared && t.ms === 10_000);
+            assert.ok(
+              postSwitchInterval && postSwitchInterval !== rotatedBackInterval,
+              'switching page schedules a fresh 10s interval in sync with the timer bar',
+            );
+
+            // Case 4: Ready column priority arrivals do not shift active ordinary page index and preserve priority partition while displayed
+            for (const slot of effectSlots) {
+              if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+            }
+            states.length = 0;
+            refs.length = 0;
+            effectSlots.length = 0;
+            pendingEffects.length = 0;
+            intervalTimers.length = 0;
+
+            currentIsReady = true;
+            currentNewlyReadyIds = new Set<string>();
+            currentOnPriorityOrdersShown = (shownIds: string[]) => {
+              const shown = new Set(shownIds);
+              currentNewlyReadyIds = new Set(
+                [...currentNewlyReadyIds].filter((id) => !shown.has(id)),
+              );
+            };
+
+            const readyOrdersInitial = [
+              { id: '1', number: '201', status: 'ready' as const },
+              { id: '2', number: '202', status: 'ready' as const },
+              { id: '3', number: '203', status: 'ready' as const },
+              { id: '4', number: '204', status: 'ready' as const },
+              { id: '5', number: '205', status: 'ready' as const },
+            ];
+            const readyTreeInitial = renderBoardSection(readyOrdersInitial);
+            const readyIndInitial = findNodes(
+              readyTreeInitial,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+            )[0];
+            assert.ok(
+              flattenText(readyIndInitial).includes('1 / 3'),
+              'initial ready board shows 1 / 3 on first ordinary page',
+            );
+            const readyTimerBarInitial = findNodes(
+              readyTreeInitial,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer-bar',
+            )[0];
+            const readyIntervalInitial = intervalTimers.find((t) => !t.cleared && t.ms === 10_000);
+            assert.ok(readyIntervalInitial, 'initial ready board schedules 10s interval');
+
+            // Newly ready order '6' arrives on a poll while ordinary page 1 ([1, 2]) is displayed
+            currentNewlyReadyIds = new Set(['6']);
+            const readyOrdersWithPriority = [
+              ...readyOrdersInitial,
+              { id: '6', number: '206', status: 'ready' as const },
+            ];
+            const readyTreePollArrival = renderBoardSection(readyOrdersWithPriority);
+            const readyIndArrival = findNodes(
+              readyTreePollArrival,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+            )[0];
+            assert.ok(
+              flattenText(readyIndArrival).includes('1 / 4'),
+              'pending newly ready order appends priority page without shifting active ordinary page 1 index (1 / 4)',
+            );
+            const readyDotsArrival = findNodes(
+              readyTreePollArrival,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-dot',
+            );
+            assert.deepEqual(
+              readyDotsArrival.map((d) => d.props?.['data-active']),
+              ['true', 'false', 'false', 'false'],
+              'first dot stays active when pending priority order arrives',
+            );
+            const readyTimerBarArrival = findNodes(
+              readyTreePollArrival,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-timer-bar',
+            )[0];
+            assert.equal(
+              readyTimerBarArrival.key,
+              readyTimerBarInitial.key,
+              'pending priority arrival does not restart timer bar before rotation',
+            );
+            assert.equal(
+              readyIntervalInitial.cleared,
+              false,
+              'pending priority arrival does not reset 10s interval before rotation',
+            );
+
+            // Advance 10s interval: rotates to priority page ['6'] and invokes onPriorityOrdersShown(['6'])
+            readyIntervalInitial.fn();
+            const readyTreePriorityShown = renderBoardSection(readyOrdersWithPriority);
+            assert.equal(
+              currentNewlyReadyIds.size,
+              0,
+              'onPriorityOrdersShown removes shown priority order from newlyReadyOrderIds',
+            );
+            const readyIndPriorityShown = findNodes(
+              readyTreePriorityShown,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+            )[0];
+            assert.ok(
+              flattenText(readyIndPriorityShown).includes('4 / 4'),
+              'displayed priority page retains its priority partition and shows 4 / 4',
+            );
+            const readyDotsPriorityShown = findNodes(
+              readyTreePriorityShown,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-dot',
+            );
+            assert.deepEqual(
+              readyDotsPriorityShown.map((d) => d.props?.['data-active']),
+              ['false', 'false', 'false', 'true'],
+              'displayed priority page activates the fourth dot',
+            );
+
+            // Next 10s interval: rotates back to ordinary page 2 ([3, 4]) and merges '6' into ordinary pages ([5, 6])
+            const readyIntervalPriority = intervalTimers.find((t) => !t.cleared && t.ms === 10_000);
+            assert.ok(readyIntervalPriority, '10s interval active on priority page');
+            readyIntervalPriority.fn();
+            const readyTreeNextOrdinary = renderBoardSection(readyOrdersWithPriority);
+            const readyIndNextOrdinary = findNodes(
+              readyTreeNextOrdinary,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-indicator',
+            )[0];
+            assert.ok(
+              flattenText(readyIndNextOrdinary).includes('2 / 3'),
+              'rotating from priority page to second ordinary page shows 2 / 3',
+            );
+            const readyDotsNextOrdinary = findNodes(
+              readyTreeNextOrdinary,
+              (el) => el.props?.['data-testid'] === 'customer-display-page-dot',
+            );
+            assert.deepEqual(
+              readyDotsNextOrdinary.map((d) => d.props?.['data-active']),
+              ['false', 'true', 'false'],
+              'second ordinary page activates second dot of 3',
+            );
+          } finally {
+            for (const slot of effectSlots) {
+              if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+            }
+            states.length = 0;
+            refs.length = 0;
+            effectSlots.length = 0;
+            pendingEffects.length = 0;
+            (globalThis as any).document = originalDocument;
+            (globalThis as any).ResizeObserver = originalResizeObserver;
+            (globalThis as any).window.setInterval = prevSetInterval;
+            (globalThis as any).window.clearInterval = prevClearInterval;
+            (globalThis as any).window.matchMedia = prevMatchMedia;
+            (globalThis as any).window.getComputedStyle = prevGetComputedStyle;
+          }
+        }
 
         // Subcase 5: DesktopDragSurface exposes ApplicationMenuRow on standalone routes (/setup, /auth/*) and omits it on dashboard routes
         let mockPathname = '/setup';
@@ -1460,6 +2750,712 @@ async function run() {
 
         (globalThis as any).window.removeEventListener('flo-restore-from-file', onRestoreEvent);
         delete (globalThis as any).window.electronAPI;
+
+        // Subcase 7: AccountCredentialsDialog caller-managed sessions and unmount resilience
+        for (const slot of effectSlots) {
+          if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+        }
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let credToastSuccess: string | null = null;
+        let credToastError: string | null = null;
+        const credToastStub = {
+          success: (msg: string) => {
+            credToastSuccess = msg;
+          },
+          error: (msg: string) => {
+            credToastError = msg;
+          },
+        };
+
+        const uiCredStub = ({ children }: any) => children;
+        const stubCredComp = (name: string) => {
+          const comp = (props: any) => ({ type: name, props });
+          comp.displayName = name;
+          return comp;
+        };
+
+        let dialogMockAuthState = {
+          token: null as string | null,
+          user: null as any,
+          replaceSessionToken: (_tok: string, _updates?: any) => {},
+        };
+
+        Module._load = function (request: string, parent: unknown, isMain: boolean) {
+          if (request === 'react') return reactHooks;
+          if (request === 'react/jsx-runtime') {
+            return { jsx: jsxElement, jsxs: jsxElement, Fragment: 'Fragment' };
+          }
+          if (request === 'use-intl') {
+            return {
+              useTranslations: () => (key: string) => key,
+            };
+          }
+          if (request === 'react-hot-toast') {
+            return { __esModule: true, default: credToastStub, ...credToastStub };
+          }
+          if (request === 'lucide-react') {
+            return new Proxy({}, { get: () => IconStub });
+          }
+          if (request === '@/components/ui/dialog') {
+            return {
+              Dialog: ({ open, children }: any) => (open ? children : null),
+              DialogContent: uiCredStub,
+              DialogHeader: uiCredStub,
+              DialogTitle: uiCredStub,
+              DialogDescription: uiCredStub,
+              DialogFooter: uiCredStub,
+            };
+          }
+          if (request === '@/components/ui/tabs') {
+            return {
+              Tabs: uiCredStub,
+              TabsList: uiCredStub,
+              TabsTrigger: uiCredStub,
+              TabsContent: uiCredStub,
+            };
+          }
+          if (request === '@/components/ui/button') return { Button: stubCredComp('Button') };
+          if (request === '@/components/ui/input') return { Input: stubCredComp('Input') };
+          if (request === '@/components/ui/label') return { Label: uiCredStub };
+          if (request === '@/lib/api') return { __esModule: true, default: {} };
+          if (request === '@/store/auth') {
+            return {
+              useAuthStore: {
+                getState: () => dialogMockAuthState,
+              },
+            };
+          }
+          if (request === '@shared/password-policy') {
+            return require(path.join(rootDir, 'shared/password-policy'));
+          }
+          return originalLoad.apply(this, arguments as any);
+        };
+
+        delete require.cache[
+          path.resolve(rootDir, 'frontend/src/components/auth/AccountCredentialsDialog.tsx')
+        ];
+        const {
+          AccountCredentialsDialog: CredentialsDialogComp,
+        } = require('../frontend/src/components/auth/AccountCredentialsDialog');
+
+        // 7a: Caller-managed session with onSessionUpdated succeeds when store token and localStorage are null
+        let updatedCallerSession: { token: string; hasPin?: boolean } | null = null;
+        let isCredDialogOpen = true;
+        let resolveCredPost: (() => void) | null = null;
+        const callerApiClient = {
+          get: async () => ({ data: { user: { has_pin: false } } }),
+          post: async () => {
+            return new Promise((resolve) => {
+              resolveCredPost = () => resolve({ data: { token: 'server-app-fresh-token' } });
+            });
+          },
+        };
+
+        const renderCredentialsDialog = (props: {
+          open: boolean;
+          userId: string;
+          onSessionUpdated?: (p: { token: string; hasPin?: boolean }) => void;
+          getSessionToken?: () => string | null;
+          onOpenChange?: (open: boolean) => void;
+        }) => {
+          currentStateIdx = 0;
+          currentRefIdx = 0;
+          currentEffectIdx = 0;
+          const tree = CredentialsDialogComp({
+            open: props.open,
+            onOpenChange:
+              props.onOpenChange ??
+              ((next: boolean) => {
+                isCredDialogOpen = next;
+              }),
+            apiClient: callerApiClient,
+            initialHasPin: false,
+            userId: props.userId,
+            onSessionUpdated: props.onSessionUpdated,
+            getSessionToken: props.getSessionToken,
+          });
+          while (pendingEffects.length > 0) {
+            pendingEffects.shift()!();
+          }
+          return tree;
+        };
+
+        let credTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        const passCurrentInput = findNodes(
+          credTree,
+          (el) => el.props?.id === 'self-current-password',
+        )[0];
+        const passNewInput = findNodes(credTree, (el) => el.props?.id === 'self-new-password')[0];
+        const passConfirmInput = findNodes(
+          credTree,
+          (el) => el.props?.id === 'self-confirm-password',
+        )[0];
+
+        (passCurrentInput.props as any).onChange({ target: { value: 'OldSecret123!' } });
+        (passNewInput.props as any).onChange({ target: { value: 'NewSecret123!' } });
+        (passConfirmInput.props as any).onChange({ target: { value: 'NewSecret123!' } });
+        credTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        const credForms = findNodes(credTree, (el) => el.type === 'form');
+        const credSubmitPromise = (credForms[0].props as any).onSubmit({
+          preventDefault: () => {},
+        });
+        resolveCredPost!();
+        await credSubmitPromise;
+
+        assert.equal(
+          updatedCallerSession?.token,
+          'server-app-fresh-token',
+          'Caller-managed session receives token update without global store token',
+        );
+        assert.equal(isCredDialogOpen, false, 'Dialog closes on successful credential change');
+        assert.equal(
+          credToastSuccess,
+          'passwordChangedSuccess',
+          'Success toast triggered for caller-managed session',
+        );
+
+        // 7b: Unmount cleanup resets openRef.current = false and blocks late response
+        isCredDialogOpen = true;
+        updatedCallerSession = null;
+        credToastSuccess = null;
+        credTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        (
+          findNodes(credTree, (el) => el.props?.id === 'self-current-password')[0].props as any
+        ).onChange({
+          target: { value: 'OldSecret123!' },
+        });
+        (
+          findNodes(credTree, (el) => el.props?.id === 'self-new-password')[0].props as any
+        ).onChange({
+          target: { value: 'NewSecret123!' },
+        });
+        (
+          findNodes(credTree, (el) => el.props?.id === 'self-confirm-password')[0].props as any
+        ).onChange({
+          target: { value: 'NewSecret123!' },
+        });
+        credTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        const credForms2 = findNodes(credTree, (el) => el.type === 'form');
+        const credSubmitPromise2 = (credForms2[0].props as any).onSubmit({
+          preventDefault: () => {},
+        });
+
+        // Unmount dialog by executing effect cleanups
+        for (const slot of effectSlots) {
+          if (slot && typeof slot.cleanup === 'function') slot.cleanup();
+        }
+
+        resolveCredPost!();
+        await credSubmitPromise2;
+
+        assert.equal(
+          updatedCallerSession,
+          null,
+          'Late response after unmount does not invoke onSessionUpdated',
+        );
+        assert.equal(
+          credToastSuccess,
+          null,
+          'Late response after unmount does not trigger success toast',
+        );
+
+        // 7c: Default caller without onSessionUpdated is rejected when global store token is null
+        memStorage.delete('token');
+        let defaultDialogClosed = false;
+        isCredDialogOpen = true;
+        credToastSuccess = null;
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let defaultTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            defaultDialogClosed = !next;
+          },
+        });
+
+        (
+          findNodes(defaultTree, (el) => el.props?.id === 'self-current-password')[0].props as any
+        ).onChange({
+          target: { value: 'OldSecret123!' },
+        });
+        (
+          findNodes(defaultTree, (el) => el.props?.id === 'self-new-password')[0].props as any
+        ).onChange({
+          target: { value: 'NewSecret123!' },
+        });
+        (
+          findNodes(defaultTree, (el) => el.props?.id === 'self-confirm-password')[0].props as any
+        ).onChange({
+          target: { value: 'NewSecret123!' },
+        });
+        defaultTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            defaultDialogClosed = !next;
+          },
+        });
+
+        const defaultForms = findNodes(defaultTree, (el) => el.type === 'form');
+        const defaultSubmitPromise = (defaultForms[0].props as any).onSubmit({
+          preventDefault: () => {},
+        });
+        resolveCredPost!();
+        await defaultSubmitPromise;
+
+        assert.equal(
+          defaultDialogClosed,
+          false,
+          'Default caller without store token does not close dialog',
+        );
+        assert.equal(
+          credToastSuccess,
+          null,
+          'Default caller without store token does not trigger success toast',
+        );
+
+        // 7d: Default caller logs out during in-flight credential change -> late response is rejected
+        memStorage.set('token', 'active-user-token');
+        dialogMockAuthState = {
+          token: 'active-user-token',
+          user: { id: 'pos-user-1', name: 'Server Sally' },
+          replaceSessionToken: (_tok: string, _updates?: any) => {},
+        };
+        let logoutDialogClosed = false;
+        let replaceTokenCalled = false;
+        dialogMockAuthState.replaceSessionToken = () => {
+          replaceTokenCalled = true;
+        };
+        isCredDialogOpen = true;
+        credToastSuccess = null;
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let logoutTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            logoutDialogClosed = !next;
+          },
+        });
+
+        (
+          findNodes(logoutTree, (el) => el.props?.id === 'self-current-password')[0].props as any
+        ).onChange({
+          target: { value: 'OldSecret123!' },
+        });
+        (
+          findNodes(logoutTree, (el) => el.props?.id === 'self-new-password')[0].props as any
+        ).onChange({
+          target: { value: 'NewSecret123!' },
+        });
+        (
+          findNodes(logoutTree, (el) => el.props?.id === 'self-confirm-password')[0].props as any
+        ).onChange({
+          target: { value: 'NewSecret123!' },
+        });
+        logoutTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            logoutDialogClosed = !next;
+          },
+        });
+
+        const logoutForms = findNodes(logoutTree, (el) => el.type === 'form');
+        const logoutSubmitPromise = (logoutForms[0].props as any).onSubmit({
+          preventDefault: () => {},
+        });
+
+        // User logs out in flight: token cleared
+        memStorage.delete('token');
+        dialogMockAuthState.token = null;
+        dialogMockAuthState.user = null;
+
+        resolveCredPost!();
+        await logoutSubmitPromise;
+
+        assert.equal(logoutDialogClosed, false, 'Late response after logout does not close dialog');
+        assert.equal(
+          replaceTokenCalled,
+          false,
+          'Late response after logout does not replace session token',
+        );
+        assert.equal(
+          credToastSuccess,
+          null,
+          'Late response after logout does not trigger success toast',
+        );
+
+        // 7e: Caller-managed session with getSessionToken rejects late response when token cleared while dialog stays open
+        let callerLiveToken: string | null = 'server-app-token-1';
+        updatedCallerSession = null;
+        isCredDialogOpen = true;
+        credToastSuccess = null;
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let callerGuardTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          getSessionToken: () => callerLiveToken,
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+        (
+          findNodes(callerGuardTree, (el) => el.props?.id === 'self-current-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'OldSecret123!' } });
+        (
+          findNodes(callerGuardTree, (el) => el.props?.id === 'self-new-password')[0].props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        (
+          findNodes(callerGuardTree, (el) => el.props?.id === 'self-confirm-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        callerGuardTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          getSessionToken: () => callerLiveToken,
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        const callerGuardSubmit = (
+          findNodes(callerGuardTree, (el) => el.type === 'form')[0].props as any
+        ).onSubmit({ preventDefault: () => {} });
+
+        // Simulate 401 or cross-tab logout clearing caller storage token while dialog remains mounted/open
+        callerLiveToken = null;
+        resolveCredPost!();
+        await callerGuardSubmit;
+
+        assert.equal(
+          updatedCallerSession,
+          null,
+          'Caller-managed session ignores late response after live token is cleared',
+        );
+        assert.equal(
+          credToastSuccess,
+          null,
+          'Caller-managed session does not show success toast after live token is cleared',
+        );
+
+        // 7f: Default caller rejects late response when localStorage token is cleared while store token remains stale
+        memStorage.set('token', 'active-user-token');
+        dialogMockAuthState = {
+          token: 'active-user-token',
+          user: { id: 'pos-user-1', name: 'Server Sally' },
+          replaceSessionToken: () => {
+            replaceTokenCalled = true;
+          },
+        };
+        replaceTokenCalled = false;
+        logoutDialogClosed = false;
+        isCredDialogOpen = true;
+        credToastSuccess = null;
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let staleStoreTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            logoutDialogClosed = !next;
+          },
+        });
+        (
+          findNodes(staleStoreTree, (el) => el.props?.id === 'self-current-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'OldSecret123!' } });
+        (
+          findNodes(staleStoreTree, (el) => el.props?.id === 'self-new-password')[0].props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        (
+          findNodes(staleStoreTree, (el) => el.props?.id === 'self-confirm-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        staleStoreTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            logoutDialogClosed = !next;
+          },
+        });
+
+        const staleStoreSubmit = (
+          findNodes(staleStoreTree, (el) => el.type === 'form')[0].props as any
+        ).onSubmit({ preventDefault: () => {} });
+
+        // Clear localStorage token (e.g. another tab or api.ts 401 handler) while store token stays stale
+        memStorage.delete('token');
+        resolveCredPost!();
+        await staleStoreSubmit;
+
+        assert.equal(
+          replaceTokenCalled,
+          false,
+          'Default caller does not restore localStorage token from stale store state',
+        );
+        assert.equal(logoutDialogClosed, false, 'Default caller keeps dialog open check rejected');
+        assert.equal(
+          credToastSuccess,
+          null,
+          'Default caller does not toast success when localStorage token was cleared',
+        );
+
+        // 7g: Closing dialog while mounted & signed in still applies rotated token (default + caller-managed)
+        memStorage.set('token', 'active-user-token');
+        let replacedTokenDuringClose: string | null = null;
+        dialogMockAuthState = {
+          token: 'active-user-token',
+          user: { id: 'pos-user-1', name: 'Server Sally' },
+          replaceSessionToken: (tok: string) => {
+            replacedTokenDuringClose = tok;
+          },
+        };
+        let reopenedCloseCount = 0;
+        isCredDialogOpen = true;
+        credToastSuccess = null;
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let closeMidflightTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            if (!next) reopenedCloseCount += 1;
+            isCredDialogOpen = next;
+          },
+        });
+        (
+          findNodes(closeMidflightTree, (el) => el.props?.id === 'self-current-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'OldSecret123!' } });
+        (
+          findNodes(closeMidflightTree, (el) => el.props?.id === 'self-new-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        (
+          findNodes(closeMidflightTree, (el) => el.props?.id === 'self-confirm-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        closeMidflightTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            if (!next) reopenedCloseCount += 1;
+            isCredDialogOpen = next;
+          },
+        });
+
+        const closeMidflightSubmit = (
+          findNodes(closeMidflightTree, (el) => el.type === 'form')[0].props as any
+        ).onSubmit({ preventDefault: () => {} });
+
+        // Close dialog while remaining mounted and signed in
+        isCredDialogOpen = false;
+        closeMidflightTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'pos-user-1',
+          onOpenChange: (next: boolean) => {
+            if (!next) reopenedCloseCount += 1;
+            isCredDialogOpen = next;
+          },
+        });
+
+        resolveCredPost!();
+        await closeMidflightSubmit;
+
+        assert.equal(
+          replacedTokenDuringClose,
+          'server-app-fresh-token',
+          'Default caller applies rotated token when dialog closes while session stays active',
+        );
+        assert.equal(
+          credToastSuccess,
+          'passwordChangedSuccess',
+          'Default caller shows success toast when committed change finishes after dialog closes',
+        );
+        assert.equal(
+          reopenedCloseCount,
+          0,
+          'Already-closed dialog does not redundantly invoke onOpenChange(false)',
+        );
+
+        // Caller-managed session closing dialog mid-flight while signed in
+        callerLiveToken = 'server-app-token-1';
+        updatedCallerSession = null;
+        isCredDialogOpen = true;
+        credToastSuccess = null;
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let callerClosedTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          getSessionToken: () => callerLiveToken,
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+        (
+          findNodes(callerClosedTree, (el) => el.props?.id === 'self-current-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'OldSecret123!' } });
+        (
+          findNodes(callerClosedTree, (el) => el.props?.id === 'self-new-password')[0].props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        (
+          findNodes(callerClosedTree, (el) => el.props?.id === 'self-confirm-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        callerClosedTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          getSessionToken: () => callerLiveToken,
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        const callerClosedSubmit = (
+          findNodes(callerClosedTree, (el) => el.type === 'form')[0].props as any
+        ).onSubmit({ preventDefault: () => {} });
+
+        isCredDialogOpen = false;
+        callerClosedTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          getSessionToken: () => callerLiveToken,
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        resolveCredPost!();
+        await callerClosedSubmit;
+
+        assert.equal(
+          updatedCallerSession?.token,
+          'server-app-fresh-token',
+          'Caller-managed session applies rotated token after dialog dismissal when token stays live',
+        );
+        assert.equal(
+          credToastSuccess,
+          'passwordChangedSuccess',
+          'Caller-managed session reports success after dialog dismissal',
+        );
+
+        // 7h: Caller with onSessionUpdated and userId (without getSessionToken) rejects response when userId clears on logout
+        updatedCallerSession = null;
+        isCredDialogOpen = true;
+        credToastSuccess = null;
+        states.length = 0;
+        refs.length = 0;
+        effectSlots.length = 0;
+        pendingEffects.length = 0;
+
+        let noTokenCallerTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+        (
+          findNodes(noTokenCallerTree, (el) => el.props?.id === 'self-current-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'OldSecret123!' } });
+        (
+          findNodes(noTokenCallerTree, (el) => el.props?.id === 'self-new-password')[0].props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        (
+          findNodes(noTokenCallerTree, (el) => el.props?.id === 'self-confirm-password')[0]
+            .props as any
+        ).onChange({ target: { value: 'NewSecret123!' } });
+        noTokenCallerTree = renderCredentialsDialog({
+          open: isCredDialogOpen,
+          userId: 'waiter-77',
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        const noTokenSubmit = (
+          findNodes(noTokenCallerTree, (el) => el.type === 'form')[0].props as any
+        ).onSubmit({ preventDefault: () => {} });
+
+        // Caller clears userId to undefined on logout without unmounting
+        renderCredentialsDialog({
+          open: false,
+          userId: undefined as any,
+          onSessionUpdated: (payload) => {
+            updatedCallerSession = payload;
+          },
+        });
+
+        resolveCredPost!();
+        await noTokenSubmit;
+
+        assert.equal(
+          updatedCallerSession,
+          null,
+          'Caller without getSessionToken still ignores late response after userId clears on logout',
+        );
+        assert.equal(
+          credToastSuccess,
+          null,
+          'Caller without getSessionToken does not toast success after userId clears',
+        );
       } finally {
         (globalThis as any).fetch = originalFetch;
       }
