@@ -107,6 +107,7 @@ async function verifyOrderAcceptance() {
   const { getJWTSecret } = require('../main/security/jwt-secret');
   const { orderRoutes } = require('../main/routes/orders');
   const { qrCloudRoutes } = require('../main/routes/qr-cloud');
+  const { tableRoutes } = require('../main/routes/tables');
   const db = getDatabase();
   require('../main/db').upsertSettings({
     country: 'TH',
@@ -165,7 +166,7 @@ async function verifyOrderAcceptance() {
   inbox.storeEvents([{ id: eventId, kind: 'order.created', payload: { order_id: orderId } }]);
   inbox.openInbox().exec('DROP TABLE order_acceptances; PRAGMA user_version = 1');
   inbox.closeInbox();
-  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 5);
+  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 6);
   assert.ok(
     inbox.openInbox().prepare("SELECT 1 FROM sqlite_master WHERE name = 'open_table_qr'").get(),
     'an upgraded inbox gains the open table QR ledger',
@@ -180,6 +181,7 @@ async function verifyOrderAcceptance() {
   app.use(express.json(), requireAuth);
   app.use('/api/qr-cloud', qrCloudRoutes);
   app.use('/api/orders', orderRoutes);
+  app.use('/api/tables', tableRoutes);
   let tickets = 0;
   app.post(
     '/api/printers/print-kot',
@@ -332,6 +334,49 @@ async function verifyOrderAcceptance() {
       ['cloud-table-a', 'cloud-table-b', 'cloud-table-inactive'],
     );
     assert.ok(closeResults.every((table) => table.closed));
+    // Staff showing a table's QR hand out the cloud page while the connector is on.
+    outbound.length = 0;
+    const shown = await fetch(`http://127.0.0.1:${port}/api/tables/cloud-table-a/guest-session`, {
+      method: 'POST',
+      headers: headersFor(staff),
+      body: '{}',
+    });
+    assert.equal(shown.status, 200);
+    const shownQr = await shown.json();
+    assert.equal(
+      shownQr.url,
+      'https://order.example.test/#table=8a2db45c-4b1a-4392-b813-9d165c58f9d3',
+    );
+    assert.equal(shownQr.cloud, true);
+    assert.equal(shownQr.table.name, 'QA-A');
+    assert.ok(shownQr.data_url.startsWith('data:image/png;'));
+    assert.deepEqual(outbound, ['POST /api/v1/connectors/table-qr']);
+    // Shown again, the saved link answers at once and the table is reopened in the background.
+    outbound.length = 0;
+    const realRequest = https.request;
+    let releaseCloud: () => void = () => {};
+    const cloudHeld = new Promise<void>((resolve) => (releaseCloud = resolve));
+    https.request = (...args: Parameters<typeof realRequest>) => {
+      const request = realRequest(...args);
+      const end = request.end;
+      request.end = (body?: string) => void cloudHeld.then(() => end.call(request, body));
+      return request;
+    };
+    try {
+      const again = await fetch(`http://127.0.0.1:${port}/api/tables/cloud-table-a/guest-session`, {
+        method: 'POST',
+        headers: headersFor(staff),
+        body: '{}',
+      });
+      assert.equal(again.status, 200);
+      assert.equal((await again.json()).url, shownQr.url);
+    } finally {
+      releaseCloud();
+      https.request = realRequest;
+    }
+    const { setTimeout: wait } = require('node:timers/promises');
+    for (let tries = 0; tries < 50 && !outbound.length; tries++) await wait(20);
+    assert.deepEqual(outbound, ['POST /api/v1/connectors/table-qr']);
     outbound.length = 0;
     const unmapped = await fetch(route, { headers });
     assert.equal(unmapped.status, 200);
@@ -1217,7 +1262,9 @@ async function main() {
   );
   assertOrThrow(
     db
-      .prepare("SELECT user_id FROM auth_audit_log WHERE event_type = 'qr_cloud_legacy_cutover_verified'")
+      .prepare(
+        "SELECT user_id FROM auth_audit_log WHERE event_type = 'qr_cloud_legacy_cutover_verified'",
+      )
       .get()?.user_id === actor,
     'clearing the hold is attributed',
   );

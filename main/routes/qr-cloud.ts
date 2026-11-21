@@ -1,8 +1,6 @@
 import { Router, type Request, type Response } from 'express';
-import * as QRCode from 'qrcode';
 import { randomUUID } from 'node:crypto';
 import { getDatabase, getSettingValue } from '../db';
-import { tableAwaitingBillPayment } from '../lib/guest-order';
 import { getHttpRequestSignal } from '../shutdown';
 import { requirePermission } from '../services/authorization';
 import { rateLimit } from '../middleware/security';
@@ -23,13 +21,12 @@ import {
   startQrCloudConnector,
   testQrCloudConnection,
 } from '../services/qr-cloud/connector';
-import { inboxSummary, importLegacyInbox, InboxError, openInbox } from '../services/qr-cloud/inbox';
+import { inboxSummary, importLegacyInbox, InboxError } from '../services/qr-cloud/inbox';
 import {
   CONNECTOR_EVENT_ID,
   connectorCatalog,
   connectorGuestSettings,
   connectorMenuImages,
-  manageConnectorTableQr,
   QrCloudClientError,
   readConnectorCapabilities,
 } from '../services/qr-cloud/client';
@@ -50,6 +47,11 @@ import {
   readApprovedCa,
   removeApprovedCa,
 } from '../services/qr-cloud/tls';
+import {
+  closeCloudTableQr,
+  cloudTableQrActive,
+  openCloudTableQr,
+} from '../services/qr-cloud/table-qr';
 
 const router = Router();
 
@@ -328,67 +330,11 @@ router.post(
                 .get(tableId, action) as PosTable | undefined,
             ].filter((table): table is PosTable => table !== undefined);
       if (!tables.length) return res.status(404).json({ code: 'invalid_pos_table' });
-      const config = readConfig();
-      if (
-        config.mode !== 'integrated' ||
-        config.cutoverPending ||
-        (action === 'open' && !config.enabled)
-      ) {
-        return res.status(409).json({ code: 'connector_inactive' });
-      }
+      if (!cloudTableQrActive(action)) return res.status(409).json({ code: 'connector_inactive' });
       const requestSignal = getHttpRequestSignal(req);
-      const token = readConnectorSetting();
-      const caPem = readApprovedCa()?.pem;
       async function apply(table: PosTable) {
-        const deadline = AbortSignal.timeout(config.timeoutMs);
-        const signal = requestSignal ? AbortSignal.any([deadline, requestSignal]) : deadline;
-        const result = (await manageConnectorTableQr(
-          { config, token, caPem, signal },
-          {
-            action,
-            pos_table_id: table.id,
-            name: table.number,
-            ...(action === 'open'
-              ? { awaiting_payment: tableAwaitingBillPayment(getDatabase(), table.id) }
-              : {}),
-          },
-        )) as { closed?: unknown; url?: unknown; expires_at?: unknown } | null;
-        if (action === 'close' && result?.closed === true) {
-          openInbox()
-            .prepare('DELETE FROM open_table_qr WHERE cloud_url = ? AND pos_table_id = ?')
-            .run(config.cloudUrl, table.id);
-          return { closed: true };
-        }
-        const url = typeof result?.url === 'string' ? URL.parse(result.url) : null;
-        if (
-          action !== 'open' ||
-          !url ||
-          url.protocol !== 'https:' ||
-          url.username ||
-          url.password ||
-          url.pathname !== '/' ||
-          url.search ||
-          !url.hash.startsWith('#table=') ||
-          !CONNECTOR_EVENT_ID.test(url.hash.slice(7)) ||
-          typeof result?.expires_at !== 'string' ||
-          !Number.isFinite(Date.parse(result.expires_at))
-        ) {
-          throw new CloudOrderError('invalid_cloud_table_qr', 502);
-        }
-        const data_url = await QRCode.toDataURL(url.href, {
-          width: 360,
-          margin: 4,
-          errorCorrectionLevel: 'M',
-        });
-        openInbox()
-          .prepare(
-            `INSERT INTO open_table_qr (cloud_url, pos_table_id, name, seen_occupied)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT (cloud_url, pos_table_id) DO UPDATE SET name = excluded.name,
-               seen_occupied = MAX(open_table_qr.seen_occupied, excluded.seen_occupied), retry_at = 0`,
-          )
-          .run(config.cloudUrl, table.id, table.number, table.status === 'occupied' ? 1 : 0);
-        return { data_url, url: url.href, expires_at: result.expires_at };
+        if (action === 'close') return { closed: await closeCloudTableQr(table, requestSignal) };
+        return openCloudTableQr(table, requestSignal);
       }
       if (allTables !== true) return res.json(await apply(tables[0]));
 

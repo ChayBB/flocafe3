@@ -30,6 +30,11 @@ import { resolveTenantReceiptLanguages } from './printers';
 import { storeTimezone } from '../services/attendance';
 import { getHttpRequestSignal } from '../shutdown';
 import { TERMINAL_ITEM_STATUSES } from '../../shared/order-item-status';
+import {
+  cachedCloudTableQr,
+  cloudTableQrActive,
+  openCloudTableQr,
+} from '../services/qr-cloud/table-qr';
 
 const router = Router();
 
@@ -534,6 +539,36 @@ router.post(
     try {
       const table = activeTable(req.params.id);
       if (!table) return res.status(404).json({ error: 'Table not found' });
+      if (cloudTableQrActive()) {
+        // Guests order on the cloud page when it is connected; offline, the in-store QR still works.
+        try {
+          const status = getDatabase()
+            .prepare('SELECT status FROM tables WHERE id = ?')
+            .get(table.id) as { status: string | null } | undefined;
+          const posTable = { ...table, status: status?.status ?? null };
+          // A table shown before answers at once from its saved link while the cloud reopens it.
+          const cached = await cachedCloudTableQr(table.id);
+          if (cached) {
+            void openCloudTableQr(posTable).catch((error) =>
+              console.warn('[API] Reopening the cloud table QR failed:', error),
+            );
+          }
+          const cloud = cached ?? (await openCloudTableQr(posTable, getHttpRequestSignal(req)));
+          return res.json({
+            table: { id: table.id, name: table.number },
+            session: { created_at: new Date().toISOString(), expires_at: cloud.expires_at },
+            url: cloud.url,
+            data_url: cloud.data_url,
+            store_timezone: storeTimezone(getDatabase()),
+            public: true,
+            cloud: true,
+            server_app_enabled: isServerAppEnabled(),
+            guest_ordering_enabled: isGuestQrOrderingEnabled(),
+          });
+        } catch (error) {
+          console.warn('[API] Cloud table QR unavailable, using the in-store QR:', error);
+        }
+      }
       const session = openGuestTableSession(
         getDatabase(),
         table.id,

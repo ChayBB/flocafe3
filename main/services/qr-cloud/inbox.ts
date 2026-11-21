@@ -12,7 +12,7 @@ import * as path from 'node:path';
  * `poll_log`) so existing rows import with their Cloud event ids intact and deduplicate.
  */
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS inbox_events (
@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS open_table_qr (
   seen_occupied INTEGER NOT NULL DEFAULT 0,
   retry_at INTEGER NOT NULL DEFAULT 0,
   opened_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (cloud_url, pos_table_id)
+);
+CREATE TABLE IF NOT EXISTS table_qr_links (
+  cloud_url TEXT NOT NULL,
+  pos_table_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
   PRIMARY KEY (cloud_url, pos_table_id)
 );
 CREATE TABLE IF NOT EXISTS poll_log (
