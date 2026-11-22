@@ -1,6 +1,5 @@
 import {
   type PendingPriceMode,
-  WEIGHT_PENDING_ERROR,
   orderHasWeightPending,
   pendingPriceModeForProduct,
   stripPendingPriceNotes,
@@ -51,7 +50,7 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { maskNote, readProfanityWords } from '../services/profanity-filter';
 import {
   calculateOrderTotals,
-  getOrderServeConfirmation,
+  requestOrderBill,
   recomputeOrderTotals,
   reconcileActiveOrderStatusFromItems,
 } from '../services/orders';
@@ -8039,52 +8038,8 @@ router.post(
       if (cashierPrint && !hasPermission(actorId, 'payments.take')) {
         return res.status(403).json({ error: 'Taking payments is not allowed for this user' });
       }
-      const db = getDatabase();
-      const actorName = () =>
-        (
-          db.prepare('SELECT name FROM users WHERE id = ?').get(actorId) as
-            | { name: string }
-            | undefined
-        )?.name ?? null;
-      const order = withTxn(() => {
-        const current = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
-        if (!current) throw Object.assign(new Error('Order not found'), { statusCode: 404 });
-        if (['completed', 'cancelled'].includes(current.status)) {
-          throw Object.assign(new Error('This order is already closed'), { statusCode: 409 });
-        }
-        if (orderHasWeightPending(db, orderId)) {
-          throw Object.assign(new Error(WEIGHT_PENDING_ERROR), {
-            statusCode: 409,
-            code: 'weight_pending',
-          });
-        }
-        const { hasLiveItems } = getOrderServeConfirmation(db, orderId);
-        if (!hasLiveItems) {
-          throw Object.assign(new Error('Confirm every item is served before printing the bill'), {
-            statusCode: 409,
-            code: 'served_unconfirmed',
-          });
-        }
-        // Staff and the cashier print a bill whenever they choose; serving need not be confirmed first.
-        if (preflight) return current;
-        // A reprint keeps the first request time, so the wait keeps counting from it.
-        if (!current.bill_requested_at || current.bill_payment_received_at) {
-          db.prepare(
-            `UPDATE orders
-             SET bill_requested_at = ?, bill_requested_by = ?, bill_requested_by_name = ?,
-                 bill_payment_received_at = NULL, serve_confirm_requested_at = NULL,
-                 serve_confirm_requested_by_name = NULL, updated_at = ?
-             WHERE id = ?`,
-          ).run(now(), actorId, actorName(), now(), orderId);
-          recordOrderAudit(db, {
-            orderId,
-            actorUserId: actorId,
-            action: 'bill_requested',
-            details: {},
-          });
-        }
-        return db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
-      });
+      // Staff and the cashier print a bill whenever they choose; serving need not be confirmed first.
+      const order = requestOrderBill(getDatabase(), orderId, actorId, { preflight });
       if (!preflight) notifyOrderUpdated();
       res.json({ order });
     } catch (err) {

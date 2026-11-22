@@ -54,13 +54,19 @@ export function stageCounts(items: { status: string }[]): Record<KitchenStage, n
 }
 
 /** The kitchen status of a sent item, spelled out. */
-export function ItemStatusBadge({ status }: { status: string }) {
+export function ItemStatusBadge({
+  status,
+  className = 'px-2 py-0.5 text-xs',
+}: {
+  status: string;
+  className?: string;
+}) {
   const t = useTranslations('serverApp');
   const style = isCancelledItem(status) ? CANCELLED_STYLE : STAGE_STYLES[stageOf(status)];
   return (
     <span
       data-testid="server-app-item-status"
-      className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${style.className}`}
+      className={`shrink-0 whitespace-nowrap rounded-full font-medium ${className} ${style.className}`}
     >
       {t(style.key)}
     </span>

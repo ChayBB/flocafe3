@@ -231,7 +231,51 @@ test.describe('Server App guest from a table QR', () => {
     await expect(page.getByTestId('server-app-guest-history-item').first()).toContainText(
       'Waiting',
     );
-    await page.keyboard.press('Escape');
+    const guestHistory = page.getByTestId('server-app-guest-history');
+    await expect(guestHistory.getByRole('heading', { name: 'Items ordered' })).toBeVisible();
+    await expect(page.getByTestId('server-app-guest-history-as-of')).toHaveText(
+      /^As of \d{1,2}:\d{2}/,
+    );
+    await expect(page.getByTestId('server-app-guest-history-item')).toHaveCount(1);
+    await expect(page.getByTestId('server-app-guest-history-ordered-by').first()).toHaveText(
+      'Ordered by: Guest',
+    );
+    await expect(page.getByTestId('server-app-guest-history-count')).toHaveText('1 item');
+    const footerTotal = await page.getByTestId('server-app-guest-history-total').innerText();
+    await page.getByTestId('server-app-guest-bill-button').click();
+    await expect(guestHistory.getByRole('heading', { name: 'Bill' })).toBeVisible();
+    await expect(page.getByTestId('server-app-guest-bill')).toContainText('E2E Coffee');
+    await expect(page.getByTestId('server-app-guest-bill-total')).toHaveText(footerTotal);
+    await expect(page.getByTestId('server-app-guest-bill-table')).toHaveText(
+      `Table: ${table.name}`,
+    );
+    await expect(page.getByTestId('server-app-guest-bill-item').first()).toContainText(
+      'Ordered by: Guest',
+    );
+    const proceed = page.getByTestId('server-app-guest-bill-continue');
+    await expect(proceed).toBeDisabled();
+    await page.getByTestId('server-app-guest-pay-staff').click();
+    await expect(page.getByTestId('server-app-guest-pay-staff')).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await proceed.click();
+    await expect(page.getByTestId('server-app-guest-bill-requested')).toContainText(
+      'Staff have been notified',
+    );
+    await expect(proceed).toBeDisabled();
+    await expect(proceed).toHaveText('Bill requested');
+    // The POS lists the table among those waiting to pay, as for a tableside request.
+    const waiting = await (
+      await page.request.get(`${E2E_BASE_URL}/api/bill-requests`, { headers: manager() })
+    ).json();
+    expect(
+      waiting.requests.some((request: { id: number }) => request.id === again.orders[0].id),
+    ).toBeTruthy();
+    await page.getByTestId('server-app-guest-bill-back').click();
+    await expect(guestHistory.getByRole('heading', { name: 'Items ordered' })).toBeVisible();
+    await page.getByTestId('server-app-guest-history-close').click();
+    await expect(guestHistory).toHaveCount(0);
 
     // The Guest account that placed the orders never shows up as staff.
     const ownerHeaders = {

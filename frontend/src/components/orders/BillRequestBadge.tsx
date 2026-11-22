@@ -9,11 +9,13 @@ import { parseDbTimestamp } from '@/lib/utils';
 import type { Order, OrderItem } from '@/lib/types';
 import { isAwaitingBillPayment } from '@/lib/bill-print-flow';
 import { resolveOrderPaymentStatus } from '@/lib/order-payment-state';
+import { GUEST_USER_ID } from '@shared/guest-user';
 
 export { isAwaitingBillPayment };
 
 export interface BillRequestFields {
   bill_requested_at?: string | null;
+  bill_requested_by?: string | null;
   bill_requested_by_name?: string | null;
   bill_payment_received_at?: string | null;
 }
@@ -95,6 +97,7 @@ export function OrderStatusBadge({
   const waiting =
     !['completed', 'cancelled'].includes(order.status) && isAwaitingBillPayment(order);
   const now = useTickingNow(waiting);
+  const guestAsked = order.bill_requested_by === GUEST_USER_ID;
   const size = compact ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-0.5 text-xs';
   const bills =
     order.bills && order.bills.length > 0 ? order.bills : order.bill ? [order.bill] : [];
@@ -158,10 +161,10 @@ export function OrderStatusBadge({
           className={`${BADGE} ${size} bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300`}
         >
           <ReceiptText size={12} aria-hidden="true" />
-          {t('billPrinted')}
+          {t(guestAsked ? 'billAskedByGuest' : 'billPrinted')}
           <Ltr className="tabular-nums">{formatWait(order.bill_requested_at!, now)}</Ltr>
         </span>
-        {showRequester && order.bill_requested_by_name && (
+        {showRequester && !guestAsked && order.bill_requested_by_name && (
           <span className="text-xs text-muted-foreground">
             {t('billRequestedBy', { name: order.bill_requested_by_name })}
           </span>

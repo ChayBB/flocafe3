@@ -63,6 +63,8 @@ import { sendCachedJson } from './lib/compressed-json';
 import { RegionalNotConfiguredError, resolveRegionalSnapshot } from './countries';
 import { nextDailyResetEpochSeconds } from './lib/daily-session-reset';
 import {
+  GUEST_USER_ID,
+  guestOpenOrderId,
   guestTableOrder,
   sanitizeGuestOrderItems,
   sanitizeGuestOrderNote,
@@ -83,6 +85,8 @@ import {
   resolveServerAppApiRateLimit,
 } from './lib/server-app-rate-limit';
 import { callMainApiAsGuest, ensureGuestUser, placeGuestOrder } from './lib/guest-order-placement';
+import { requestOrderBill } from './services/orders';
+import { notifyOrderUpdated } from './services/kds';
 import {
   addGuestDevice,
   currentGuestTableSession,
@@ -752,6 +756,14 @@ export function startServerApp(): Promise<void> {
       message: { error: 'Too many orders from this device. Please ask a staff member.' },
     });
 
+    const guestBillRateLimit = expressRateLimit({
+      windowMs: 10 * 60 * 1000,
+      limit: 20,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Too many bill requests from this device. Please ask a staff member.' },
+    });
+
     // Only refused joins count, so a party reopening the page is never locked out by its own visits.
     const guestJoinRateLimit = expressRateLimit({
       windowMs: 10 * 60 * 1000,
@@ -880,8 +892,46 @@ export function startServerApp(): Promise<void> {
       const row = guestTableRow(req.query.table_id);
       if (!row) return res.status(404).json({ error: 'Table not found' });
       if (!findGuestDevice(db, row.id, req.query.d)) return guestQrExpired(res);
-      res.json({ order: guestTableOrder(db, row.id) });
+      res.json({ order: guestTableOrder(db, row.id), as_of: new Date().toISOString() });
     });
+
+    // A guest asks for the table's bill: staff get the same alert as a tableside request, nothing prints.
+    app.post(
+      '/api/guest/bill-request',
+      serverAppApiRateLimit,
+      guestBillRateLimit,
+      (req: Request, res: Response) => {
+        if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });
+        if (!isGuestQrOrderingEnabled()) return guestOrderingClosed(res);
+        const db = getDatabase();
+        const row = guestTableRow(req.body?.table_id);
+        if (!row) return res.status(404).json({ error: 'Table not found' });
+        if (!findGuestDevice(db, row.id, req.body?.device_token)) return guestQrExpired(res);
+        const orderId = guestOpenOrderId(db, row.id);
+        if (!orderId) {
+          return res
+            .status(409)
+            .json({ code: 'no_open_order', error: 'This table has no order yet' });
+        }
+        try {
+          ensureGuestUser();
+          const order = requestOrderBill(db, orderId, GUEST_USER_ID) as {
+            bill_requested_at: string | null;
+          };
+          notifyOrderUpdated();
+          res.json({ bill_requested_at: order.bill_requested_at });
+        } catch (err) {
+          const error = err as { statusCode?: number; message?: string; code?: string };
+          if (!error.statusCode) {
+            console.error('[Server App] Guest bill request failed:', error);
+            return res.status(500).json({ error: 'Could not request the bill' });
+          }
+          res
+            .status(error.statusCode)
+            .json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+        }
+      },
+    );
 
     app.get('/api/guest/menu', serverAppApiRateLimit, async (req: Request, res: Response) => {
       if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });

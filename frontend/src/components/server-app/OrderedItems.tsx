@@ -314,14 +314,16 @@ export function OrderedItemList({
 }
 
 /** A small menu photo, over a coloured tile with the name's first letters as the fallback. */
-function ItemThumb({
+export function ItemThumb({
   item,
   src,
   cancelled,
+  className = 'h-12 w-12 rounded-lg',
 }: {
-  item: OrderedItem;
+  item: Pick<OrderedItem, 'product_name'>;
   src: string | null;
   cancelled: boolean;
+  className?: string;
 }) {
   const [failed, setFailed] = useState(false);
   const name = item.product_name;
@@ -329,7 +331,7 @@ function ItemThumb({
     <div
       data-testid="server-app-ordered-item-thumb"
       aria-hidden="true"
-      className={`relative h-12 w-12 shrink-0 overflow-hidden rounded-lg ${cancelled ? 'opacity-40 grayscale' : ''}`}
+      className={`relative shrink-0 overflow-hidden ${className} ${cancelled ? 'opacity-40 grayscale' : ''}`}
       style={{ backgroundColor: nameToColor(name) }}
     >
       <span className="absolute inset-0 flex items-center justify-center text-sm font-bold text-white/80">

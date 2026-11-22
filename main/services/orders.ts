@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
-import { getDatabase, isKdsEnabled, now, recordOrderAudit } from '../db';
+import { getDatabase, isKdsEnabled, now, recordOrderAudit, withTxn } from '../db';
+import { WEIGHT_PENDING_ERROR, orderHasWeightPending } from '../lib/weight-pending';
 import { getCurrencyFractionDigits, getCurrencyMinorUnitFactor } from '../countries';
 import {
   allocateDocumentTaxRounding,
@@ -39,6 +40,64 @@ export function getOrderServeConfirmation(db: Database, orderId: string | number
     hasLiveItems: liveItems.length > 0,
     hasUnconfirmedItems: liveItems.some((item) => !item.served_confirmed_at),
   };
+}
+
+export type BillRequestError = Error & { statusCode: number; code?: string };
+
+const billRequestError = (message: string, statusCode: number, code?: string) =>
+  Object.assign(new Error(message), { statusCode, ...(code ? { code } : {}) }) as BillRequestError;
+
+/**
+ * Marks that a table asked for its bill so the POS times the wait for payment. A repeat keeps the
+ * first request time; `preflight` only checks the order could be billed.
+ */
+export function requestOrderBill(
+  db: Database,
+  orderId: string | number,
+  actorUserId: string,
+  options: { preflight?: boolean } = {},
+) {
+  return withTxn(() => {
+    const current = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as
+      | {
+          status: string;
+          bill_requested_at: string | null;
+          bill_payment_received_at: string | null;
+        }
+      | undefined;
+    if (!current) throw billRequestError('Order not found', 404);
+    if (['completed', 'cancelled'].includes(current.status)) {
+      throw billRequestError('This order is already closed', 409);
+    }
+    if (orderHasWeightPending(db, orderId)) {
+      throw billRequestError(WEIGHT_PENDING_ERROR, 409, 'weight_pending');
+    }
+    if (!getOrderServeConfirmation(db, orderId).hasLiveItems) {
+      throw billRequestError(
+        'Confirm every item is served before printing the bill',
+        409,
+        'served_unconfirmed',
+      );
+    }
+    if (options.preflight) return current;
+    if (!current.bill_requested_at || current.bill_payment_received_at) {
+      const actorName =
+        (
+          db.prepare('SELECT name FROM users WHERE id = ?').get(actorUserId) as
+            | { name: string }
+            | undefined
+        )?.name ?? null;
+      db.prepare(
+        `UPDATE orders
+         SET bill_requested_at = ?, bill_requested_by = ?, bill_requested_by_name = ?,
+             bill_payment_received_at = NULL, serve_confirm_requested_at = NULL,
+             serve_confirm_requested_by_name = NULL, updated_at = ?
+         WHERE id = ?`,
+      ).run(now(), actorUserId, actorName, now(), orderId);
+      recordOrderAudit(db, { orderId, actorUserId, action: 'bill_requested', details: {} });
+    }
+    return db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+  });
 }
 
 type OrderItemRow = {

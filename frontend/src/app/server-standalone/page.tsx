@@ -40,6 +40,7 @@ import {
   ServerAppHeader,
 } from '@/components/server-app/ServerAppHeader';
 import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/GuestOrderHistory';
+import type { GuestBillRequestFailure } from '@/components/server-app/GuestBill';
 import { useReloadOnNewBuild } from '@/hooks/useReloadOnNewBuild';
 import { holdDarkClass } from '@/lib/kds-screen-mode';
 import { useTranslations } from 'use-intl';
@@ -62,7 +63,7 @@ import {
 } from '@/components/server-app/TableTransferDialog';
 import { toastApiError } from '@/lib/api-error';
 import { parseDbTimestamp } from '@/lib/utils';
-import { formatCurrencyForTenant } from '@/lib/countries';
+import { formatCurrencyForTenant, formatDateForTenant } from '@/lib/countries';
 import { createPaymentIdempotencyKey } from '@/lib/payment-idempotency';
 import { generateCartItemId } from '@/lib/cart-identity';
 import { productNeedsCustomizer, scannedVariantNeedsCustomizer } from '@/lib/product-variants';
@@ -390,6 +391,7 @@ export default function ServerStandalonePage() {
   const [guestDeviceToken, setGuestDeviceToken] = useState<string | null>(null);
   const [guestOrder, setGuestOrder] = useState<GuestOrder | null>(null);
   const [guestOrderLoaded, setGuestOrderLoaded] = useState(false);
+  const [guestOrderAsOf, setGuestOrderAsOf] = useState<string | null>(null);
   const [guestHistoryOpen, setGuestHistoryOpen] = useState(false);
   const [guestGate, setGuestGate] = useState<{
     kind: 'tap' | 'waiting' | 'declined';
@@ -712,11 +714,13 @@ export default function ServerStandalonePage() {
     let cancelled = false;
     const load = () =>
       api
-        .get<{ order: GuestOrder | null }>('/api/guest/order', {
+        .get<{ order: GuestOrder | null; as_of: string }>('/api/guest/order', {
           params: { table_id: guestTable.id, d: guestDeviceToken },
         })
         .then((res) => {
-          if (!cancelled) setGuestOrder(res.data.order);
+          if (cancelled) return;
+          setGuestOrder(res.data.order);
+          setGuestOrderAsOf(res.data.as_of);
         })
         .catch(() => {})
         .finally(() => {
@@ -1312,6 +1316,29 @@ export default function ServerStandalonePage() {
         );
     } finally {
       setTransferring(false);
+    }
+  }
+
+  /** A guest asks staff to bring the bill; the POS alerts and times the wait, nothing prints. */
+  async function requestGuestBill(): Promise<GuestBillRequestFailure | null> {
+    if (!api || !guestTable || !guestDeviceToken) return 'failed';
+    try {
+      const res = await api.post<{ bill_requested_at: string | null }>(
+        '/api/guest/bill-request',
+        { table_id: guestTable.id, device_token: guestDeviceToken },
+        guestOrderJson,
+      );
+      setGuestOrder((order) =>
+        order ? { ...order, bill_requested_at: res.data.bill_requested_at } : order,
+      );
+      return null;
+    } catch (error) {
+      const code = axios.isAxiosError<{ code?: string }>(error)
+        ? error.response?.data?.code
+        : undefined;
+      if (code === 'no_open_order' || code === 'served_unconfirmed') return 'nothing_to_bill';
+      if (code === 'weight_pending') return 'weight_pending';
+      return 'failed';
     }
   }
 
@@ -2587,7 +2614,21 @@ export default function ServerStandalonePage() {
           onClose={() => setGuestHistoryOpen(false)}
           order={guestOrder}
           loading={!guestOrderLoaded}
+          asOf={guestOrderAsOf}
+          tableName={guestTable?.name ?? null}
+          onRequestBill={requestGuestBill}
           formatPrice={(amount) => money(amount, regional)}
+          formatTime={(iso) =>
+            formatDateForTenant(
+              new Date(iso),
+              regional?.country || '',
+              regional?.timezone || 'UTC',
+              {},
+              { hour: '2-digit', minute: '2-digit' },
+              language,
+            )
+          }
+          imageOf={productImageOf}
         />
       )}
 

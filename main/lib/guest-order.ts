@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 
-export const GUEST_USER_ID = 'guest-self-order';
+import { GUEST_USER_ID } from '../../shared/guest-user';
+
+export { GUEST_USER_ID };
 
 export function tableAwaitingBillPayment(db: Database.Database, tableId: string | number): boolean {
   return Boolean(
@@ -194,38 +196,178 @@ export function sanitizeGuestProduct(product: Record<string, unknown>): Record<s
 export interface GuestTableOrder {
   order_number: string;
   customer_name: string | null;
+  /** Set once the table has asked for its bill and payment has not been taken yet. */
+  bill_requested_at: string | null;
   items: {
     id: number;
+    product_id: string;
     product_name: string;
     quantity: number;
     status: string;
     total: number;
     created_at: string | null;
+    /** The staff member who added the dish; null for a guest or when it is not known. */
+    ordered_by: string | null;
+    ordered_by_guest: boolean;
   }[];
+  bill: {
+    subtotal: number;
+    discount_amount: number;
+    service_charge: number;
+    tax_amount: number;
+    tax_included: boolean;
+    round_off: number;
+    total: number;
+  };
 }
 
-/** The table's open dine-in order as its guests may see it: dish names, counts, kitchen status. */
+const MAX_MERGE_DEPTH = 10;
+const GUEST_OPEN_ORDER_STATUSES = "('pending', 'preparing', 'ready', 'served')";
+
+/** The open dine-in order a table's guests are eating from, if any. */
+export function guestOpenOrderId(db: Database.Database, tableId: string | number): number | null {
+  const row = db
+    .prepare(
+      `SELECT id FROM orders WHERE table_id = ? AND type = 'dine_in'
+          AND status IN ${GUEST_OPEN_ORDER_STATUSES} ORDER BY id DESC LIMIT 1`,
+    )
+    .get(tableId) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+/** Who added each item, from the order's audit trail; follows tables merged into this one. */
+function itemActors(
+  db: Database.Database,
+  order: { id: number; user_id: string | null },
+): { byItem: Map<number, string>; fallback: string | null } {
+  const byItem = new Map<number, string>();
+  const auditRows = db.prepare(
+    `SELECT action, actor_user_id, details_json FROM order_audit_log
+      WHERE order_id = ? AND action IN ('items_added', 'order_merged') ORDER BY id`,
+  );
+  const sourceOrder = db.prepare('SELECT id, user_id FROM orders WHERE order_number = ?');
+  const visited = new Set<number>();
+  let merged = false;
+  let queue: { id: number; user_id: string | null }[] = [order];
+  for (let depth = 0; queue.length && depth < MAX_MERGE_DEPTH; depth++) {
+    const next: typeof queue = [];
+    for (const current of queue) {
+      if (visited.has(current.id)) continue;
+      visited.add(current.id);
+      const rows = auditRows.all(current.id) as {
+        action: string;
+        actor_user_id: string;
+        details_json: string | null;
+      }[];
+      for (const row of rows) {
+        let details: Record<string, unknown> = {};
+        try {
+          details = row.details_json ? JSON.parse(row.details_json) : {};
+        } catch {
+          continue;
+        }
+        if (row.action === 'items_added' && Array.isArray(details.item_ids)) {
+          for (const itemId of details.item_ids) {
+            if (!byItem.has(Number(itemId))) byItem.set(Number(itemId), row.actor_user_id);
+          }
+        } else if (row.action === 'order_merged') {
+          const source =
+            typeof details.from_order === 'string'
+              ? (sourceOrder.get(details.from_order) as typeof order | undefined)
+              : undefined;
+          if (source && source.id !== current.id) {
+            merged = true;
+            next.push(source);
+          }
+        }
+      }
+    }
+    queue = next;
+  }
+  // Without a merge, every item the audit trail does not name came with the order itself.
+  return { byItem, fallback: merged ? null : order.user_id };
+}
+
+/** The table's open dine-in order as its guests may see it: dishes, kitchen status and bill. */
 export function guestTableOrder(
   db: Database.Database,
   tableId: string | number,
 ): GuestTableOrder | null {
   const order = db
     .prepare(
-      `SELECT o.id, o.order_number, c.name AS customer_name
+      `SELECT o.id, o.order_number, o.user_id, c.name AS customer_name,
+              CASE WHEN o.bill_payment_received_at IS NULL THEN o.bill_requested_at END
+                AS bill_requested_at,
+              o.subtotal, o.discount_amount, o.service_charge, o.tax_amount, o.round_off, o.total
          FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
         WHERE o.table_id = ? AND o.type = 'dine_in'
-          AND o.status IN ('pending', 'preparing', 'ready')
+          AND o.status IN ${GUEST_OPEN_ORDER_STATUSES}
         ORDER BY o.id DESC LIMIT 1`,
     )
-    .get(tableId) as { id: number; order_number: string; customer_name: string | null } | undefined;
+    .get(tableId) as
+    | {
+        id: number;
+        order_number: string;
+        user_id: string | null;
+        customer_name: string | null;
+        bill_requested_at: string | null;
+        subtotal: number | null;
+        discount_amount: number | null;
+        service_charge: number | null;
+        tax_amount: number | null;
+        round_off: number | null;
+        total: number | null;
+      }
+    | undefined;
   if (!order) return null;
-  const items = db
+  const rows = db
     .prepare(
-      `SELECT id, product_name, quantity, status, total, created_at
-         FROM order_items
-        WHERE order_id = ? AND status NOT IN ('voided', 'void_adjustment', 'refunded')
-        ORDER BY id`,
+      `SELECT oi.id, oi.product_id, oi.product_name, oi.quantity, oi.status, oi.total,
+              oi.created_at, oi.tax_type
+         FROM order_items oi
+        WHERE oi.order_id = ? AND oi.status NOT IN ('voided', 'void_adjustment', 'refunded')
+        ORDER BY oi.id`,
     )
-    .all(order.id) as GuestTableOrder['items'];
-  return { order_number: order.order_number, customer_name: order.customer_name, items };
+    .all(order.id) as (Omit<GuestTableOrder['items'][number], 'ordered_by' | 'ordered_by_guest'> & {
+    tax_type: string | null;
+  })[];
+  const actors = itemActors(db, order);
+  const actorIds = [...new Set([...actors.byItem.values(), actors.fallback])].filter(
+    (id): id is string => Boolean(id) && id !== GUEST_USER_ID,
+  );
+  const names = new Map<string, string>(
+    actorIds.length
+      ? (
+          db
+            .prepare(
+              `SELECT id, name FROM users WHERE id IN (${actorIds.map(() => '?').join(',')})`,
+            )
+            .all(...actorIds) as { id: string; name: string }[]
+        ).map((user) => [user.id, user.name])
+      : [],
+  );
+  const items = rows.map(({ tax_type: _taxType, ...item }) => {
+    const actor = actors.byItem.get(item.id) ?? actors.fallback;
+    return {
+      ...item,
+      ordered_by: actor && actor !== GUEST_USER_ID ? (names.get(actor) ?? null) : null,
+      ordered_by_guest: actor === GUEST_USER_ID,
+    };
+  });
+  const billed = rows.filter((item) => item.status !== 'cancelled');
+  return {
+    order_number: order.order_number,
+    customer_name: order.customer_name,
+    bill_requested_at: order.bill_requested_at,
+    items,
+    bill: {
+      subtotal: Number(order.subtotal) || 0,
+      discount_amount: Number(order.discount_amount) || 0,
+      service_charge: Number(order.service_charge) || 0,
+      tax_amount: Number(order.tax_amount) || 0,
+      tax_included: billed.length > 0 && billed.every((item) => item.tax_type === 'inclusive'),
+      round_off: Number(order.round_off) || 0,
+      total: Number(order.total) || 0,
+    },
+  };
 }
