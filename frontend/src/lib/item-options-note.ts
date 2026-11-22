@@ -1,5 +1,11 @@
 import { parseVariantSelection } from '@/lib/printer/item-heading';
-import { cleanItemText, itemLine, joinedDish, type NamedOption } from '../../../shared/item-line';
+import {
+  cleanItemText,
+  itemLine,
+  joinedDish,
+  variantIsListedChoice,
+  type NamedOption,
+} from '../../../shared/item-line';
 
 export { NOTE_SEPARATOR, optionsNote, withoutOptionsNote } from '../../../shared/item-line';
 
@@ -13,12 +19,13 @@ export function spokenItemName(
   variantName: string | null | undefined,
   addons: NamedOption[] | null | undefined,
 ): string {
-  const chosen = (addons ?? []).map((addon) => cleanItemText(addon.name)).filter(Boolean);
-  return [
-    joinedDish(productName, chosen[0]),
-    ...chosen.slice(1),
-    cleanItemText(String(variantName ?? '')),
-  ]
+  const variant = cleanItemText(String(variantName ?? ''));
+  const variantJoins = variantIsListedChoice(productName, variant);
+  const chosen = [
+    ...(variantJoins ? [variant] : []),
+    ...(addons ?? []).map((addon) => cleanItemText(addon.name)),
+  ].filter(Boolean);
+  return [joinedDish(productName, chosen[0]), ...chosen.slice(1), variantJoins ? '' : variant]
     .filter(Boolean)
     .join(' ');
 }

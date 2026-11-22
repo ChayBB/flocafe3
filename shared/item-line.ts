@@ -89,6 +89,22 @@ export function listsChoices(productName: string): boolean {
     .some((word) => word.includes('/'));
 }
 
+/**
+ * Whether the variant is one of the choices the name lists, as "หมึก" is for
+ * "ข้าวต้ม หมู/กุ้ง/ไก่/ปลาหมึก"; such a variant joins the dish ("ข้าวต้มหมึก") instead of
+ * following it in brackets the way a size does.
+ */
+export function variantIsListedChoice(productName: string, variantName: string): boolean {
+  const variant = cleanItemText(variantName);
+  if (!variant) return false;
+  return cleanItemText(productName)
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .split(/\s+/)
+    .some(
+      (word) => word.includes('/') && word.split('/').some((choice) => choice.includes(variant)),
+    );
+}
+
 /** A kitchen ticket's line: a name that lists its choices takes the chosen options, as on the KDS. */
 export function ticketItemLine(
   productName: string,
@@ -125,15 +141,23 @@ export function itemLine(
 ): PrintedItemLine {
   const variantName = String(variant?.name ?? '').trim();
   const sku = String(variant?.sku ?? '').trim();
+  const variantJoins = variantIsListedChoice(productName, variantName);
+  const withVariant = (options: NamedOption[]): NamedOption[] =>
+    variantJoins ? [{ name: variantName }, ...options] : options;
   const joinsOptions = print
     ? listsChoices(productName) && print.joined.some((option) => cleanItemText(option.name))
     : true;
   const dish = !print
-    ? dishWithOptions(productName, addons)
-    : joinsOptions
-      ? dishWithOptions(productName, print.joined, 'x')
+    ? dishWithOptions(productName, withVariant(addons ?? []))
+    : joinsOptions || variantJoins
+      ? dishWithOptions(productName, withVariant(joinsOptions ? print.joined : []), 'x')
       : productName;
-  const name = variantName ? `${dish} (${variantName})${sku ? ` [${sku}]` : ''}` : dish;
+  const skuTag = sku ? ` [${sku}]` : '';
+  const name = variantJoins
+    ? `${dish}${skuTag}`
+    : variantName
+      ? `${dish} (${variantName})${skuTag}`
+      : dish;
   return {
     name,
     instructions: withoutNamedOptions(

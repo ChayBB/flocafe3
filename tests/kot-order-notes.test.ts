@@ -140,6 +140,16 @@ assert.ok(
     'จานเล็ก | ไม่ใส่ผัก',
   );
   assert.equal(itemLine('ข้าวผัด', null, [{ name: 'ไข่ดาว' }], 'ไม่เผ็ด').instructions, 'ไม่เผ็ด');
+  // A variant that is one of the listed choices joins the dish on screens, tickets and bills.
+  const squid = itemLine(soup, { name: 'หมึก', sku: null }, [], 'หมึก | ไม่ใส่ผัก');
+  assert.equal(squid.name, 'ข้าวต้มหมึก');
+  assert.equal(squid.instructions, 'ไม่ใส่ผัก');
+  assert.equal(itemLine(soup, { name: 'หมึก' }, [], 'หมึก', { joined: [] }).name, 'ข้าวต้มหมึก');
+  assert.equal(
+    itemLine(soup, { name: 'กุ้ง' }, [{ name: 'ไข่' }], '', { joined: [{ name: 'ไข่' }] }).name,
+    'ข้าวต้มกุ้ง ไข่',
+  );
+  assert.equal(itemLine('ข้าวผัด', { name: 'จานใหญ่' }, [], '').name, 'ข้าวผัด (จานใหญ่)');
 }
 
 async function runAsyncTests() {
