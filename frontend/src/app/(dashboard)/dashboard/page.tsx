@@ -261,6 +261,7 @@ export default function DashboardPage() {
   const { currentTenant } = useAuthStore();
   const t = useTranslations('dashboard');
   const tCommon = useTranslations('common');
+  const tNav = useTranslations('nav');
   const tPos = useTranslations('pos');
   const tOrders = useTranslations('orders');
   const tProducts = useTranslations('products');
@@ -281,6 +282,7 @@ export default function DashboardPage() {
 
   const isOwner = tenantCan(currentTenant, 'dashboard.view');
   const canViewFinancials = tenantCan(currentTenant, 'reports.financial.view');
+  const canViewReports = tenantCan(currentTenant, 'reports.view');
   const canSendDailySalesWhatsApp =
     tenantCan(currentTenant, 'reports.view') &&
     tenantCan(currentTenant, 'reports.daily-sales.export') &&
@@ -901,6 +903,15 @@ export default function DashboardPage() {
           </div>
 
           <span className="mx-1 hidden h-7 w-px bg-border xl:block" aria-hidden="true" />
+
+          {canViewReports && (
+            <Button asChild variant="outline" className="h-10 rounded-xl bg-card px-4 shadow-sm">
+              <Link href="/executive-summary">
+                <BarChart3 size={14} />
+                {tNav('executiveSummary')}
+              </Link>
+            </Button>
+          )}
 
           <Button
             type="button"

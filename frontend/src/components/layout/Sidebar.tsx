@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
+  Presentation as PresentationIcon,
   ShoppingCart,
   ClipboardList,
   Package,
@@ -83,6 +84,13 @@ const ALL_NAV_ITEMS: NavItem[] = [
     labelKey: 'dashboard',
     icon: LayoutDashboard,
     permission: 'dashboard.view',
+    businessTypes: null,
+  },
+  {
+    href: '/executive-summary',
+    labelKey: 'executiveSummary',
+    icon: PresentationIcon,
+    permission: 'reports.view',
     businessTypes: null,
   },
   {

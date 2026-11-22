@@ -79,6 +79,11 @@ import {
   type ZReportExport,
 } from '../services/cash-close-export';
 import { clockNow } from '../lib/clock';
+import {
+  buildExecutiveSummary,
+  ExecutiveSummaryValidationError,
+  resolveExecutiveRanges,
+} from '../services/executive-summary';
 
 const router = Router();
 
@@ -1256,6 +1261,42 @@ router.get('/insights', requirePermission('reports.view'), (req: Request, res: R
       .json({ error: error.statusCode ? error.message : 'Internal server error' });
   }
 });
+
+// Owner/manager executive summary for a business-date range compared with an earlier range.
+// Financial figures (food cost, margin, labour, expenses, profit) need reports.financial.view.
+router.get(
+  '/executive-summary',
+  requirePermission('reports.view'),
+  (req: Request, res: Response) => {
+    try {
+      const today = reportToday();
+      const ranges = resolveExecutiveRanges(
+        req.query.start_date ?? `${today.slice(0, 8)}01`,
+        req.query.end_date ?? today,
+        req.query.compare,
+      );
+      const userId = String((req as Request & { user?: { userId?: string } }).user?.userId || '');
+      const includeFinancials = userId ? hasPermission(userId, 'reports.financial.view') : false;
+      res.json({
+        executiveSummary: buildExecutiveSummary(getDatabase(), ranges, {
+          includeFinancials,
+          now: clockNow(),
+        }),
+      });
+    } catch (error: unknown) {
+      if (error instanceof ExecutiveSummaryValidationError) {
+        captureReportsDateRangeRejection('invalid_format');
+        return res.status(400).json({ error: error.message });
+      }
+      res.locals.postHogError = error;
+      console.error('[API] Executive summary failed:', error);
+      const failure = error as { statusCode?: number; message?: string };
+      res
+        .status(failure.statusCode || 500)
+        .json({ error: failure.statusCode ? failure.message : 'Internal server error' });
+    }
+  },
+);
 
 // ── GET /x-report — live day report (cierre de caja, issue #649) ──────
 // Reuses the snapshot pipeline from `cash-closures.ts` so the X read and

@@ -81,6 +81,7 @@ const PUBLIC_PATHS = [
 export const PAGE_PERMISSIONS = [
   ['/pos', 'pos.use'],
   ['/dashboard', 'dashboard.view'],
+  ['/executive-summary', 'reports.view'],
   ['/order-history-demo', 'dashboard.view'],
   ['/orders', 'orders.read'],
   ['/products', 'catalog.manage'],
