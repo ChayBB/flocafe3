@@ -1,7 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { CircleAlert, CircleCheck, HandCoins, Info } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import {
+  CircleAlert,
+  CircleCheck,
+  HandCoins,
+  Info,
+  ReceiptText,
+  TriangleAlert,
+} from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { useTranslations } from 'use-intl';
 import { Ltr } from '@/components/layout/Ltr';
 import { isCancelledItem } from '@/components/server-app/ItemStatus';
@@ -33,11 +41,16 @@ export function GuestBill({
   const [method, setMethod] = useState<PaymentMethod | null>(requested ? 'staff' : null);
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<GuestBillRequestFailure | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [showRequested, setShowRequested] = useState(false);
   const requestBill = async () => {
     setSending(true);
     setFailure(null);
-    setFailure(await onRequestBill());
+    const result = await onRequestBill();
     setSending(false);
+    setConfirming(false);
+    setFailure(result);
+    if (!result) setShowRequested(true);
   };
   const failureText = {
     nothing_to_bill: t('billRequestNothingYet'),
@@ -169,7 +182,7 @@ export function GuestBill({
         <button
           type="button"
           disabled={!method || sending || requested}
-          onClick={() => void requestBill()}
+          onClick={() => setConfirming(true)}
           data-testid="server-app-guest-bill-continue"
           className="h-12 w-full rounded-xl bg-brand text-base font-semibold text-white hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -180,6 +193,81 @@ export function GuestBill({
               : tCommon('continue')}
         </button>
       </footer>
+
+      <Dialog open={confirming} onOpenChange={(next) => !next && !sending && setConfirming(false)}>
+        <DialogContent
+          data-testid="server-app-guest-bill-confirm"
+          showCloseButton={false}
+          className="max-w-[calc(100%-2.5rem)] gap-0 rounded-2xl p-6 text-center sm:max-w-sm"
+        >
+          <BillArt icon={<ReceiptText size={40} aria-hidden="true" />} badge="฿" />
+          <DialogTitle className="mt-4 text-xl font-bold">{t('billConfirmTitle')}</DialogTitle>
+          <DialogDescription className="mt-4 flex items-start gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-start text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
+            <TriangleAlert size={18} aria-hidden="true" className="mt-0.5 shrink-0" />
+            {t('billConfirmWarning')}
+          </DialogDescription>
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => setConfirming(false)}
+              data-testid="server-app-guest-bill-confirm-cancel"
+              className="h-12 rounded-xl border-2 border-border text-base font-semibold hover:bg-muted disabled:opacity-50"
+            >
+              {tCommon('cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => void requestBill()}
+              data-testid="server-app-guest-bill-confirm-ok"
+              className="h-12 rounded-xl bg-brand text-base font-semibold text-white hover:bg-brand/90 disabled:opacity-60"
+            >
+              {sending ? t('billRequestSending') : tCommon('confirm')}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showRequested} onOpenChange={setShowRequested}>
+        <DialogContent
+          data-testid="server-app-guest-bill-requested-modal"
+          showCloseButton={false}
+          className="max-w-[calc(100%-2.5rem)] gap-0 rounded-2xl p-6 text-center sm:max-w-sm"
+        >
+          <BillArt
+            icon={<HandCoins size={40} aria-hidden="true" />}
+            badge={<CircleCheck size={16} aria-hidden="true" />}
+          />
+          <DialogTitle className="mt-4 text-xl font-bold">{t('billRequestedTitle')}</DialogTitle>
+          <DialogDescription className="mt-2 text-sm text-muted-foreground">
+            {t('billRequestedSubtitle')}
+          </DialogDescription>
+          <button
+            type="button"
+            onClick={() => setShowRequested(false)}
+            data-testid="server-app-guest-bill-requested-ok"
+            className="mt-6 h-12 w-full rounded-xl bg-brand text-base font-semibold text-white hover:bg-brand/90"
+          >
+            {t('billRequestedOk')}
+          </button>
+        </DialogContent>
+      </Dialog>
     </>
+  );
+}
+
+/** A soft brand tile with a large icon and a small round badge, used on the bill modals. */
+function BillArt({ icon, badge }: { icon: ReactNode; badge: ReactNode }) {
+  return (
+    <div aria-hidden="true" className="relative mx-auto flex size-24 items-center justify-center">
+      <div className="absolute inset-0 rotate-6 rounded-3xl bg-brand/15" />
+      <div className="relative flex size-20 items-center justify-center rounded-2xl bg-brand/10 text-brand">
+        {icon}
+      </div>
+      <span className="absolute -end-1 -bottom-1 flex size-8 items-center justify-center rounded-full bg-amber-400 text-sm font-bold text-white shadow ring-4 ring-background">
+        {badge}
+      </span>
+    </div>
   );
 }

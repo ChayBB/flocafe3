@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import { getDatabase, isKdsEnabled, now, recordOrderAudit, withTxn } from '../db';
 import { WEIGHT_PENDING_ERROR, orderHasWeightPending } from '../lib/weight-pending';
+import { GUEST_USER_ID } from '../../shared/guest-user';
 import { getCurrencyFractionDigits, getCurrencyMinorUnitFactor } from '../countries';
 import {
   allocateDocumentTaxRounding,
@@ -62,6 +63,7 @@ export function requestOrderBill(
       | {
           status: string;
           bill_requested_at: string | null;
+          bill_requested_by: string | null;
           bill_payment_received_at: string | null;
         }
       | undefined;
@@ -80,21 +82,33 @@ export function requestOrderBill(
       );
     }
     if (options.preflight) return current;
+    const actorName = () =>
+      (
+        db.prepare('SELECT name FROM users WHERE id = ?').get(actorUserId) as
+          | { name: string }
+          | undefined
+      )?.name ?? null;
     if (!current.bill_requested_at || current.bill_payment_received_at) {
-      const actorName =
-        (
-          db.prepare('SELECT name FROM users WHERE id = ?').get(actorUserId) as
-            | { name: string }
-            | undefined
-        )?.name ?? null;
       db.prepare(
         `UPDATE orders
          SET bill_requested_at = ?, bill_requested_by = ?, bill_requested_by_name = ?,
              bill_payment_received_at = NULL, serve_confirm_requested_at = NULL,
              serve_confirm_requested_by_name = NULL, updated_at = ?
          WHERE id = ?`,
-      ).run(now(), actorUserId, actorName, now(), orderId);
+      ).run(now(), actorUserId, actorName(), now(), orderId);
       recordOrderAudit(db, { orderId, actorUserId, action: 'bill_requested', details: {} });
+    } else if (current.bill_requested_by === GUEST_USER_ID && actorUserId !== GUEST_USER_ID) {
+      // Staff bringing the bill a guest asked for answer the request; the wait keeps its start.
+      db.prepare(
+        `UPDATE orders SET bill_requested_by = ?, bill_requested_by_name = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(actorUserId, actorName(), now(), orderId);
+      recordOrderAudit(db, {
+        orderId,
+        actorUserId,
+        action: 'bill_requested',
+        details: { answered_guest_request: true },
+      });
     }
     return db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
   });

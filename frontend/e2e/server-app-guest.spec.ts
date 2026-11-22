@@ -259,7 +259,18 @@ test.describe('Server App guest from a table QR', () => {
       'aria-checked',
       'true',
     );
+    // Asking for the bill is confirmed first, since it closes ordering for the table.
     await proceed.click();
+    const confirm = page.getByTestId('server-app-guest-bill-confirm');
+    await expect(confirm).toContainText("you can't order any more food");
+    await confirm.getByTestId('server-app-guest-bill-confirm-cancel').click();
+    await expect(confirm).toHaveCount(0);
+    await proceed.click();
+    await confirm.getByTestId('server-app-guest-bill-confirm-ok').click();
+    const requestedModal = page.getByTestId('server-app-guest-bill-requested-modal');
+    await expect(requestedModal.getByRole('heading', { name: 'Bill requested' })).toBeVisible();
+    await requestedModal.getByTestId('server-app-guest-bill-requested-ok').click();
+    await expect(requestedModal).toHaveCount(0);
     await expect(page.getByTestId('server-app-guest-bill-requested')).toContainText(
       'Staff have been notified',
     );
@@ -276,6 +287,9 @@ test.describe('Server App guest from a table QR', () => {
     await expect(guestHistory.getByRole('heading', { name: 'Items ordered' })).toBeVisible();
     await page.getByTestId('server-app-guest-history-close').click();
     await expect(guestHistory).toHaveCount(0);
+    await expect(page.getByTestId('server-app-awaiting-payment')).toHaveText(
+      "The bill has been requested, so this table can't order more.",
+    );
 
     // The Guest account that placed the orders never shows up as staff.
     const ownerHeaders = {
@@ -669,6 +683,7 @@ test('the QR ordering checkbox in OrderFlow settings closes and reopens ordering
     expect((await refused.json()).code).toBe('guest_ordering_disabled');
 
     await page.goto(`${E2E_BASE_URL}/settings?tab=orderflow`);
+    await expect(page.getByTestId('settings-qr-ordering')).not.toBeChecked();
     await page.getByTestId('settings-qr-ordering').check();
     await expect(page.getByText('QR ordering turned on')).toBeVisible();
     await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
@@ -875,7 +890,7 @@ test('staff hand out a table QR from the POS and the Server App, and it stops wo
     await page.waitForURL('**/pos/**', { timeout: 20000 });
     await page.getByRole('button', { name: 'Select Table' }).click();
     await page
-      .getByTestId('server-app-table-picker')
+      .getByTestId('pos-table-picker')
       .getByRole('button')
       .filter({ hasText: table.name })
       .click();

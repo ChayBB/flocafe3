@@ -29,6 +29,7 @@ const {
   closeGuestTableSession,
 } = require('../main/lib/guest-table-session');
 const { GUEST_USER_ID, guestTableOrder } = require('../main/lib/guest-order');
+const { requestOrderBill } = require('../main/services/orders');
 
 const freePort = () =>
   new Promise<number>((resolve, reject) => {
@@ -145,6 +146,34 @@ async function main() {
       'and keeps the first request time',
     );
     assertEqualOrThrow(audits(own).length, 1, 'and records no second request');
+
+    db.prepare(
+      `INSERT INTO users (id, name, email, password, role, is_active)
+       VALUES ('u-ann', 'Ann', 'ann@test.local', 'x', 'server', 1)`,
+    ).run();
+    requestOrderBill(db, own, 'u-ann');
+    const answered = billState(own);
+    assertEqualOrThrow(answered.bill_requested_by, 'u-ann', 'staff printing the bill answer it');
+    assertEqualOrThrow(answered.bill_requested_by_name, 'Ann', 'so the alert leaves the phones');
+    assertEqualOrThrow(
+      answered.bill_requested_at,
+      state.bill_requested_at,
+      'and the wait keeps counting from the guest request',
+    );
+    assertEqualOrThrow(
+      audits(own)
+        .map((row) => row.actor_user_id)
+        .join(','),
+      `${GUEST_USER_ID},u-ann`,
+      'the audit shows the guest asked and who brought the bill',
+    );
+    const repeatGuest = await ask({ table_id: 'tb-1', device_token: ownDevice });
+    assertEqualOrThrow(repeatGuest.status, 200, 'a guest tap after staff answered is harmless');
+    assertEqualOrThrow(
+      billState(own).bill_requested_by,
+      'u-ann',
+      'and does not raise the alert again',
+    );
 
     const noOrder = await ask({ table_id: 'tb-3', device_token: emptyDevice });
     assertEqualOrThrow(noOrder.status, 409, 'a table with nothing ordered has no bill to ask for');

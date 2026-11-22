@@ -64,6 +64,7 @@ import {
 import { toastApiError } from '@/lib/api-error';
 import { parseDbTimestamp } from '@/lib/utils';
 import { formatCurrencyForTenant, formatDateForTenant } from '@/lib/countries';
+import { GUEST_USER_ID } from '@shared/guest-user';
 import { createPaymentIdempotencyKey } from '@/lib/payment-idempotency';
 import { generateCartItemId } from '@/lib/cart-identity';
 import { productNeedsCustomizer, scannedVariantNeedsCustomizer } from '@/lib/product-variants';
@@ -121,6 +122,7 @@ type Order = {
   /** Menu lines still waiting or cooking, ready to serve, and served. */
   kitchen_counts?: { waiting: number; ready: number; served: number };
   bill_requested_at?: string | null;
+  bill_requested_by?: string | null;
   bill_payment_received_at?: string | null;
   /** The cashier tried to print the bill before every item was confirmed served. */
   serve_confirm_requested_at?: string | null;
@@ -272,6 +274,11 @@ function sendAttemptSignature(
 
 /** Staff who own tables see only those; everyone else sees every table. Ownership never restricts ordering. */
 /** A table whose bill is printed waits for the cashier and takes no more orders. */
+/** A table-QR guest asked for the bill and no staff member has brought it yet. */
+function guestAskedForBill(order: Order | null | undefined): boolean {
+  return awaitingPayment(order) && order?.bill_requested_by === GUEST_USER_ID;
+}
+
 function awaitingPayment(order: Order | null | undefined): boolean {
   return Boolean(order?.bill_requested_at && !order.bill_payment_received_at);
 }
@@ -465,8 +472,20 @@ export default function ServerStandalonePage() {
   const outOfStockKeys = outOfStockAlerts
     .map(({ table, item }) => `${table.id}|oos:${item.id}|${item.out_of_stock_at}`)
     .join(',');
+  // Guests on this staff's tables who asked for the bill from their phone, until staff bring it.
+  const guestBillTables = user
+    ? staffTables.filter((table) => guestAskedForBill(table.activeOrder || table.current_order))
+    : [];
+  const guestBillKeys = guestBillTables
+    .map(
+      (table) =>
+        `${table.id}|bill:${(table.activeOrder || table.current_order)?.bill_requested_at}`,
+    )
+    .join(',');
   const serveConfirmRungRef = useRef<Set<string>>(new Set());
-  const staffAlertKeys = [serveConfirmKeys, outOfStockKeys].filter(Boolean).join(',');
+  const staffAlertKeys = [serveConfirmKeys, outOfStockKeys, guestBillKeys]
+    .filter(Boolean)
+    .join(',');
   useEffect(() => {
     const keys = staffAlertKeys ? staffAlertKeys.split(',') : [];
     const fresh = keys.some((key) => !serveConfirmRungRef.current.has(key));
@@ -2070,7 +2089,10 @@ export default function ServerStandalonePage() {
     serveConfirmSeenRef.current = key;
     setOrderedItemsOpen(true);
   }, [activeServeConfirmFlag, selectedTableId]);
+  // A guest's table stops taking orders once anyone has asked for its bill, as the server enforces.
+  const guestBillLocked = !user && Boolean(guestOrder?.bill_requested_at);
   const orderingLocked =
+    guestBillLocked ||
     awaitingPayment(currentOrder) ||
     awaitingPayment(activeTable?.activeOrder || activeTable?.current_order);
   const headerTableText = activeTable
@@ -2661,7 +2683,9 @@ export default function ServerStandalonePage() {
               onClose={() => setTableQrOpen(false)}
             />
           )}
-          {(serveConfirmTables.length > 0 || outOfStockAlerts.length > 0) && (
+          {(serveConfirmTables.length > 0 ||
+            outOfStockAlerts.length > 0 ||
+            guestBillTables.length > 0) && (
             <div
               data-testid="serve-confirm-alerts"
               className="flex flex-wrap gap-2 md:col-span-full"
@@ -2682,6 +2706,21 @@ export default function ServerStandalonePage() {
                     table: table.name || table.number || '',
                     item: item.product_name,
                   })}
+                </button>
+              ))}
+              {guestBillTables.map((table) => (
+                <button
+                  key={`bill-${table.id}`}
+                  type="button"
+                  data-testid="guest-bill-alert"
+                  onClick={() => {
+                    selectTable(table.id);
+                    if (!isWide) setTablePickerOpen(false);
+                    setOrderedItemsOpen(true);
+                  }}
+                  className="animate-pulse rounded-lg border-2 border-amber-500 bg-amber-500 px-3 py-2 text-sm font-semibold text-white"
+                >
+                  {t('guestBillAlert', { table: table.name || table.number || '' })}
                 </button>
               ))}
               {serveConfirmTables.map((table) => (
@@ -2721,8 +2760,9 @@ export default function ServerStandalonePage() {
                   // Serving tables are light green, ones waiting to pay amber with a clock, cleaning
                   // ones light yellow, free ones white.
                   const outOfStock = (order?.out_of_stock_items ?? []).length > 0;
+                  const guestBill = guestAskedForBill(order);
                   const tone = order
-                    ? order.serve_confirm_requested_at || outOfStock
+                    ? order.serve_confirm_requested_at || outOfStock || guestBill
                       ? 'confirm'
                       : awaitingPayment(order)
                         ? 'awaiting'
@@ -2753,7 +2793,11 @@ export default function ServerStandalonePage() {
                         <span className="text-xs text-gray-600">
                           {tone === 'confirm' ? (
                             <span className="font-semibold text-red-700">
-                              {outOfStock ? t('outOfStockNeeded') : t('serveConfirmNeeded')}
+                              {outOfStock
+                                ? t('outOfStockNeeded')
+                                : guestBill
+                                  ? t('guestBillNeeded')
+                                  : t('serveConfirmNeeded')}
                             </span>
                           ) : tone === 'awaiting' ? (
                             t('tableAwaitingPayment')
@@ -2812,7 +2856,7 @@ export default function ServerStandalonePage() {
                 className="mb-3 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800"
               >
                 <Clock size={17} className="shrink-0 text-amber-600" />
-                {t('tableAwaitingPaymentLocked')}
+                {guestBillLocked ? t('guestBillLockedNotice') : t('tableAwaitingPaymentLocked')}
               </div>
             )}
             {!user && guestDeliveryStatus && (
