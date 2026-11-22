@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { Table, Customer, Order, OrderItem } from '@/lib/types';
 import FloorplanEditor from '@/components/tables/FloorplanEditor';
+import TableStaffAssignment from '@/components/tables/TableStaffAssignment';
 import MoveTableModal from '@/components/tables/MoveTableModal';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
@@ -327,7 +328,7 @@ export default function TablesPage() {
   const [reservingTable, setReservingTable] = useState<Table | null>(null);
   // List is the default view (table management + Add table); the floor
   // plan editor is the second view for visual layout work.
-  const [view, setView] = useState<'plan' | 'list'>('list');
+  const [view, setView] = useState<'plan' | 'list' | 'staff'>('list');
   const [layoutMode, setLayoutMode] = useState(false);
   const [form, setForm] = useState({ name: '', capacity: '4', floor: 'Ground', section: '' });
   const [newFloorMode, setNewFloorMode] = useState(false);
@@ -339,6 +340,9 @@ export default function TablesPage() {
   const [floorRenameOpen, setFloorRenameOpen] = useState<{ from: string; to: string } | null>(null);
   const [floorDeleteTarget, setFloorDeleteTarget] = useState<string | null>(null);
   const [floorActionSaving, setFloorActionSaving] = useState(false);
+  const [selectedTableIds, setSelectedTableIds] = useState<Set<string>>(() => new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const floorMenuRef = useRef<HTMLDivElement>(null);
   const [showDetails, setShowDetails] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -644,6 +648,50 @@ export default function TablesPage() {
     }
   };
 
+  const toggleTableSelected = (id: string) => {
+    setSelectedTableIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectedTables = tables.filter((table) => selectedTableIds.has(table.id));
+
+  const submitBulkDelete = async () => {
+    const targets = selectedTables;
+    if (targets.length === 0) return;
+    setBulkDeleting(true);
+    const failures: string[] = [];
+    const failedIds = new Set<string>();
+    let deleted = 0;
+    for (const table of targets) {
+      try {
+        await api.delete(`/tables/${table.id}`);
+        deleted += 1;
+      } catch (error: unknown) {
+        const status = (error as { response?: { status?: number } })?.response?.status;
+        if (status === 404) {
+          deleted += 1;
+          continue;
+        }
+        failedIds.add(table.id);
+        failures.push(
+          status === 409
+            ? tTables('deleteTableHasOrder', { name: table.name })
+            : tTables('deleteTableFailed', { name: table.name }),
+        );
+      }
+    }
+    setBulkDeleting(false);
+    setBulkDeleteOpen(false);
+    setSelectedTableIds(failedIds);
+    if (deleted > 0) toast.success(tTables('tablesDeleted', { count: deleted }));
+    if (failures.length > 0) toast.error(failures.join('\n'), { duration: 8000 });
+    fetchTables();
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -729,6 +777,22 @@ export default function TablesPage() {
             >
               <MapPinned size={14} /> {tTables('floorplanViewPlan')}
             </button>
+            {canManageTables && (
+              <button
+                onClick={() => {
+                  setView('staff');
+                  setLayoutMode(false);
+                }}
+                data-testid="tables-view-staff"
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all ${
+                  view === 'staff'
+                    ? 'bg-card text-foreground shadow'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <UserCog size={14} /> {tTables('staffAssignmentTab')}
+              </button>
+            )}
           </div>
           {view === 'plan' && !layoutMode && canManageTables && (
             <Button variant="outline" onClick={() => setLayoutMode(true)} aria-pressed={layoutMode}>
@@ -750,6 +814,20 @@ export default function TablesPage() {
               />
               {tTables('showOrderDetails')}
             </label>
+          )}
+          {view === 'list' && canManageTables && (
+            <Button
+              variant="outline"
+              data-testid="bulk-delete-tables"
+              disabled={selectedTables.length === 0}
+              onClick={() => setBulkDeleteOpen(true)}
+              className="text-red-600 hover:text-red-700 dark:text-red-400"
+            >
+              <Trash2 size={16} className="me-1" />
+              {selectedTables.length > 0
+                ? tTables('deleteTablesCount', { count: selectedTables.length })
+                : tTables('deleteTables')}
+            </Button>
           )}
           {view === 'list' && canManageTables && (
             <Button onClick={() => openCreate()}>
@@ -777,6 +855,8 @@ export default function TablesPage() {
           onMoveTable={canMoveTable ? (tb) => setMovingTable(tb) : undefined}
         />
       </div>
+
+      {view === 'staff' && canManageTables && <TableStaffAssignment />}
 
       {view === 'list' && (tables.length > 0 || canManageTables) && (
         <div className="mb-5 flex flex-wrap items-center gap-2" aria-label={tTables('floorFilter')}>
@@ -978,31 +1058,44 @@ export default function TablesPage() {
                               {tTables(TABLE_STATUS_LABEL_KEYS[table.status])}
                             </span>
                             {canManageTables && (
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => openEdit(table)}
-                                  className="text-xs text-muted-foreground hover:text-foreground font-medium inline-flex items-center gap-1"
-                                >
-                                  <Pencil size={12} /> {tTables('editTable')}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => toggleActive(table)}
-                                  className={`text-xs font-medium inline-flex items-center gap-1 ${
-                                    !table.is_active
-                                      ? 'text-green-600 hover:text-green-700'
-                                      : 'text-red-500 hover:text-red-700'
-                                  }`}
-                                >
-                                  {!table.is_active ? (
-                                    <>
-                                      <RotateCcw size={12} /> {tTables('reactivate')}
-                                    </>
-                                  ) : (
-                                    tTables('deactivate')
-                                  )}
-                                </button>
+                              <div className="flex flex-col items-end gap-1.5">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEdit(table)}
+                                    className="text-xs text-muted-foreground hover:text-foreground font-medium inline-flex items-center gap-1"
+                                  >
+                                    <Pencil size={12} /> {tTables('editTable')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleActive(table)}
+                                    className={`text-xs font-medium inline-flex items-center gap-1 ${
+                                      !table.is_active
+                                        ? 'text-green-600 hover:text-green-700'
+                                        : 'text-red-500 hover:text-red-700'
+                                    }`}
+                                  >
+                                    {!table.is_active ? (
+                                      <>
+                                        <RotateCcw size={12} /> {tTables('reactivate')}
+                                      </>
+                                    ) : (
+                                      tTables('deactivate')
+                                    )}
+                                  </button>
+                                </div>
+                                <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                                  <input
+                                    type="checkbox"
+                                    data-testid={`select-table-${table.id}`}
+                                    checked={selectedTableIds.has(table.id)}
+                                    onChange={() => toggleTableSelected(table.id)}
+                                    aria-label={tTables('selectTableAria', { name: table.name })}
+                                    className="w-4 h-4 rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                                  />
+                                  {tTables('selectTable')}
+                                </label>
                               </div>
                             )}
                           </div>
@@ -1551,6 +1644,50 @@ export default function TablesPage() {
                 disabled={floorActionSaving}
               >
                 {floorActionSaving ? tCommon('saving') : tTables('deleteFloorConfirm')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkDeleteOpen && selectedTables.length > 0 && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => !bulkDeleting && setBulkDeleteOpen(false)}
+        >
+          <div
+            className="bg-card text-foreground rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="bulk-delete-tables-dialog"
+            role="dialog"
+            aria-modal="true"
+          >
+            <h2 className="text-lg font-bold mb-1">
+              {tTables('deleteTablesTitle', { count: selectedTables.length })}
+            </h2>
+            <p className="text-sm text-foreground mb-2 break-words">
+              {selectedTables.map((table) => table.name).join(', ')}
+            </p>
+            <p className="text-xs text-muted-foreground mb-4">{tTables('deleteTablesHint')}</p>
+            <div className="flex gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1"
+                onClick={() => setBulkDeleteOpen(false)}
+                disabled={bulkDeleting}
+              >
+                {tTables('cancel')}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                className="flex-1"
+                data-testid="bulk-delete-tables-confirm"
+                onClick={submitBulkDelete}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? tTables('deletingTables') : tTables('deleteTablesConfirm')}
               </Button>
             </div>
           </div>

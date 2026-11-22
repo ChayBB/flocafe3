@@ -10559,6 +10559,59 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 145,
+    name: 'add_table_owner_audit',
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS table_owner_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          action TEXT NOT NULL,
+          table_id TEXT,
+          floor TEXT,
+          previous_user_id TEXT,
+          next_user_id TEXT,
+          actor_user_id TEXT,
+          business_date TEXT,
+          details_json TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_table_owner_audit_created
+          ON table_owner_audit(created_at, id);
+      `);
+    },
+  },
+  {
+    version: 146,
+    name: 'add_table_staff_roster',
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS table_staff_attendance (
+          business_date TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          present INTEGER NOT NULL DEFAULT 1 CHECK (present IN (0, 1)),
+          updated_by TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (business_date, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS table_service_days (
+          business_date TEXT PRIMARY KEY,
+          table_count INTEGER NOT NULL CHECK (table_count > 0),
+          updated_by TEXT,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    },
+  },
+  {
+    version: 147,
+    name: 'add_table_backup_user',
+    up: () => {
+      if (!getColumns(db, 'tables').includes('backup_user_id')) {
+        db.exec('ALTER TABLE tables ADD COLUMN backup_user_id TEXT DEFAULT NULL');
+      }
+    },
+  },
 ];
 
 const LEGACY_LOCAL_MIGRATIONS: typeof MIGRATIONS = [

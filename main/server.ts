@@ -31,6 +31,7 @@ import {
 } from './middleware/security';
 import { initFromDb as initWhatsAppFromDb } from './services/whatsapp';
 import { startScheduledOrderSweep, stopScheduledOrderSweep } from './services/scheduled-orders';
+import { startTableOwnerRotation, stopTableOwnerRotation } from './services/table-owner-rotation';
 import { postHogApiFailureMiddleware, apiSlowRequestMiddleware } from './services/posthog';
 import { API_JSON_BODY_LIMIT } from './http-limits';
 import { buildCspHeader } from './csp';
@@ -428,6 +429,7 @@ export function startServer(): Promise<void> {
         }
 
         startScheduledOrderSweep();
+        startTableOwnerRotation();
 
         resolve();
       };
@@ -465,6 +467,7 @@ export function stopServer(): Promise<void> {
 
   stopping = true;
   stopScheduledOrderSweep();
+  stopTableOwnerRotation();
   const rejectStart = startReject;
   startReject = null;
   rejectStart?.(createShutdownCancellationError('Main server'));

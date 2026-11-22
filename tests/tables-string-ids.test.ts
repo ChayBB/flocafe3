@@ -1276,6 +1276,60 @@ async function main() {
     assertEqualOrThrow(putBadRes.status, 400, 'PUT with non-numeric position returns 400');
     console.log('   ✓ PUT rejects invalid coordinates with 400');
 
+    console.log('\n─── Scenario: DELETE /tables/:id ───');
+    seedTable(db, 'tbl-delete-free', 95, 2);
+    seedTable(db, 'tbl-delete-busy', 96, 2);
+    seedTable(db, 'tbl-delete-held', 97, 2);
+    db.prepare(
+      `INSERT INTO orders (order_number, table_id, type, status, created_at, updated_at)
+       VALUES ('DEL-OPEN-1', 'tbl-delete-busy', 'dine_in', 'pending', ?, ?)`,
+    ).run(now(), now());
+    db.prepare(
+      `INSERT INTO orders (order_number, table_id, type, status, created_at, updated_at)
+       VALUES ('DEL-DONE-1', 'tbl-delete-free', 'dine_in', 'completed', ?, ?)`,
+    ).run(now(), now());
+    db.prepare(
+      `INSERT INTO held_orders (id, table_id, items) VALUES ('held-delete-1', 'tbl-delete-held', '[]')`,
+    ).run();
+
+    const cashierDeleteRes = await api(baseUrl, '/api/tables/tbl-delete-free', {
+      method: 'DELETE',
+      headers: cashierHeader,
+    });
+    assertEqualOrThrow(cashierDeleteRes.status, 403, 'cashier cannot delete tables');
+
+    const busyDeleteRes = await api(baseUrl, '/api/tables/tbl-delete-busy', {
+      method: 'DELETE',
+      headers: authHeader,
+    });
+    assertEqualOrThrow(busyDeleteRes.status, 409, 'table with an active order is not deleted');
+    assertEqualOrThrow(busyDeleteRes.data.code, 'TABLE_HAS_ACTIVE_ORDER', 'refusal code');
+    const heldDeleteRes = await api(baseUrl, '/api/tables/tbl-delete-held', {
+      method: 'DELETE',
+      headers: authHeader,
+    });
+    assertEqualOrThrow(heldDeleteRes.status, 409, 'table with a held order is not deleted');
+
+    const freeDeleteRes = await api(baseUrl, '/api/tables/tbl-delete-free', {
+      method: 'DELETE',
+      headers: authHeader,
+    });
+    assertEqualOrThrow(freeDeleteRes.status, 200, 'table with only past orders is deleted');
+    assertOrThrow(
+      !db.prepare('SELECT 1 FROM tables WHERE id = ?').get('tbl-delete-free'),
+      'deleted table row is gone',
+    );
+    assertOrThrow(
+      db.prepare("SELECT 1 FROM orders WHERE order_number = 'DEL-DONE-1'").get(),
+      'past orders survive table deletion',
+    );
+    const missingDeleteRes = await api(baseUrl, '/api/tables/tbl-delete-free', {
+      method: 'DELETE',
+      headers: authHeader,
+    });
+    assertEqualOrThrow(missingDeleteRes.status, 404, 'deleting a missing table returns 404');
+    console.log('   ✓ DELETE removes free tables, refuses busy ones, and requires tables.manage');
+
     console.log('\n✅ All tables string ID tests passed');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -31,6 +31,20 @@ import { storeTimezone } from '../services/attendance';
 import { getHttpRequestSignal } from '../shutdown';
 import { TERMINAL_ITEM_STATUSES } from '../../shared/order-item-status';
 import { cloudTableQrActive, storedCloudTableQr } from '../services/qr-cloud/table-qr';
+import {
+  isValidShuffleDays,
+  readTableOwnerAssignmentSettings,
+  assignStaffTables,
+  readTableStaffRoster,
+  saveTableStaffRoster,
+  validateStaffTables,
+  validateTableStaffRoster,
+  SHUFFLE_DAYS_MAX,
+  SHUFFLE_DAYS_MIN,
+  TABLE_OWNER_ASSIGNMENT_MODES,
+  updateTableOwnerAssignmentSettings,
+  type TableOwnerAssignmentMode,
+} from '../services/table-owner-rotation';
 
 const router = Router();
 
@@ -698,6 +712,96 @@ router.get(
   },
 );
 
+router.get(
+  '/owner-assignment',
+  requirePermission('tables.manage'),
+  (_req: Request, res: Response) => {
+    try {
+      res.json(readTableOwnerAssignmentSettings(getDatabase()));
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.put(
+  '/owner-assignment',
+  requirePermission('tables.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const db = getDatabase();
+      const current = readTableOwnerAssignmentSettings(db);
+      const mode = req.body?.mode ?? current.mode;
+      const shuffleDays = req.body?.shuffle_days ?? current.shuffle_days;
+      if (!(TABLE_OWNER_ASSIGNMENT_MODES as readonly unknown[]).includes(mode)) {
+        return res
+          .status(400)
+          .json({ code: 'ASSIGNMENT_MODE_INVALID', error: 'Unknown assignment mode' });
+      }
+      if (!isValidShuffleDays(shuffleDays)) {
+        return res.status(400).json({
+          code: 'SHUFFLE_DAYS_INVALID',
+          error: `shuffle_days must be a whole number from ${SHUFFLE_DAYS_MIN} to ${SHUFFLE_DAYS_MAX}`,
+        });
+      }
+      const actorUserId = (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
+      res.json(
+        updateTableOwnerAssignmentSettings(
+          db,
+          { mode: mode as TableOwnerAssignmentMode, shuffle_days: shuffleDays },
+          actorUserId,
+        ),
+      );
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.get('/staff-roster', requirePermission('tables.manage'), (_req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    res.json({ ...readTableStaffRoster(db), store_timezone: storeTimezone(db) });
+  } catch (error: unknown) {
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/staff-roster', requirePermission('tables.manage'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const input = validateTableStaffRoster(db, req.body);
+    if (!input.ok) return res.status(400).json({ code: input.code, error: input.error });
+    const actorUserId = (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
+    const { roster, changes } = saveTableStaffRoster(db, input, actorUserId);
+    res.json({ ...roster, store_timezone: storeTimezone(db), changes: changes.length });
+  } catch (error: unknown) {
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/staff-tables', requirePermission('tables.manage'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const input = validateStaffTables(db, req.body);
+    if (!input.ok) return res.status(400).json({ code: input.code, error: input.error });
+    const actorUserId = (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
+    const changes = assignStaffTables(db, input, actorUserId);
+    res.json({
+      ...readTableStaffRoster(db),
+      store_timezone: storeTimezone(db),
+      changes: changes.length,
+    });
+  } catch (error: unknown) {
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.put('/zone-owner', requirePermission('tables.manage'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
@@ -1187,6 +1291,30 @@ router.post(
     }
   },
 );
+
+// Past orders keep their table_id; they lose the table name once its row is gone.
+router.delete('/:id', requirePermission('tables.manage'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const table = db.prepare('SELECT id FROM tables WHERE id = ?').get(req.params.id);
+    if (!table) {
+      return res.status(404).json({ code: 'TABLE_NOT_FOUND', error: 'Table not found' });
+    }
+    const heldOrder = db.prepare('SELECT 1 FROM held_orders WHERE table_id = ?').get(req.params.id);
+    if (heldOrder || activeOrderForTable(db, req.params.id as string)) {
+      return res.status(409).json({
+        code: 'TABLE_HAS_ACTIVE_ORDER',
+        error: 'Cannot delete table with active orders',
+      });
+    }
+    db.prepare('DELETE FROM tables WHERE id = ?').run(req.params.id);
+    res.json({ deleted: req.params.id });
+  } catch (error: unknown) {
+    res.locals.postHogError = error;
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 router.post(
   '/:id/reactivate',
