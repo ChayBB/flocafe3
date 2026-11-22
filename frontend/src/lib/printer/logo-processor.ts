@@ -20,6 +20,8 @@ const MAX_PERSISTED_LOGO_LENGTH = 250_000;
 const TARGET_DATA_URL_LENGTH = 200_000;
 const MAX_SOURCE_DIMENSION = 2048;
 const MAX_TARGET_HEIGHT = 240;
+// Receipt logos print 2.2x their natural size (height capped at MAX_TARGET_HEIGHT), up to paper width.
+const RECEIPT_LOGO_SCALE = 2.2;
 const TRIM_MARGIN_PX = 4;
 const TARGET_WIDTHS = [384, 576] as const;
 const SUPPORTED_IMAGE_EXT_RE = /\.(png|jpe?g|webp|bmp|gif|svg|avif|ico)$/i;
@@ -80,9 +82,12 @@ function renderDitheredVariant(
   crop: { x: number; y: number; width: number; height: number },
   targetWidth: number,
 ): { variant: PackedLogoVariant; dithered: Uint8Array; width: number; height: number } {
-  const scale = Math.min(1, targetWidth / crop.width, MAX_TARGET_HEIGHT / crop.height);
+  const scale = Math.min(
+    RECEIPT_LOGO_SCALE * Math.min(1, MAX_TARGET_HEIGHT / crop.height),
+    targetWidth / crop.width,
+  );
   const width = Math.max(1, Math.min(targetWidth, Math.round(crop.width * scale)));
-  const height = Math.max(1, Math.min(MAX_TARGET_HEIGHT, Math.round(crop.height * scale)));
+  const height = Math.max(1, Math.round(crop.height * scale));
 
   const canvas = document.createElement('canvas');
   canvas.width = width;

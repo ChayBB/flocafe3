@@ -441,16 +441,22 @@ export function formatCompactReceiptLegacy(
         '{/BOLD}{/CENTER}',
     );
   lines.push(bar);
-  lines.push(
-    printLabel(lang, 'receipt.billNumber') + ': ' + (bill.bill_number || order.order_number),
+  const billLine =
+    printLabel(lang, 'receipt.billNumber') + ': ' + (bill.bill_number || order.order_number);
+  const dateValue =
+    date.toLocaleDateString(locale + '-u-nu-latn', tzOptions) +
+    ' ' +
+    date.toLocaleTimeString(locale + '-u-nu-latn', tzOptions);
+  const labelledDate = printLabel(lang, 'receipt.date') + ': ' + dateValue;
+  const rowDate = [labelledDate, dateValue].find(
+    (right) => billLine.length + 1 + right.length <= cols,
   );
-  lines.push(
-    printLabel(lang, 'receipt.date') +
-      ': ' +
-      date.toLocaleDateString(locale + '-u-nu-latn', tzOptions) +
-      ' ' +
-      date.toLocaleTimeString(locale + '-u-nu-latn', tzOptions),
-  );
+  if (rowDate !== undefined) {
+    lines.push(billLine.padEnd(cols - rowDate.length) + rowDate);
+  } else {
+    lines.push(billLine);
+    lines.push(labelledDate);
+  }
   if (biz.show_table_number !== false && order.table?.name)
     lines.push(truncateShapedLine(formatTableLabel(order.table.name, lang), cols, arabicShaping));
   if (biz.show_customer_name !== false && biz.customer_name)

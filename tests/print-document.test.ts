@@ -1343,11 +1343,9 @@ console.log('\n▶ Large bold Order Number banner on customer receipts');
   const classicDisabled = renderBillDocumentToClassicLines(disabledDoc, renderOpts);
   assert(
     classicEnabled.some((line) =>
-      line.includes(
-        '{CENTER}{BOLD}{DOUBLE_HEIGHT}{DOUBLE_WIDTH}#0012{/DOUBLE_WIDTH}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}',
-      ),
+      line.includes('{CENTER}{BOLD}{FONT_B}#0012{/FONT_B}{/BOLD}{/CENTER}'),
     ),
-    'classic thermal receipt emits centered bold double-size #0012 banner when enabled',
+    'classic thermal receipt emits centered bold Font B #0012 banner when enabled',
   );
   assert(
     !classicEnabled.some((line) => line.includes('ORDER #')),
@@ -1358,7 +1356,7 @@ console.log('\n▶ Large bold Order Number banner on customer receipts');
     'classic thermal receipt keeps INV-PARITY-001 invoice line alongside #0012 banner',
   );
   assert(
-    !classicDisabled.some((line) => line.includes('{DOUBLE_HEIGHT}{DOUBLE_WIDTH}#0012')),
+    !classicDisabled.some((line) => line.includes('#0012{/FONT_B}')),
     'classic thermal receipt omits # banner when showLargeOrderNumber is false',
   );
 
@@ -1369,9 +1367,7 @@ console.log('\n▶ Large bold Order Number banner on customer receipts');
   });
   assert(
     classicGermanEnabled.some((line) =>
-      line.includes(
-        '{CENTER}{BOLD}{DOUBLE_HEIGHT}{DOUBLE_WIDTH}#0012{/DOUBLE_WIDTH}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}',
-      ),
+      line.includes('{CENTER}{BOLD}{FONT_B}#0012{/FONT_B}{/BOLD}{/CENTER}'),
     ) && !classicGermanEnabled.some((line) => line.includes('ORDER #')),
     'classic German thermal receipt emits language-neutral #0012 banner without English ORDER #',
   );
@@ -1380,21 +1376,19 @@ console.log('\n▶ Large bold Order Number banner on customer receipts');
   const compactDisabled = renderBillDocumentToCompactLines(disabledDoc, renderOpts);
   assert(
     compactEnabled.some((line) =>
-      line.includes(
-        '{CENTER}{BOLD}{DOUBLE_HEIGHT}{DOUBLE_WIDTH}#0012{/DOUBLE_WIDTH}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}',
-      ),
+      line.includes('{CENTER}{BOLD}{FONT_B}#0012{/FONT_B}{/BOLD}{/CENTER}'),
     ),
-    'compact thermal receipt emits centered bold double-size #0012 banner when enabled',
+    'compact thermal receipt emits centered bold Font B #0012 banner when enabled',
   );
   assert(
     !compactEnabled.some((line) => line.includes('ORDER #')),
     'compact thermal receipt uses language-neutral # banner without hardcoded English ORDER #',
   );
   assert(
-    !compactDisabled.some((line) => line.includes('{DOUBLE_HEIGHT}{DOUBLE_WIDTH}#0012')),
+    !compactDisabled.some((line) => line.includes('#0012{/FONT_B}')),
     'compact thermal receipt omits # banner when showLargeOrderNumber is false',
   );
-  ok('backend document-classic and document-compact render/omit large bold # banner');
+  ok('backend document-classic and document-compact render/omit small bold # banner');
 
   // Frontend ESC/POS encoders (classic, compact, detailed, tax-bill) and HTML web-print.
   const feBill: any = {
@@ -1529,7 +1523,7 @@ console.log('\n▶ Large bold Order Number banner on customer receipts');
       !htmlOff.includes('ORDER #'),
     'generateBillHtml omits .order-number-banner when showLargeOrderNumber is false',
   );
-  ok('frontend thermal encoders and browser HTML receipt render/omit large bold # banner');
+  ok('frontend thermal encoders and browser HTML receipt render/omit small bold # banner');
 }
 
 console.log(`\nPrintDocument unit tests: ${passed} checks passed.`);

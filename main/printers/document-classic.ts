@@ -691,24 +691,12 @@ export function renderBillDocumentToClassicLines(
         pushPlain(dash, dash);
         const cleanOrderNumber = block.orderNumber?.text.trim().replace(/^#/, '') ?? '';
         if (block.showLargeOrderNumber === true && cleanOrderNumber.length > 0) {
+          // The bill's order number prints small and bold; the kitchen ticket keeps the large one.
           const orderBannerText = `#${cleanOrderNumber}`;
-          const layout = layoutStyledUnit(
-            { text: orderBannerText, widthMultiplier: 2, field: 'order number banner' },
-            {
-              logicalColumns: cols,
-              direction: 'ltr',
-              languages: document.languages,
-              capabilities: options.capabilities,
-            },
+          pushPlain(
+            `{CENTER}{BOLD}{FONT_B}${normalize(orderBannerText)}{/FONT_B}{/BOLD}{/CENTER}`,
+            orderBannerText,
           );
-          const widthToken = layout.widthMultiplier === 2 ? '{DOUBLE_WIDTH}' : '';
-          const closeWidthToken = layout.widthMultiplier === 2 ? '{/DOUBLE_WIDTH}' : '';
-          for (const bannerLine of layout.lines) {
-            pushPlain(
-              `{CENTER}{BOLD}{DOUBLE_HEIGHT}${widthToken}${normalize(bannerLine)}${closeWidthToken}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}`,
-              bannerLine,
-            );
-          }
         }
         const defaultTitle =
           block.title.conceptId === 'print.taxInvoiceTitle'
@@ -743,14 +731,23 @@ export function renderBillDocumentToClassicLines(
             ' ' +
             date.toLocaleTimeString(dateLocale, clock)
           : namedMonth;
-        // The date shares the bill-number row on the right. When both do not fit, the label keeps
-        // the date's row and the bill number moves whole to the next line, never split mid-number.
+        // The date shares the bill-number row on the right, dropping the labels when the row is
+        // tight. Only when even the bare number and date do not fit does the label keep the date's
+        // row and the bill number move whole to the next line, never split mid-number.
         const billLabel = labelOf(block.billNumberLabel);
-        const billNumberText = billLabel + ' ' + block.invoiceNumber.text;
-        const dateText = labelOf(block.dateLabel) + ' ' + printedDate;
-        const fitsOneRow =
-          displayCellWidth(billNumberText) + 1 + displayCellWidth(dateText) <= cols;
-        const rowLeft = fitsOneRow ? billNumberText : billLabel;
+        const labelledDate = labelOf(block.dateLabel) + ' ' + printedDate;
+        const fits = (left: string, right: string) =>
+          displayCellWidth(left) + 1 + displayCellWidth(right) <= cols;
+        const oneRow = (
+          [
+            [billLabel + ' ' + block.invoiceNumber.text, labelledDate],
+            [billLabel + ' ' + block.invoiceNumber.text, printedDate],
+            [block.invoiceNumber.text, printedDate],
+          ] as const
+        ).find(([left, right]) => fits(left, right));
+        const fitsOneRow = oneRow !== undefined;
+        const rowLeft = oneRow?.[0] ?? billLabel;
+        const dateText = oneRow?.[1] ?? labelledDate;
         const rowStart = segment.main.length;
         segment.main.push(
           ...splitRowLines(normalize(rowLeft), normalize(dateText), cols, options.capabilities),

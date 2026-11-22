@@ -34,6 +34,7 @@ import {
   pushCenteredWrapped,
   pushWrapped,
   resolveCurrencyPrefix,
+  splitRowLines,
   taxBreakdownRows,
   truncate,
   truncateShapedLine,
@@ -285,33 +286,31 @@ export function renderBillDocumentToCompactLines(
     const cleanOrderNumber = meta.orderNumber?.text.trim().replace(/^#/, '') ?? '';
     if (meta.showLargeOrderNumber === true && cleanOrderNumber.length > 0) {
       const orderBannerText = `#${cleanOrderNumber}`;
-      const layout = layoutStyledUnit(
-        { text: orderBannerText, widthMultiplier: 2, field: 'order number banner' },
-        {
-          logicalColumns: cols,
-          direction: 'ltr',
-          languages: document.languages,
-          capabilities: options.capabilities,
-        },
-      );
-      const widthToken = layout.widthMultiplier === 2 ? '{DOUBLE_WIDTH}' : '';
-      const closeWidthToken = layout.widthMultiplier === 2 ? '{/DOUBLE_WIDTH}' : '';
-      for (const bannerLine of layout.lines) {
-        lines.push(
-          `{CENTER}{BOLD}{DOUBLE_HEIGHT}${widthToken}${normalize(bannerLine)}${closeWidthToken}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}`,
-        );
-        metaSourceLines.push(bannerLine);
-      }
+      lines.push(`{CENTER}{BOLD}{FONT_B}${normalize(orderBannerText)}{/FONT_B}{/BOLD}{/CENTER}`);
+      metaSourceLines.push(orderBannerText);
     }
-    lines.push(normalize(labelOf(meta.billNumberLabel) + ': ' + meta.invoiceNumber.text));
-    metaSourceLines.push(labelOf(meta.billNumberLabel) + ': ' + meta.invoiceNumber.text);
+    const billText = labelOf(meta.billNumberLabel) + ': ' + meta.invoiceNumber.text;
     const date = parseDbTimestamp(meta.timestamp.text);
     const dateText =
       date.toLocaleDateString(options.locale + '-u-nu-latn', tzOptions) +
       ' ' +
       date.toLocaleTimeString(options.locale + '-u-nu-latn', tzOptions);
-    lines.push(normalize(labelOf(meta.dateLabel) + ': ' + dateText));
-    metaSourceLines.push(labelOf(meta.dateLabel) + ': ' + dateText);
+    const labelledDate = labelOf(meta.dateLabel) + ': ' + dateText;
+    // The date shares the bill-number row, dropping its label when the row is tight.
+    const rowDate = [labelledDate, dateText].find(
+      (right) => displayCellWidth(billText) + 1 + displayCellWidth(right) <= cols,
+    );
+    if (rowDate !== undefined) {
+      lines.push(
+        ...splitRowLines(normalize(billText), normalize(rowDate), cols, options.capabilities),
+      );
+      metaSourceLines.push(billText + ' ' + rowDate);
+    } else {
+      lines.push(normalize(billText));
+      metaSourceLines.push(billText);
+      lines.push(normalize(labelledDate));
+      metaSourceLines.push(labelledDate);
+    }
     if (meta.table) {
       lines.push(
         truncateShapedLine(
