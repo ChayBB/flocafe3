@@ -22,7 +22,7 @@ import {
   type RasterSemanticLineGroup,
   type RasterTextLayout,
 } from '../../shared/print/raster';
-import { getLogoRasterBands } from '../../shared/print/image-raster';
+import { getLogoRasterBands, RECEIPT_LOGO_PRINT_SCALE } from '../../shared/print/image-raster';
 import {
   displayCellWidth,
   padToDisplayCells,
@@ -575,7 +575,12 @@ export function renderBillDocumentToClassicLines(
             (logoCapabilities?.raster?.widthDots ?? (cols <= 32 ? 384 : 576)) +
             2 * (logoCapabilities?.sideMarginDots ?? 0);
           const maxBandHeight = logoCapabilities?.raster?.maxBandHeight ?? 200;
-          const bands = getLogoRasterBands(block.logoRaster, widthDots, maxBandHeight);
+          const bands = getLogoRasterBands(
+            block.logoRaster,
+            widthDots,
+            maxBandHeight,
+            RECEIPT_LOGO_PRINT_SCALE,
+          );
           if (bands.length > 0) {
             const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
             segment.main.push(`{RAW_BYTES:${Buffer.from(rawBytes).toString('base64')}}`);
@@ -583,7 +588,7 @@ export function renderBillDocumentToClassicLines(
         }
         if (block.name) {
           segment.main.push(
-            '{STORE_NAME}{CENTER}{BOLD}{DOUBLE_HEIGHT}{DOUBLE_WIDTH}' +
+            '{STORE_NAME}{CENTER}{BOLD}{FONT_B}{DOUBLE_HEIGHT}{DOUBLE_WIDTH}' +
               truncateShapedLine(
                 block.name.text,
                 Math.floor(cols / 2),
@@ -591,7 +596,7 @@ export function renderBillDocumentToClassicLines(
                 options.language,
                 options.capabilities,
               ) +
-              '{/DOUBLE_WIDTH}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}',
+              '{/DOUBLE_WIDTH}{/DOUBLE_HEIGHT}{/FONT_B}{/BOLD}{/CENTER}',
           );
           segment.sourceLines.main.push(block.name.text);
           segment.sourceControlLines.main.push(segment.main.at(-1) ?? '');
@@ -691,10 +696,10 @@ export function renderBillDocumentToClassicLines(
         pushPlain(dash, dash);
         const cleanOrderNumber = block.orderNumber?.text.trim().replace(/^#/, '') ?? '';
         if (block.showLargeOrderNumber === true && cleanOrderNumber.length > 0) {
-          // The bill's order number prints small and bold; the kitchen ticket keeps the large one.
+          // The bill's order number prints bold in tall Font B; the kitchen ticket keeps the large one.
           const orderBannerText = `#${cleanOrderNumber}`;
           pushPlain(
-            `{CENTER}{BOLD}{FONT_B}${normalize(orderBannerText)}{/FONT_B}{/BOLD}{/CENTER}`,
+            `{CENTER}{BOLD}{FONT_B}{DOUBLE_HEIGHT}${normalize(orderBannerText)}{/DOUBLE_HEIGHT}{/FONT_B}{/BOLD}{/CENTER}`,
             orderBannerText,
           );
         }

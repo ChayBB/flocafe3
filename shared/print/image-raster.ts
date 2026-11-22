@@ -10,6 +10,8 @@ import { type RasterBand, DEFAULT_RASTER_MAX_BAND_HEIGHT } from './raster';
 const MAX_LOGO_RASTER_JSON_LENGTH = 250_000;
 const MAX_LOGO_WIDTH_DOTS = 576;
 const MAX_LOGO_HEIGHT_DOTS = 0xffff;
+/** Receipt logos print at twice their stored size. */
+export const RECEIPT_LOGO_PRINT_SCALE = 2;
 
 export interface PackedLogoVariant {
   readonly width: number;
@@ -297,13 +299,33 @@ export function centerPixels(
   return padded;
 }
 
+function upscalePixels(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  factor: number,
+): Uint8Array {
+  if (factor === 1) return pixels;
+  const outWidth = width * factor;
+  const out = new Uint8Array(outWidth * height * factor);
+  for (let y = 0; y < height * factor; y += 1) {
+    const srcRow = Math.floor(y / factor) * width;
+    for (let x = 0; x < outWidth; x += 1) {
+      out[y * outWidth + x] = pixels[srcRow + Math.floor(x / factor)];
+    }
+  }
+  return out;
+}
+
 /**
  * Parse and resolve raster bands for the target printer width from stored logo data.
+ * `scale` enlarges the logo by a whole-number factor, never past the paper width.
  */
 export function getLogoRasterBands(
   storedLogoData: ReceiptLogoData | string | null | undefined,
   targetWidthDots: number,
   maxBandHeight = DEFAULT_RASTER_MAX_BAND_HEIGHT,
+  scale = 1,
 ): RasterBand[] {
   if (
     !storedLogoData ||
@@ -349,11 +371,22 @@ export function getLogoRasterBands(
     }
     if (packed.length !== Math.ceil(variant.width / 8) * variant.height) return [];
 
-    const unpacked = unpack1BitPixels(packed, variant.width, variant.height);
-    const centered = centerPixels(unpacked, variant.width, variant.height, targetWidthDots);
+    const factor = Math.max(
+      1,
+      Math.min(Math.floor(scale), Math.floor(targetWidthDots / variant.width)),
+    );
+    const width = variant.width * factor;
+    const height = variant.height * factor;
+    const unpacked = upscalePixels(
+      unpack1BitPixels(packed, variant.width, variant.height),
+      variant.width,
+      variant.height,
+      factor,
+    );
+    const centered = centerPixels(unpacked, width, height, targetWidthDots);
     const bands: RasterBand[] = [];
-    for (let row = 0; row < variant.height; row += maxBandHeight) {
-      const heightDots = Math.min(maxBandHeight, variant.height - row);
+    for (let row = 0; row < height; row += maxBandHeight) {
+      const heightDots = Math.min(maxBandHeight, height - row);
       bands.push({
         widthDots: targetWidthDots,
         heightDots,

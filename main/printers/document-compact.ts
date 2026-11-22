@@ -15,7 +15,7 @@ import {
   type RasterSemanticLineGroup,
   type RasterTextLayout,
 } from '../../shared/print/raster';
-import { getLogoRasterBands } from '../../shared/print/image-raster';
+import { getLogoRasterBands, RECEIPT_LOGO_PRINT_SCALE } from '../../shared/print/image-raster';
 import {
   displayCellWidth,
   padToDisplayCells,
@@ -252,7 +252,12 @@ export function renderBillDocumentToCompactLines(
   ) {
     const widthDots = logoCapabilities?.raster?.widthDots ?? (cols <= 32 ? 384 : 576);
     const maxBandHeight = logoCapabilities?.raster?.maxBandHeight ?? 200;
-    const bands = getLogoRasterBands(header.logoRaster, widthDots, maxBandHeight);
+    const bands = getLogoRasterBands(
+      header.logoRaster,
+      widthDots,
+      maxBandHeight,
+      RECEIPT_LOGO_PRINT_SCALE,
+    );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
       lines.push(`{RAW_BYTES:${Buffer.from(rawBytes).toString('base64')}}`);
@@ -286,7 +291,9 @@ export function renderBillDocumentToCompactLines(
     const cleanOrderNumber = meta.orderNumber?.text.trim().replace(/^#/, '') ?? '';
     if (meta.showLargeOrderNumber === true && cleanOrderNumber.length > 0) {
       const orderBannerText = `#${cleanOrderNumber}`;
-      lines.push(`{CENTER}{BOLD}{FONT_B}${normalize(orderBannerText)}{/FONT_B}{/BOLD}{/CENTER}`);
+      lines.push(
+        `{CENTER}{BOLD}{FONT_B}{DOUBLE_HEIGHT}${normalize(orderBannerText)}{/DOUBLE_HEIGHT}{/FONT_B}{/BOLD}{/CENTER}`,
+      );
       metaSourceLines.push(orderBannerText);
     }
     const billText = labelOf(meta.billNumberLabel) + ': ' + meta.invoiceNumber.text;

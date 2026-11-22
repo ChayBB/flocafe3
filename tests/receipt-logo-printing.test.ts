@@ -19,6 +19,7 @@ import {
   ditherGrayscalePixels,
   centerPixels,
   getLogoRasterBands,
+  RECEIPT_LOGO_PRINT_SCALE,
   parseReceiptLogoData,
   findLogoContentBounds,
   normalizeGrayscaleContrast,
@@ -167,6 +168,30 @@ async function run() {
   });
   const tallBands = getLogoRasterBands(tallLogo, 576);
   assertEqualOrThrow(tallBands.length, 2, 'Tall logos should be split into bounded bands');
+
+  const smallPixels = new Uint8Array(100 * 50);
+  smallPixels[0] = 1;
+  const smallLogo = JSON.stringify({
+    version: 1,
+    originalDataUrl: logoUrl,
+    variants: {
+      '384': {
+        width: 100,
+        height: 50,
+        dataBase64: uint8ToBase64(pack1BitPixels(smallPixels, 100, 50)),
+      },
+    },
+  });
+  const doubled = getLogoRasterBands(smallLogo, 384, 200, 2);
+  assertEqualOrThrow(doubled[0].heightDots, 100, 'A 2x print scale doubles the logo height');
+  const left = (384 - 200) / 2;
+  assertEqualOrThrow(doubled[0].pixels[left + 1], 1, 'A 2x print scale doubles each pixel across');
+  assertEqualOrThrow(doubled[0].pixels[384 + left], 1, 'A 2x print scale doubles each pixel down');
+  assertEqualOrThrow(
+    getLogoRasterBands(smallLogo, 384, 200, 4)[0].heightDots,
+    150,
+    'The print scale stops at the paper width',
+  );
   assertEqualOrThrow(
     tallBands[0].heightDots,
     200,
@@ -529,7 +554,12 @@ async function run() {
       modes: ['mixed', 'whole-receipt'] as const,
     },
   };
-  const expectedLogoBands = getLogoRasterBands(decoupledLogoJson, 384, 200);
+  const expectedLogoBands = getLogoRasterBands(
+    decoupledLogoJson,
+    384,
+    200,
+    RECEIPT_LOGO_PRINT_SCALE,
+  );
   const expectedLogoGsV0 = Buffer.from(
     concatBytes(expectedLogoBands.map((band) => encodeGsV0Band(band, 200))),
   );
