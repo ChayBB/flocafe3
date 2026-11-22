@@ -767,7 +767,8 @@ export default function ProductGrid({
                 alt={product.name}
                 loading="lazy"
                 decoding="async"
-                className="absolute inset-0 w-full h-full object-cover rounded-lg"
+                draggable={false}
+                className="pointer-events-none select-none [-webkit-touch-callout:none] absolute inset-0 w-full h-full object-cover rounded-lg"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
                 }}

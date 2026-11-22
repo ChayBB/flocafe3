@@ -341,7 +341,8 @@ function ItemThumb({
           alt=""
           loading="lazy"
           onError={() => setFailed(true)}
-          className="absolute inset-0 h-full w-full object-cover"
+          draggable={false}
+          className="pointer-events-none select-none [-webkit-touch-callout:none] absolute inset-0 h-full w-full object-cover"
         />
       )}
     </div>
