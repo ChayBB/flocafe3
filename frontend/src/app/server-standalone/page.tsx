@@ -83,6 +83,7 @@ import type {
 import { cartItemToOrderItem } from '@/lib/cart-order-item';
 import { playSoundFile, unlockKdsAlertSound } from '@/lib/kds-alert-sound';
 import { kdsItemLine } from '@/lib/item-options-note';
+import { blockLongPressMenu } from '@/lib/block-long-press-menu';
 
 const SERVE_CONFIRM_BELL = '/sounds/serve-confirm-bell.wav';
 
@@ -362,6 +363,7 @@ export default function ServerStandalonePage() {
     document.documentElement.classList.add('theme-server-app');
     return () => document.documentElement.classList.remove('theme-server-app');
   }, []);
+  useEffect(() => blockLongPressMenu(), []);
   // undefined while rendering on the server; null when the address carries no QR table.
   const guestTableId = useSyncExternalStore(
     subscribeToNothing,
