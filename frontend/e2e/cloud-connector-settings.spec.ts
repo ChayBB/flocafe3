@@ -44,7 +44,9 @@ test('a new branch connects with a one-time pairing code', async ({ page }) => {
 
   await page.goto(`${E2E_BASE_URL}/settings?tab=orderflow`);
   const connector = page.getByTestId('settings-qr-cloud');
-  await expect(connector.getByRole('heading', { name: 'Connect this POS to Cloud QR Ordering' })).toBeVisible();
+  await expect(
+    connector.getByRole('heading', { name: 'Connect this POS to Cloud QR Ordering' }),
+  ).toBeVisible();
   await expect(connector.getByTestId('qc-url')).toHaveCount(0);
   const code = connector.getByTestId('qc-pair-code');
   const submit = connector.getByTestId('qc-pair-submit');
@@ -57,8 +59,13 @@ test('a new branch connects with a one-time pairing code', async ({ page }) => {
     'This code is wrong, already used, or expired. Ask for a new code.',
   );
   await code.press('Enter');
-  await expect(connector.getByTestId('qc-paired-branch')).toHaveText('Connected to Kuk Nop · Hat Yai');
+  await expect(connector.getByTestId('qc-paired-branch')).toHaveText(
+    'Connected to Kuk Nop · Hat Yai',
+  );
   await expect(connector.getByTestId('qc-pair-code')).toHaveCount(0);
+  // A paired connector hides the manual token and private CA controls.
+  await expect(connector.getByText('Enter a token or manage the CA manually')).toHaveCount(0);
+  await expect(connector.getByTestId('qc-token-input')).toHaveCount(0);
   expect(codes).toEqual(['KN7Q-4M2X', 'KN7Q-4M2X']);
 });
 
@@ -320,7 +327,9 @@ test('setup activation enforces permission and a fixed body', async ({ request }
   expect(await unknownField.json()).toMatchObject({ code: 'legacy_request_invalid' });
 });
 
-test('a pending cutover hold needs confirmation, then tests and starts polling', async ({ page }) => {
+test('a pending cutover hold needs confirmation, then tests and starts polling', async ({
+  page,
+}) => {
   await page.goto(`${E2E_BASE_URL}/auth/login`);
   await page.getByLabel('Email').fill('owner@flo.local');
   await page.getByLabel('Password').fill(E2E_PASSWORD);
@@ -343,9 +352,7 @@ test('a pending cutover hold needs confirmation, then tests and starts polling',
     has_token: true,
     cutover_pending: cutoverPending,
   });
-  await page.route(connectorApi, (route) =>
-    route.fulfill({ json: { config: current(), status } }),
-  );
+  await page.route(connectorApi, (route) => route.fulfill({ json: { config: current(), status } }));
   await page.route(`${connectorApi}/activate`, (route) => {
     expect(route.request().postDataJSON()).toEqual({ confirm_legacy_stopped: true });
     activationCount += 1;
@@ -356,7 +363,9 @@ test('a pending cutover hold needs confirmation, then tests and starts polling',
   });
 
   await page.goto(`${E2E_BASE_URL}/settings?tab=orderflow`);
-  await expect(page.getByRole('region', { name: 'Import settings from the legacy Connector' })).toHaveCount(0);
+  await expect(
+    page.getByRole('region', { name: 'Import settings from the legacy Connector' }),
+  ).toHaveCount(0);
   const verify = page.getByTestId('qc-setup-activate');
   await expect(verify).toBeDisabled();
   await page

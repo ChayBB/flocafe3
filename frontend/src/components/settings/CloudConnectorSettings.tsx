@@ -505,11 +505,11 @@ export function CloudConnectorSettings({
   const currentState = status?.state ?? 'DISABLED';
   const pairingFirst = Boolean(
     config &&
-      mode === 'integrated' &&
-      !config.enabled &&
-      !config.cutover_pending &&
-      !setupOpen &&
-      !manualSetup,
+    mode === 'integrated' &&
+    !config.enabled &&
+    !config.cutover_pending &&
+    !setupOpen &&
+    !manualSetup,
   );
 
   const inboxSummary = status?.inbox;
@@ -707,7 +707,8 @@ export function CloudConnectorSettings({
         </div>
       )}
 
-      {config && (showSetup || config.enabled) && (
+      {/* A paired connector needs no manual token or private CA; they appear only in manual setup. */}
+      {config && showSetup && (
         <section className="space-y-3">
           {!config.enabled && <h4 className="text-sm font-semibold">{t('qcSetupStep2')}</h4>}
           {mode === 'integrated' && (
