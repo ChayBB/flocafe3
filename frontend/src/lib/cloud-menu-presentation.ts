@@ -151,11 +151,19 @@ export function presentCloudMenu(items: CloudMenuItem[], snapshot?: PosMenuPrese
       });
     }
   }
+  // The Cloud names a variant "Product – Variant"; a snapshot older than the variant still groups it.
+  const variantKeys = (category: string | null, name: string) =>
+    items
+      .filter((item) => (item.category ?? null) === category && item.name.startsWith(`${name} – `))
+      .map((item) => key(category, item.name));
   const entries = (product: PosMenuPresentation['products'][number]) => {
     const category = names.get(product.categoryId ?? '') ?? null;
-    return product.variants.length
-      ? product.variants.map((variant) => key(category, `${product.name} – ${variant.name}`))
-      : [key(category, product.name)];
+    if (product.variants.length)
+      return product.variants.map((variant) => key(category, `${product.name} – ${variant.name}`));
+    const plain = key(category, product.name);
+    if (candidates.has(plain)) return [plain];
+    const variants = variantKeys(category, product.name);
+    return variants.length ? [...new Set(variants)] : [plain];
   };
   for (const product of snapshot?.products ?? []) {
     for (const match of entries(product)) claimed.set(match, (claimed.get(match) ?? 0) + 1);
@@ -175,9 +183,26 @@ export function presentCloudMenu(items: CloudMenuItem[], snapshot?: PosMenuPrese
     lines.forEach((item) => used.add(item.id));
     add(product.id, product.name, product.categoryId, lines, product);
   }
+  // Dishes missing from the snapshot group their variants by the "Product – Variant" name.
+  const leftover = new Map<string, CloudMenuItem[]>();
   for (const item of items) {
-    if (!used.has(item.id))
-      add(item.id, item.name, byName.get(item.category ?? '') ?? null, [item]);
+    if (used.has(item.id)) continue;
+    const cut = item.name.indexOf(' – ');
+    const base = cut > 0 ? item.name.slice(0, cut) : item.name;
+    const match = key(item.category ?? null, base);
+    leftover.set(match, [...(leftover.get(match) ?? []), item]);
+  }
+  for (const [match, lines] of leftover) {
+    const [category, base] = JSON.parse(match) as [string | null, string];
+    const groups = new Set(
+      lines
+        .filter((item) => item.price_satang > 0)
+        .map((item) => JSON.stringify(item.addon_groups ?? [])),
+    );
+    const grouped =
+      lines.length > 1 && lines.every((item) => item.name !== base) && groups.size <= 1;
+    for (const line of grouped ? [lines] : lines.map((item) => [item]))
+      add(line[0].id, grouped ? base : line[0].name, byName.get(category ?? '') ?? null, line);
   }
   return { categories, products, images, itemById, orderItemIds };
 }

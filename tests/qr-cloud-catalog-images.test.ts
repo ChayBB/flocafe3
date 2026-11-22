@@ -127,15 +127,24 @@ function verifyCatalog() {
   const group = db.prepare('INSERT INTO addon_groups (id, name, kitchen_price) VALUES (?, ?, ?)');
   group.run('g-weight', 'ราคาตามน้ำหนัก', 0);
   group.run('g-kitchen', 'ครัวตั้งราคา', 1);
-  const link = db.prepare('INSERT INTO addon_group_product (product_id, addon_group_id) VALUES (?, ?)');
+  const link = db.prepare(
+    'INSERT INTO addon_group_product (product_id, addon_group_id) VALUES (?, ?)',
+  );
   link.run('p-fish', 'g-weight');
   link.run('p-fish-ask', 'g-weight');
   link.run('p-special', 'g-weight');
   link.run('p-special', 'g-kitchen');
   const weighed = new Map(
-    buildCloudCatalog().items.map((item: { pos_product_id: string }) => [item.pos_product_id, item]),
+    buildCloudCatalog().items.map((item: { pos_product_id: string }) => [
+      item.pos_product_id,
+      item,
+    ]),
   );
-  assertEqualOrThrow(weighed.get('p-fish').price_unit, 'kg', 'a weight-priced item is priced per kg');
+  assertEqualOrThrow(
+    weighed.get('p-fish').price_unit,
+    'kg',
+    'a weight-priced item is priced per kg',
+  );
   assertEqualOrThrow(weighed.get('p-fish').price_satang, 18000, 'the per-kg price is published');
   assertOrThrow(!('addon_groups' in weighed.get('p-fish')), 'the empty weight group stays out');
   assertOrThrow(!('price_unit' in weighed.get('p-fish-ask')), 'an ask-staff item has no unit');
@@ -250,6 +259,39 @@ function verifyGuestMenu() {
   );
 }
 
+function verifyGuestMenuVariants() {
+  const snapshot = {
+    categories: [],
+    popular: [],
+    products: [{ id: 'p-brandy', name: 'Brandy', categoryId: null, tags: [], variants: [] }],
+  };
+  const { products } = presentCloudMenu(
+    [
+      { id: 'c-round', name: 'Brandy – Round', category: null, price_satang: 70000 },
+      { id: 'c-flat', name: 'Brandy – Flat', category: null, price_satang: 45000 },
+      { id: 'c-small', name: 'Beer – Small', category: null, price_satang: 9000 },
+      { id: 'c-large', name: 'Beer – Large', category: null, price_satang: 15000 },
+      { id: 'c-tea', name: 'Tea', category: null, price_satang: 4000 },
+    ],
+    snapshot,
+  );
+  const variantsOf = (name: string) =>
+    products
+      .find((product: { name: string }) => product.name === name)
+      ?.variants?.map((variant: { name: string }) => variant.name);
+  assertEqualOrThrow(
+    JSON.stringify(variantsOf('Brandy')),
+    JSON.stringify(['Round', 'Flat']),
+    'variants added after the snapshot still group under their dish',
+  );
+  assertEqualOrThrow(
+    JSON.stringify(variantsOf('Beer')),
+    JSON.stringify(['Small', 'Large']),
+    'a dish missing from the snapshot groups its variants by name',
+  );
+  assertEqualOrThrow(products.length, 3, 'variants never show as separate dishes');
+}
+
 async function main() {
   resetCounters();
   initDatabase();
@@ -257,6 +299,7 @@ async function main() {
   verifyCatalog();
   await verifyUpload();
   verifyGuestMenu();
+  verifyGuestMenuVariants();
   closeDatabase();
   fs.rmSync(tempRoot, { recursive: true, force: true });
   const results = getResults();

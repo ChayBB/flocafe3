@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { IntlProvider, useTranslations } from 'use-intl';
-import { Minus, Plus, Send, ShoppingCart, SquarePen, Trash2 } from 'lucide-react';
+import { Minus, Plus, QrCode, Send, ShoppingCart, SquarePen, Trash2 } from 'lucide-react';
+import QRCode from 'qrcode';
 import toast, { Toaster } from 'react-hot-toast';
 import ProductGrid from '@/components/pos/ProductGrid';
 import AddonModal from '@/components/pos/AddonModal';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { ServerAppHeader } from '@/components/server-app/ServerAppHeader';
+import { HEADER_WHITE_ACTION, ServerAppHeader } from '@/components/server-app/ServerAppHeader';
+import { holdDarkClass } from '@/lib/kds-screen-mode';
 import { ItemStatusBadge } from '@/components/server-app/ItemStatus';
 import { Ltr } from '@/components/layout/Ltr';
 import {
@@ -61,6 +63,57 @@ const plainAmount = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 })
 const assetUrl = (file: string) => new URL(file, import.meta.url).href;
 const brandingFile = /^branding\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/;
 const LANGUAGE_KEY = 'flocafe-guest-language';
+const DARK_KEY = 'flocafe-guest-dark';
+
+function readStored(key: string) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The choice still applies to this visit.
+  }
+}
+
+/** The table's own ordering link, so a guest can let others at the table scan it. */
+function tableLink() {
+  const table = new URLSearchParams(location.hash.slice(1)).get('table');
+  return table && uuid.test(table) ? `${location.origin}/#table=${table}` : null;
+}
+
+function TableQrDialog({
+  link,
+  title,
+  onClose,
+}: {
+  link: string;
+  title: string;
+  onClose: () => void;
+}) {
+  // The dialog mounts its content in a portal, so draw once the canvas is attached.
+  const canvas = useCallback(
+    (node: HTMLCanvasElement | null) => {
+      if (node)
+        void QRCode.toCanvas(node, link, { width: 280, margin: 2, errorCorrectionLevel: 'M' });
+    },
+    [link],
+  );
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent data-testid="cloud-table-qr" className="max-w-sm gap-4 rounded-2xl p-6">
+        <DialogTitle className="text-center text-lg font-bold">{title}</DialogTitle>
+        <DialogDescription className="sr-only">{link}</DialogDescription>
+        <canvas ref={canvas} className="mx-auto rounded-lg bg-white" />
+      </DialogContent>
+    </Dialog>
+  );
+}
 const lineKey = (line: Line) =>
   JSON.stringify([
     line.menu_item_id,
@@ -196,6 +249,9 @@ function Ordering({
   const [snapshot, setSnapshot] = useState<PosMenuPresentation>();
   const [branding, setBranding] = useState<Branding>({});
   const [tableName, setTableName] = useState('');
+  const [qrOpen, setQrOpen] = useState(false);
+  const [dark, setDark] = useState(() => readStored(DARK_KEY) === '1');
+  useEffect(() => holdDarkClass(dark), [dark]);
   const [category, setCategory] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Line[]>([]);
@@ -627,8 +683,32 @@ function Ordering({
         staffLoginLabel={t('staffButton')}
         onHistory={() => setOpen(true)}
         historyDisabled={!ready || expired}
-        staffButton={null}
+        dark={dark}
+        onDark={() => {
+          writeStored(DARK_KEY, dark ? '0' : '1');
+          setDark(!dark);
+        }}
+        staffButton={
+          <button
+            type="button"
+            onClick={() => setQrOpen(true)}
+            disabled={!tableLink()}
+            aria-label={t('showQr')}
+            data-testid="server-app-table-qr-button"
+            className={`${HEADER_WHITE_ACTION} min-w-0 max-w-[8rem] shrink! sm:max-w-[11rem]`}
+          >
+            <QrCode size={17} aria-hidden="true" className="shrink-0 text-brand" />
+            <span className="truncate">{t('showQr')}</span>
+          </button>
+        }
       />
+      {qrOpen && tableLink() && (
+        <TableQrDialog
+          link={tableLink()!}
+          title={t('tableLabel', { name: tableName || '—' })}
+          onClose={() => setQrOpen(false)}
+        />
+      )}
       <main className="mx-auto flex h-dvh max-w-5xl flex-col bg-background px-3 text-foreground">
         {status && (
           <p
@@ -999,12 +1079,8 @@ function Ordering({
 
 function App() {
   const [language, setLanguage] = useState<Language>(() => {
-    try {
-      const saved = localStorage.getItem(LANGUAGE_KEY);
-      return isLanguage(saved) ? saved : 'th';
-    } catch {
-      return 'th';
-    }
+    const saved = readStored(LANGUAGE_KEY);
+    return isLanguage(saved) ? saved : 'th';
   });
   const [english, setEnglish] = useState<Record<string, unknown>>();
   useEffect(() => {
@@ -1024,11 +1100,7 @@ function App() {
       <Ordering
         language={language}
         onLanguage={(next) => {
-          try {
-            localStorage.setItem(LANGUAGE_KEY, next);
-          } catch {
-            // The choice still applies to this visit.
-          }
+          writeStored(LANGUAGE_KEY, next);
           setLanguage(next);
         }}
       />
