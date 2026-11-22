@@ -141,7 +141,12 @@ test.describe('Server App tableside ordering', () => {
       await page
         .getByTestId('server-app-header')
         .screenshot({ path: test.info().outputPath(`header-${width}.png`) });
-      // The bottom row's Select Table opens the tables.
+      // Both open on the tables; on a phone, Select Table folds them away and shows them again.
+      await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
+      if (width < 768) {
+        await page.getByTestId('server-app-table-button').click();
+        await expect(page.getByTestId('server-app-table-picker')).toBeHidden();
+      }
       await page.getByTestId('server-app-table-button').click();
       await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
       await expect(page.getByPlaceholder('Staff name')).toHaveCount(0);
@@ -341,7 +346,9 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.getByRole('heading', { name: 'Tables' })).toHaveCount(0);
 
     const tokenBefore = await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY);
+    // With a table picked, Select Table drops it and shows the tables again.
     await picker.click();
+    await expect(pickedName).toHaveCount(0);
     await expect(page.getByRole('menu')).toHaveCount(0);
     await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
     await expect(page.getByPlaceholder('Staff name')).toHaveCount(0);
@@ -353,7 +360,8 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.getByTestId('server-app-table-picker')).toBeHidden();
     expect(await page.evaluate((key) => localStorage.getItem(key), TOKEN_KEY)).toBe(tokenBefore);
     await expect(page.locator('header')).toContainText(tableName);
-    await openServerAppTables(page);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
     const qr = page.getByTestId('server-app-table-qr-button');
     await expect(qr).toHaveCSS('background-color', / 0\.85\)$|, 0\.85\)$/);
     await expect(qr).toHaveCSS('border-width', '0px');

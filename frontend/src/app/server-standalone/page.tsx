@@ -96,6 +96,7 @@ type Table = {
   number?: string;
   status?: string;
   owner_user_id?: string | null;
+  backup_user_id?: string | null;
   activeOrder?: Order | null;
   current_order?: Order | null;
 };
@@ -350,6 +351,7 @@ export default function ServerStandalonePage() {
   const [user, setUser] = useState<User | null>(null);
   const [disabled, setDisabled] = useState(false);
   const [tablePickerOpen, setTablePickerOpen] = useState(true);
+  const [showBackupTables, setShowBackupTables] = useState(false);
   const [orderedItemsOpen, setOrderedItemsOpen] = useState(false);
   const [summaryHiddenTable, setSummaryHiddenTable] = useState<string | null>(null);
   const [ticketMenuOpen, setTicketMenuOpen] = useState(false);
@@ -447,9 +449,17 @@ export default function ServerStandalonePage() {
   const [popularIds, setPopularIds] = useState<string[] | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
   const staffTables = ownedOrAllTables(tables, user?.id, staffAreaOnly);
+  // Tables this staff member backs up also raise their alerts, marked as backup; orders stay open to all.
+  const backupTables = user
+    ? tables.filter((table) => table.backup_user_id === user.id && !staffTables.includes(table))
+    : [];
+  const backupTableIds = new Set(backupTables.map((table) => table.id));
+  const alertTables = backupTables.length > 0 ? [...staffTables, ...backupTables] : staffTables;
+  const backupMode = Boolean(user) && showBackupTables;
+  const pickerTables = backupMode ? backupTables : staffTables;
   // Tables whose bill the cashier could not print yet: every item must be confirmed served first.
   const serveConfirmTables = user
-    ? staffTables.filter(
+    ? alertTables.filter(
         (table) => (table.activeOrder || table.current_order)?.serve_confirm_requested_at,
       )
     : [];
@@ -462,7 +472,7 @@ export default function ServerStandalonePage() {
     .join(',');
   // Dishes the kitchen ran out of, on this staff's tables, each waiting to be cancelled with the guest.
   const outOfStockAlerts = user
-    ? staffTables.flatMap((table) =>
+    ? alertTables.flatMap((table) =>
         ((table.activeOrder || table.current_order)?.out_of_stock_items ?? []).map((item) => ({
           table,
           item,
@@ -474,7 +484,7 @@ export default function ServerStandalonePage() {
     .join(',');
   // Guests on this staff's tables who asked for the bill from their phone, until staff bring it.
   const guestBillTables = user
-    ? staffTables.filter((table) => guestAskedForBill(table.activeOrder || table.current_order))
+    ? alertTables.filter((table) => guestAskedForBill(table.activeOrder || table.current_order))
     : [];
   const guestBillKeys = guestBillTables
     .map(
@@ -935,6 +945,7 @@ export default function ServerStandalonePage() {
       orderLoadedTableIdRef.current = '';
       activeUserIdRef.current = null;
       setUser(null);
+      setShowBackupTables(false);
       setPassword('');
       setDraft([]);
       setOrderNotes('');
@@ -1481,7 +1492,7 @@ export default function ServerStandalonePage() {
   }
 
   function selectTableFromPicker(tableId: string) {
-    const table = staffTables.find((table) => table.id === tableId);
+    const table = alertTables.find((table) => table.id === tableId);
     if (!table || sendInFlightRef.current) return;
     selectTable(table.id);
     if (!isWide) setTablePickerOpen(false);
@@ -2571,6 +2582,14 @@ export default function ServerStandalonePage() {
         onShowTables={
           user
             ? () => {
+                // Cycles: show the tables, then drop the chosen table, then fold the list away.
+                if (selectedTableId) {
+                  if (sendInFlightRef.current) return;
+                  clearSelectedTable();
+                } else if (showTablePicker && !isWide) {
+                  setTablePickerOpen(false);
+                  return;
+                }
                 setTablePickerOpen(true);
                 window.setTimeout(
                   () =>
@@ -2580,6 +2599,15 @@ export default function ServerStandalonePage() {
               }
             : undefined
         }
+        onHoldTables={
+          user
+            ? () => {
+                setShowBackupTables((backup) => !backup);
+                setTablePickerOpen(true);
+              }
+            : undefined
+        }
+        backupTables={backupMode}
         tableSelectionDisabled={sending}
         dark={staffSeesDark}
         onDark={user ? toggleStaffDark : undefined}
@@ -2706,6 +2734,7 @@ export default function ServerStandalonePage() {
                     table: table.name || table.number || '',
                     item: item.product_name,
                   })}
+                  {backupTableIds.has(table.id) && ` · ${t('backupAlertTag')}`}
                 </button>
               ))}
               {guestBillTables.map((table) => (
@@ -2721,6 +2750,7 @@ export default function ServerStandalonePage() {
                   className="animate-pulse rounded-lg border-2 border-amber-500 bg-amber-500 px-3 py-2 text-sm font-semibold text-white"
                 >
                   {t('guestBillAlert', { table: table.name || table.number || '' })}
+                  {backupTableIds.has(table.id) && ` · ${t('backupAlertTag')}`}
                 </button>
               ))}
               {serveConfirmTables.map((table) => (
@@ -2736,6 +2766,7 @@ export default function ServerStandalonePage() {
                   className="animate-pulse rounded-lg border-2 border-red-500 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700"
                 >
                   {t('serveConfirmRequested', { table: table.name || table.number || '' })}
+                  {backupTableIds.has(table.id) && ` · ${t('backupAlertTag')}`}
                 </button>
               ))}
             </div>
@@ -2747,14 +2778,20 @@ export default function ServerStandalonePage() {
               data-testid="server-app-table-picker"
               className="min-w-0 scroll-mt-20 md:rounded-lg md:border md:border-border md:bg-card md:p-3"
             >
-              <h2 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
-                {t('tables')}
+              <h2
+                data-testid="server-app-table-picker-heading"
+                className={`mb-2 text-xs font-semibold uppercase ${backupMode ? 'text-orange-700' : 'text-muted-foreground'}`}
+              >
+                {backupMode ? t('backupTablesHeading') : t('tables')}
               </h2>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
-                {staffAreaOnly && tablesLoaded && staffTables.length === 0 && (
+                {backupMode && tablesLoaded && backupTables.length === 0 && (
+                  <p className="text-sm text-muted-foreground">{t('noBackupTables')}</p>
+                )}
+                {!backupMode && staffAreaOnly && tablesLoaded && staffTables.length === 0 && (
                   <p className="text-sm text-muted-foreground">{tPos('noTablesFound')}</p>
                 )}
-                {staffTables.map((table) => {
+                {pickerTables.map((table) => {
                   const selected = table.id === selectedTableId;
                   const order = table.activeOrder || table.current_order;
                   // Serving tables are light green, ones waiting to pay amber with a clock, cleaning
@@ -2770,13 +2807,16 @@ export default function ServerStandalonePage() {
                     : table.status === 'cleaning'
                       ? 'cleaning'
                       : 'available';
-                  const toneClass = {
-                    serving: 'border-green-300 bg-green-100',
-                    confirm: 'animate-pulse border-2 border-red-500 bg-red-50',
-                    awaiting: 'border-amber-300 bg-amber-50',
-                    cleaning: 'border-yellow-300 bg-yellow-100',
-                    available: 'border-gray-200 bg-white',
-                  }[tone];
+                  const toneClass =
+                    backupMode && tone !== 'confirm' && tone !== 'awaiting'
+                      ? 'border-orange-300 bg-orange-100'
+                      : {
+                          serving: 'border-green-300 bg-green-100',
+                          confirm: 'animate-pulse border-2 border-red-500 bg-red-50',
+                          awaiting: 'border-amber-300 bg-amber-50',
+                          cleaning: 'border-yellow-300 bg-yellow-100',
+                          available: 'border-gray-200 bg-white',
+                        }[tone];
                   return (
                     <button
                       key={table.id}
@@ -2784,6 +2824,7 @@ export default function ServerStandalonePage() {
                       // A phone folds the list away once a table is picked, leaving the menu.
                       onClick={() => selectTableFromPicker(table.id)}
                       data-table-tone={tone}
+                      data-backup-table={backupMode ? 'true' : undefined}
                       className={`flex min-h-14 items-center gap-2 rounded-lg border px-2 py-2 text-start text-gray-900 disabled:opacity-50 ${toneClass} ${selected ? 'ring-2 ring-brand' : ''}`}
                     >
                       <span className="min-w-0 flex-1">

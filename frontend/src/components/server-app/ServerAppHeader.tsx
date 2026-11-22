@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { Prompt } from 'next/font/google';
 import { ChefHat, History, Moon, Sun, UtensilsCrossed } from 'lucide-react';
 import { useTranslations } from 'use-intl';
@@ -20,6 +20,9 @@ export const HEADER_PILL =
 
 export const HEADER_PILL_FILLED = `${HEADER_PILL} border-2 border-white/80 bg-brand text-white hover:brightness-110`;
 
+/** How long staff hold Select Table to switch to their backup tables. */
+const HOLD_MS = 2000;
+
 export const HEADER_WHITE_ACTION =
   'flex h-9 shrink-0 items-center justify-center gap-1 rounded-full bg-white/85 px-2.5 font-sans text-[13px] font-medium leading-5 tracking-normal text-[#111111] shadow-md focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-50 sm:gap-2 sm:px-5 sm:text-sm';
 
@@ -37,6 +40,8 @@ export function ServerAppHeader({
   staffName,
   tablesExpanded,
   onShowTables,
+  onHoldTables,
+  backupTables,
   tableSelectionDisabled,
   dark,
   onDark,
@@ -57,6 +62,10 @@ export function ServerAppHeader({
   staffName?: string;
   tablesExpanded?: boolean;
   onShowTables?: () => void;
+  /** Holding Select Table switches between the staff member's own and backup tables. */
+  onHoldTables?: () => void;
+  /** The table list shows backup tables. */
+  backupTables?: boolean;
   tableSelectionDisabled?: boolean;
   dark?: boolean;
   onDark?: () => void;
@@ -65,6 +74,13 @@ export function ServerAppHeader({
   staffButton: ReactNode;
 }) {
   const t = useTranslations('serverApp');
+  const holdTimer = useRef<number | null>(null);
+  const held = useRef(false);
+  const releaseHold = () => {
+    if (holdTimer.current !== null) window.clearTimeout(holdTimer.current);
+    holdTimer.current = null;
+  };
+  const tablesLabel = backupTables ? t('tablesButtonBackup') : t('tablesButton');
   return (
     <header
       data-testid="server-app-header"
@@ -182,18 +198,36 @@ export function ServerAppHeader({
             {onShowTables && (
               <button
                 type="button"
-                onClick={onShowTables}
+                onClick={() => {
+                  if (held.current) held.current = false;
+                  else onShowTables();
+                }}
+                onPointerDown={() => {
+                  held.current = false;
+                  releaseHold();
+                  if (!onHoldTables) return;
+                  holdTimer.current = window.setTimeout(() => {
+                    holdTimer.current = null;
+                    held.current = true;
+                    onHoldTables();
+                  }, HOLD_MS);
+                }}
+                onPointerUp={releaseHold}
+                onPointerLeave={releaseHold}
+                onPointerCancel={releaseHold}
+                onContextMenu={(event) => onHoldTables && event.preventDefault()}
                 disabled={tableSelectionDisabled}
-                aria-label={t('selectTable')}
-                title={t('selectTable')}
+                aria-label={backupTables ? tablesLabel : t('selectTable')}
+                title={backupTables ? tablesLabel : t('selectTable')}
+                data-backup-tables={backupTables ? 'true' : undefined}
                 aria-expanded={tablesExpanded}
                 aria-controls="server-app-table-picker"
                 data-testid="server-app-table-button"
-                className={`${HEADER_WHITE_ACTION} min-w-0 max-w-[11rem]`}
+                className={`${HEADER_WHITE_ACTION} min-w-0 max-w-[11rem] select-none [-webkit-touch-callout:none] ${backupTables ? 'bg-orange-100! text-orange-900!' : ''}`}
               >
                 <UtensilsCrossed size={17} aria-hidden="true" className="shrink-0 text-brand" />
                 <span className="truncate">
-                  {t('tablesButton')}
+                  {tablesLabel}
                   {selectedTableName && (
                     <b data-testid="server-app-table-button-name" className="ms-1 font-bold">
                       {selectedTableName}
