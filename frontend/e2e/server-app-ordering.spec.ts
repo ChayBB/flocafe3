@@ -1,5 +1,5 @@
 import { test, expect, Locator, Page } from '@playwright/test';
-import { E2E_BASE_URL, E2E_KDS_BASE_URL, E2E_SERVER_APP_BASE_URL } from './helpers/urls';
+import { E2E_BASE_URL, E2E_SERVER_APP_BASE_URL } from './helpers/urls';
 import { openServerAppTables, logoutServerApp } from './helpers/server-app';
 import { getE2eToken } from './helpers/test-auth';
 
@@ -79,9 +79,7 @@ test.describe('Server App tableside ordering', () => {
     await expect(menu).toBeHidden();
   });
 
-  test('the table selector uses the shared font and reference dimensions in Thai and English', async ({
-    page,
-  }) => {
+  test('staff see no table label at the top and the shop logo sits higher', async ({ page }) => {
     const table = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
       headers: {
         Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
@@ -89,26 +87,6 @@ test.describe('Server App tableside ordering', () => {
       data: { number: `Header ${Date.now()}`, capacity: 2 },
     });
     expect(table.ok()).toBeTruthy();
-    await page.goto(`${E2E_KDS_BASE_URL}/kds-standalone`);
-    await expect(
-      page.getByTestId('kds-login-form').or(page.getByTestId('kds-workspace')),
-    ).toBeVisible();
-    if (await page.getByTestId('kds-login-form').isVisible()) {
-      await page.getByTestId('kds-login-email').fill('manager@flo.local');
-      await page.getByTestId('kds-login-password').fill('E2ePass123!');
-      await page.getByTestId('kds-login-submit').click();
-    }
-    const typography = (element: Element) => {
-      const style = getComputedStyle(element);
-      return {
-        family: style.fontFamily,
-        size: style.fontSize,
-        weight: style.fontWeight,
-        lineHeight: style.lineHeight,
-        spacing: style.letterSpacing,
-      };
-    };
-    const reference = await page.getByTestId('kds-search-input').evaluate(typography);
     await openServerApp(page, getE2eToken('e2e-server', 'server@flo.local', 'server'));
     const coverSize = await page.evaluate(async () => {
       const image = new Image();
@@ -117,21 +95,15 @@ test.describe('Server App tableside ordering', () => {
       return [image.naturalWidth, image.naturalHeight];
     });
     expect(coverSize).toEqual([1920, 1080]);
-    const text = page.getByTestId('server-app-header-table').locator('> span.truncate').first();
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      const selector = page.getByTestId('server-app-table-label');
-      await expect(selector).toBeVisible();
-      expect(await selector.evaluate(typography)).toEqual({ ...reference, weight: '500' });
-      expect((await selector.boundingBox())?.height).toBe(38);
-      await expect(selector).toHaveCSS('border-radius', '10px');
-      await expect(selector).toHaveCSS('border-color', 'rgb(229, 229, 229)');
-      await expect(selector).toHaveCSS('padding-inline-start', '10px');
-      await expect(selector).toHaveCSS('padding-inline-end', '10px');
-      await expect(selector).toHaveCSS('border-width', '1px');
+      await expect(page.getByTestId('server-app-table-label')).toHaveCount(0);
+      await expect(page.getByTestId('server-app-header-table')).toHaveCount(0);
       const circles = page.getByTestId('server-app-header-circles');
       const circleBox = (await circles.boundingBox())!;
       const headerBox = (await page.getByTestId('server-app-header').boundingBox())!;
+      const logoBox = (await page.getByTestId('server-app-header-logo-frame').boundingBox())!;
+      expect(logoBox.y - headerBox.y).toBe(41);
       expect(circleBox.width).toBe(130);
       expect(circleBox.y - headerBox.y).toBe(7);
       expect(headerBox.x + headerBox.width - circleBox.x - circleBox.width).toBe(12);
@@ -140,9 +112,6 @@ test.describe('Server App tableside ordering', () => {
       await expect(staffName).toHaveCSS('color', 'rgb(255, 255, 255)');
       const staffNameBox = (await staffName.boundingBox())!;
       expect(circleBox.x - staffNameBox.x - staffNameBox.width).toBe(12);
-      expect(staffNameBox.x).toBeGreaterThanOrEqual(
-        (await selector.boundingBox())!.x + (await selector.boundingBox())!.width,
-      );
       const flagBox = (await circles
         .getByTestId('server-app-language-button')
         .locator('svg')
@@ -169,51 +138,16 @@ test.describe('Server App tableside ordering', () => {
         expect((await circle.boundingBox())?.height).toBe(38);
         await expect(circle).toHaveCSS('background-color', / 0\.85\)$|, 0\.85\)$/);
       }
-      await page.evaluate(() => document.documentElement.classList.add('dark'));
-      await expect(selector).toHaveCSS('background-color', / 0\.85\)$|, 0\.85\)$/);
-      await expect(selector).toHaveCSS('color', 'rgb(17, 17, 17)');
-      await page.evaluate(() => document.documentElement.classList.remove('dark'));
-      for (const label of ['โต๊ะ 9', 'Table 9']) {
-        await text.evaluate((element, text) => {
-          element.textContent = text;
-        }, label);
-        expect(await text.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-          true,
-        );
-        expect(await text.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
-          true,
-        );
-      }
-      await selector.screenshot({ path: test.info().outputPath(`selector-${width}.png`) });
       await page
         .getByTestId('server-app-header')
         .screenshot({ path: test.info().outputPath(`header-${width}.png`) });
-      // The table name above is only a label; the bottom row's Select Table opens the tables.
-      expect(await selector.evaluate((element) => element.tagName)).toBe('DIV');
+      // The bottom row's Select Table opens the tables.
       await page.getByTestId('server-app-table-button').click();
       await expect(page.getByTestId('server-app-table-picker')).toBeVisible();
       await expect(page.getByPlaceholder('Staff name')).toHaveCount(0);
       await expect(page.getByRole('menu')).toHaveCount(0);
       await expect(page.getByTestId('server-app-table-button')).toBeVisible();
     }
-    await text.evaluate((element) => {
-      element.textContent = 'โต๊ะ 9 Table 9';
-    });
-    await page.evaluate(() => document.fonts.ready);
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send('DOM.enable');
-    await cdp.send('CSS.enable');
-    const { root } = await cdp.send('DOM.getDocument');
-    const { nodeId } = await cdp.send('DOM.querySelector', {
-      nodeId: root.nodeId,
-      selector: '[data-testid="server-app-header-table"] > span.truncate',
-    });
-    console.log('Table selector typography:', reference);
-    console.log(
-      'Rendered selector fonts:',
-      await cdp.send('CSS.getPlatformFontsForNode', { nodeId }),
-    );
-    await cdp.detach();
   });
 
   test('the empty ticket returns to the menu on mobile', async ({ page }) => {
@@ -398,11 +332,11 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.getByRole('heading', { name: 'Tables' })).toBeVisible();
     await page.getByRole('button', { name: new RegExp(tableName) }).click();
     await expect(page.locator('header')).toContainText(tableName);
-    // Select Table names the picked table in bold; the name at the top is only a label.
+    // Select Table names the picked table in bold; staff get no table label at the top.
     const pickedName = picker.getByTestId('server-app-table-button-name');
     await expect(pickedName).toHaveText(tableName);
     await expect(pickedName).toHaveCSS('font-weight', '700');
-    await expect(page.getByTestId('server-app-table-label')).toContainText(tableName);
+    await expect(page.getByTestId('server-app-table-label')).toHaveCount(0);
     // Picking a table folds the list away.
     await expect(page.getByRole('heading', { name: 'Tables' })).toHaveCount(0);
 
@@ -431,10 +365,9 @@ test.describe('Server App tableside ordering', () => {
       const box = (await button.boundingBox())!;
       expect(cover.y + cover.height - (box.y + box.height)).toBeCloseTo(flag.y - cover.y, 0);
     }
-    // The shop logo sits 14px below the table selector.
-    const selector = (await page.getByTestId('server-app-table-label').boundingBox())!;
+    // With no table label for staff, the shop logo sits 41px below the cover's top.
     const logo = (await page.getByTestId('server-app-header-logo-frame').boundingBox())!;
-    expect(logo.y - (selector.y + selector.height)).toBeCloseTo(14, 0);
+    expect(logo.y - cover.y).toBeCloseTo(41, 0);
     await qr.hover();
     await expect(qr).toHaveCSS('opacity', '1');
     await expect(qr).toHaveCSS('color', 'rgb(17, 17, 17)');

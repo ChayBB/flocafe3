@@ -80,11 +80,13 @@ export function ServerAppHeader({
         />
         <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[#FFF4DD]/35 to-transparent" />
         <div className="relative flex w-full items-start gap-3 px-3 pt-[7px]">
-          <TableUserSelector
-            tableName={tableText}
-            userName={customerName}
-            label={t('selectTable')}
-          />
+          {!staffName && (
+            <TableUserSelector
+              tableName={tableText}
+              userName={customerName}
+              label={t('selectTable')}
+            />
+          )}
           <div className="ms-auto flex shrink-0 items-center gap-3">
             {staffName && (
               <button
@@ -153,8 +155,10 @@ export function ServerAppHeader({
             </div>
           </div>
         </div>
-        {/* The logo sits 14px below the table name; the cover is tall enough to keep it clear of the bottom row. */}
-        <div className="pointer-events-none absolute inset-x-0 top-[59px] mx-auto w-full max-w-6xl px-3">
+        {/* Guests see the logo 14px below the table name; staff have no table name, so it sits 30% higher. */}
+        <div
+          className={`pointer-events-none absolute inset-x-0 ${staffName ? 'top-[41px]' : 'top-[59px]'} mx-auto w-full max-w-6xl px-3`}
+        >
           <div
             data-testid="server-app-header-logo-frame"
             className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-white bg-white text-brand shadow-lg sm:size-32"
