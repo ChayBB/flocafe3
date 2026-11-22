@@ -2551,15 +2551,31 @@ export default function ServerStandalonePage() {
               </span>
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={() => setShowLogin(true)}
-              title={tAuth('signIn')}
-              data-testid="server-app-login-button"
-              className={HEADER_PILL_FILLED}
-            >
-              {t('staffButton')}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setTableQrOpen(true)}
+                disabled={!guestTable || !guestDeviceToken}
+                aria-label={t('showQr')}
+                title={tTables('guestQrButton')}
+                data-testid="server-app-table-qr-button"
+                className={`${HEADER_WHITE_ACTION} min-w-0 max-w-[8rem] shrink! sm:max-w-[11rem]`}
+              >
+                <QrCode size={17} aria-hidden="true" className="shrink-0 text-brand" />
+                <span data-testid="server-app-qr-label" className="truncate">
+                  {t('showQr')}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLogin(true)}
+                title={tAuth('signIn')}
+                data-testid="server-app-login-button"
+                className={HEADER_PILL_FILLED}
+              >
+                {t('staffButton')}
+              </button>
+            </>
           )
         }
       />
@@ -2585,11 +2601,20 @@ export default function ServerStandalonePage() {
         >
           <GuestAlerts api={api} apiPrefix="/api" enabled={!!user} />
 
-          {tableQrOpen && api && selectedTableId && (
+          {tableQrOpen && api && user && selectedTableId && (
             <GuestTableQrDialog
               tableId={selectedTableId}
               api={api}
               apiPrefix="/api"
+              onClose={() => setTableQrOpen(false)}
+            />
+          )}
+          {tableQrOpen && api && !user && guestTable && guestDeviceToken && (
+            <GuestTableQrDialog
+              tableId={guestTable.id}
+              api={api}
+              apiPrefix="/api"
+              guestDeviceToken={guestDeviceToken}
               onClose={() => setTableQrOpen(false)}
             />
           )}

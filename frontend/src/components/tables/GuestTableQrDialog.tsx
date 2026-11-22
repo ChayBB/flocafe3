@@ -5,14 +5,9 @@ import type { AxiosInstance } from 'axios';
 import { Loader2, X } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 
-interface GuestSession {
+interface TableQr {
   table: { id: string; name: string };
-  session: { created_at: string; expires_at: string };
-  url: string;
   data_url: string;
-  store_timezone?: string;
-  server_app_enabled: boolean;
-  guest_ordering_enabled: boolean;
 }
 
 interface Props {
@@ -20,23 +15,33 @@ interface Props {
   /** The POS client calls `/tables/...` on its `/api` base; the Server App calls `/api/tables/...`. */
   api: AxiosInstance;
   apiPrefix: '' | '/api';
+  /** A seated guest's phone shows the table's saved cloud QR instead of opening a staff session. */
+  guestDeviceToken?: string;
   onClose: () => void;
 }
 
 /** The ordering QR staff hand a seated party: it works until the bill is settled or the daily reset. */
-export default function GuestTableQrDialog({ tableId, api, apiPrefix, onClose }: Props) {
+export default function GuestTableQrDialog({
+  tableId,
+  api,
+  apiPrefix,
+  guestDeviceToken,
+  onClose,
+}: Props) {
   const t = useTranslations('tables');
   const tCommon = useTranslations('common');
-  const [data, setData] = useState<GuestSession | null>(null);
+  const [data, setData] = useState<TableQr | null>(null);
   const [failed, setFailed] = useState(false);
   const path = `${apiPrefix}/tables/${encodeURIComponent(tableId)}/guest-session`;
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .post(path, {})
+    (guestDeviceToken
+      ? api.get('/api/guest/table-qr', { params: { table_id: tableId, d: guestDeviceToken } })
+      : api.post(path, {})
+    )
       .then((res) => {
-        if (!cancelled) setData(res.data as GuestSession);
+        if (!cancelled) setData(res.data as TableQr);
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -44,7 +49,7 @@ export default function GuestTableQrDialog({ tableId, api, apiPrefix, onClose }:
     return () => {
       cancelled = true;
     };
-  }, [api, path]);
+  }, [api, path, tableId, guestDeviceToken]);
 
   return (
     <div

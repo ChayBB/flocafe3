@@ -30,11 +30,7 @@ import { resolveTenantReceiptLanguages } from './printers';
 import { storeTimezone } from '../services/attendance';
 import { getHttpRequestSignal } from '../shutdown';
 import { TERMINAL_ITEM_STATUSES } from '../../shared/order-item-status';
-import {
-  cachedCloudTableQr,
-  cloudTableQrActive,
-  openCloudTableQr,
-} from '../services/qr-cloud/table-qr';
+import { cloudTableQrActive, storedCloudTableQr } from '../services/qr-cloud/table-qr';
 
 const router = Router();
 
@@ -545,15 +541,10 @@ router.post(
           const status = getDatabase()
             .prepare('SELECT status FROM tables WHERE id = ?')
             .get(table.id) as { status: string | null } | undefined;
-          const posTable = { ...table, status: status?.status ?? null };
-          // A table shown before answers at once from its saved link while the cloud reopens it.
-          const cached = await cachedCloudTableQr(table.id);
-          if (cached) {
-            void openCloudTableQr(posTable).catch((error) =>
-              console.warn('[API] Reopening the cloud table QR failed:', error),
-            );
-          }
-          const cloud = cached ?? (await openCloudTableQr(posTable, getHttpRequestSignal(req)));
+          const cloud = await storedCloudTableQr(
+            { ...table, status: status?.status ?? null },
+            getHttpRequestSignal(req),
+          );
           return res.json({
             table: { id: table.id, name: table.number },
             session: { created_at: new Date().toISOString(), expires_at: cloud.expires_at },

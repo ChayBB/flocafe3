@@ -116,6 +116,42 @@ test.describe('Server App guest from a table QR', () => {
     expect(submissions).toBe(1);
   });
 
+  test('a guest shows the saved cloud QR of the table, and only from a phone seated at that table', async ({
+    page,
+  }) => {
+    const table = await createTable(page);
+    const qrPath = `${E2E_SERVER_APP_BASE_URL}/api/guest/table-qr`;
+    const stranger = await page.request.get(qrPath, { params: { table_id: table.id, d: 'x' } });
+    expect(stranger.status()).toBe(410);
+    // Without a cloud connector there is no cloud QR, and the in-store link is never handed out.
+    const seated = await page.request.get(qrPath, {
+      params: { table_id: table.id, d: table.device },
+    });
+    expect(seated.status()).toBe(404);
+    expect((await seated.json()).code).toBe('cloud_qr_unavailable');
+
+    await setEnglish(page);
+    const cloudQr =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    let asked = '';
+    await page.route('**/api/guest/table-qr?*', async (route) => {
+      asked = route.request().url();
+      await route.fulfill({
+        json: {
+          table: { id: table.id, name: table.name },
+          url: 'https://order.example.test/#table=x',
+          data_url: cloudQr,
+        },
+      });
+    });
+    await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
+    await page.getByTestId('server-app-table-qr-button').click();
+    const dialog = page.getByTestId('guest-table-qr');
+    await expect(dialog).toContainText(table.name);
+    await expect(dialog.locator('img')).toHaveAttribute('src', cloudQr);
+    expect(new URL(asked).searchParams.get('table_id')).toBe(table.id);
+  });
+
   test('shows a Guest label and orange login button, no table picker, and orders for that table only', async ({
     page,
   }) => {
@@ -130,7 +166,7 @@ test.describe('Server App guest from a table QR', () => {
     await expect(header.getByTestId('server-app-login-button')).toHaveText('Staff');
     await expect(header.getByRole('img', { name: 'Flo' })).toHaveCount(0);
     await expect(header.getByTestId('server-app-table-button')).toHaveCount(0);
-    await expect(header.getByTestId('server-app-table-qr-button')).toHaveCount(0);
+    await expect(header.getByTestId('server-app-table-qr-button')).toBeVisible();
     await expect(header).toContainText(table.name);
     await expect(page.getByRole('heading', { name: 'Tables' })).toHaveCount(0);
 

@@ -77,6 +77,7 @@ import {
 import { clockNow } from './lib/clock';
 import { recordClockIn, recordClockOut } from './services/attendance';
 import { isTrustedGuestProxy, verifyGuestStickerCode, verifyGuestTableToken } from './lib/guest-qr';
+import { cloudTableQrActive, storedCloudTableQr } from './services/qr-cloud/table-qr';
 import {
   SERVER_APP_API_RATE_LIMIT_KEY,
   resolveServerAppApiRateLimit,
@@ -839,6 +840,37 @@ export function startServerApp(): Promise<void> {
         return guestQrExpired(res);
       }
       res.json({ table: { id: row.id, name: row.number } });
+    });
+
+    // A seated guest's phone shows the table's cloud QR, so others at the table can order too.
+    app.get('/api/guest/table-qr', serverAppApiRateLimit, async (req: Request, res: Response) => {
+      if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });
+      if (!isGuestQrOrderingEnabled()) return guestOrderingClosed(res);
+      const db = getDatabase();
+      const row = guestTableRow(req.query.table_id);
+      if (!row) return res.status(404).json({ error: 'Table not found' });
+      if (!findGuestDevice(db, row.id, req.query.d)) return guestQrExpired(res);
+      if (!cloudTableQrActive()) {
+        return res.status(404).json({ code: 'cloud_qr_unavailable', error: 'No cloud table QR' });
+      }
+      try {
+        const status = db.prepare('SELECT status FROM tables WHERE id = ?').get(row.id) as
+          | { status: string | null }
+          | undefined;
+        const cloud = await storedCloudTableQr(
+          { id: row.id, number: row.number, status: status?.status ?? null },
+          getHttpRequestSignal(req),
+        );
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({
+          table: { id: row.id, name: row.number },
+          url: cloud.url,
+          data_url: cloud.data_url,
+        });
+      } catch (error) {
+        console.warn('[Server App] Cloud table QR unavailable for a guest:', error);
+        res.status(503).json({ code: 'cloud_qr_unavailable', error: 'No cloud table QR' });
+      }
     });
 
     app.get('/api/guest/order', serverAppApiRateLimit, (req: Request, res: Response) => {

@@ -109,6 +109,19 @@ export async function cachedCloudTableQr(tableId: string): Promise<CloudTableQr 
   return { data_url, url: row.url, expires_at: row.expires_at };
 }
 
+/** The table's saved cloud QR at once, reopened on the cloud in the background; else a fresh one. */
+export async function storedCloudTableQr(
+  table: CloudTableQrTable,
+  requestSignal?: AbortSignal,
+): Promise<CloudTableQr> {
+  const cached = await cachedCloudTableQr(table.id);
+  if (!cached) return openCloudTableQr(table, requestSignal);
+  void openCloudTableQr(table).catch((error) =>
+    console.warn('[QR Cloud] Reopening the cloud table QR failed:', error),
+  );
+  return cached;
+}
+
 /** Closes the table's QR on the cloud ordering page; true once the cloud confirms it. */
 export async function closeCloudTableQr(
   table: CloudTableQrTable,
