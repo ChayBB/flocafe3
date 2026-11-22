@@ -13,6 +13,13 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { HEADER_WHITE_ACTION, ServerAppHeader } from '@/components/server-app/ServerAppHeader';
 import { holdDarkClass } from '@/lib/kds-screen-mode';
 import { ItemStatusBadge } from '@/components/server-app/ItemStatus';
+import {
+  GuestOrderHistory,
+  type GuestOrder,
+  type GuestOrderItem,
+} from '@/components/server-app/GuestOrderHistory';
+import type { GuestBillRequestFailure } from '@/components/server-app/GuestBill';
+import { cloudGuestOrder } from '@/lib/cloud-guest-order';
 import { Ltr } from '@/components/layout/Ltr';
 import {
   presentCloudMenu,
@@ -47,6 +54,7 @@ interface SentOrder {
     quantity: number;
     note: string;
     status?: string | null;
+    total_satang?: number;
     addons: { name: string; quantity: number }[];
   }[];
 }
@@ -62,6 +70,7 @@ const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const money = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' });
 const plainAmount = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
 const assetUrl = (file: string) => new URL(file, import.meta.url).href;
+const menuImageFile = /^(?:menu-images|\/api\/v1\/menu-images)\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/;
 const brandingFile = /^branding\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/;
 const LANGUAGE_KEY = 'flocafe-guest-language';
 const DARK_KEY = 'flocafe-guest-dark';
@@ -271,6 +280,11 @@ function Ordering({
   const [orderNote, setOrderNote] = useState('');
   const [sent, setSent] = useState<SentOrder[]>([]);
   const [billAwaitingPayment, setBillAwaitingPayment] = useState(false);
+  const [guestOrder, setGuestOrder] = useState<GuestOrder | null>(null);
+  const [guestOrderLoaded, setGuestOrderLoaded] = useState(false);
+  const [asOf, setAsOf] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const billRequested = Boolean(guestOrder?.bill_requested_at);
   const announced = useRef(new Map<string, string | null>());
   const [pending, setPending] = useState<Attempt>();
   const [confirmingSend, setConfirmingSend] = useState(false);
@@ -370,6 +384,9 @@ function Ordering({
       const orders = readSentOrders(body);
       if (!orders || requestId !== sentRequest.current || context.current !== current) return;
       setBillAwaitingPayment(body.bill_awaiting_payment === true);
+      setGuestOrder(cloudGuestOrder(body, orders));
+      setAsOf(typeof body.as_of === 'string' ? body.as_of : new Date().toISOString());
+      setGuestOrderLoaded(true);
       if (typeof body.table_name === 'string') setTableName(body.table_name.slice(0, 80));
       const seen = announced.current;
       for (const order of orders) {
@@ -667,7 +684,41 @@ function Ordering({
       promotionEmpty: t('menuPromotionEmpty'),
     },
   });
-  const disabled = Boolean(pending) || expired || sending || billAwaitingPayment;
+  const disabled = Boolean(pending) || expired || sending || billAwaitingPayment || billRequested;
+  const requestBill = async (): Promise<GuestBillRequestFailure | null> => {
+    const current = context.current;
+    if (!current) return 'failed';
+    try {
+      const response = await request('/api/v1/table-session/bill-request', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${current.token}`, 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        return body?.code === 'no_open_order' ? 'nothing_to_bill' : 'failed';
+      }
+      setGuestOrder((order) =>
+        order ? { ...order, bill_requested_at: new Date().toISOString() } : order,
+      );
+      void refreshSent();
+      return null;
+    } catch {
+      return 'failed';
+    }
+  };
+  const guestImageOf = (item: GuestOrderItem) => {
+    const id =
+      (item.product_id && presentation.images.has(item.product_id) && item.product_id) ||
+      presentation.products.find((product) => product.name === item.product_name)?.id;
+    const file = id ? presentation.images.get(id) : undefined;
+    return file && menuImageFile.test(file) ? assetUrl(file) : null;
+  };
+  const timeFormat = new Intl.DateTimeFormat(language === 'en' ? 'en-GB' : 'th-TH', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Bangkok',
+  });
   const staffUrl = snapshot?.staffUrl ? staffAreaUrl(snapshot.staffUrl) : null;
   return (
     <>
@@ -682,7 +733,7 @@ function Ordering({
           if (staffUrl) location.assign(staffUrl);
         }}
         staffLoginLabel={t('staffButton')}
-        onHistory={() => setOpen(true)}
+        onHistory={() => setHistoryOpen(true)}
         historyDisabled={!ready || expired}
         dark={dark}
         onDark={() => {
@@ -719,11 +770,27 @@ function Ordering({
             {status}
           </p>
         )}
-        {billAwaitingPayment && (
-          <p role="alert" className="my-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-950">
-            {t('tableAwaitingPaymentLocked')}
+        {(billAwaitingPayment || billRequested) && (
+          <p
+            role="alert"
+            data-testid="cloud-bill-lock"
+            className="my-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-950"
+          >
+            {billRequested ? t('guestBillLockedNotice') : t('tableAwaitingPaymentLocked')}
           </p>
         )}
+        <GuestOrderHistory
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          order={guestOrder}
+          loading={!guestOrderLoaded}
+          asOf={asOf}
+          tableName={tableName || null}
+          onRequestBill={requestBill}
+          formatPrice={(amount) => money.format(amount)}
+          formatTime={(iso) => timeFormat.format(new Date(iso))}
+          imageOf={guestImageOf}
+        />
         {canReload && (
           <Button className="self-start" variant="outline" onClick={() => void load()}>
             ลองใหม่
@@ -742,12 +809,7 @@ function Ordering({
               showImages
               imageOf={(product) => {
                 const file = presentation.images.get(product.id);
-                return file &&
-                  /^(?:menu-images|\/api\/v1\/menu-images)\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/.test(
-                    file,
-                  )
-                  ? assetUrl(file)
-                  : undefined;
+                return file && menuImageFile.test(file) ? assetUrl(file) : undefined;
               }}
               gridClassName="grid-cols-2"
               formatPrice={(amount) => money.format(amount)}

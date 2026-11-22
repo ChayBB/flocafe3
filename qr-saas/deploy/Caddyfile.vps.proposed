@@ -28,7 +28,7 @@ qr-ordering.accesscam.org {
     }
     @customerOrder {
         method POST
-        path /api/v1/orders /api/v1/table-qr/session
+        path /api/v1/orders /api/v1/table-qr/session /api/v1/table-session/bill-request
     }
 
     handle @customerMenu {
@@ -67,7 +67,7 @@ order.aiwittaya.com {
     }
     @customerOrder {
         method POST
-        path /api/v1/orders /api/v1/table-qr/session
+        path /api/v1/orders /api/v1/table-qr/session /api/v1/table-session/bill-request
     }
     @orderingAssets {
         method GET HEAD

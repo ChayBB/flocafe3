@@ -27,6 +27,7 @@ if(!adminSecret||adminSecret.length<24|| (connectorSecret && connectorSecret.len
 const err=(status:number,message:string)=>new Response(JSON.stringify({error:message}),{status,headers:{'content-type':'application/json'}});
 const isAdmin=(r:Request)=>constantEqual(bearer(r),adminSecret);
 const pairAttempts=attemptLimiter(10,10*60_000);
+const billRequestAttempts=attemptLimiter(20,10*60_000);
 const connectorScope = {
  tenantId: process.env.CONNECTOR_TENANT_ID ?? '',
  branchId: process.env.CONNECTOR_BRANCH_ID ?? '',
@@ -223,7 +224,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
    await enterTenant(tx,{tenantId:session.tenant_id,branchId:session.branch_id});
    // Serialize the branch idempotency key even when the buyer changes table sessions.
    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([session.tenant_id,session.branch_id,key])}, 0))`;
-   const [table]=await tx`SELECT bill_awaiting_payment FROM dining_tables
+   const [table]=await tx`SELECT bill_awaiting_payment OR bill_requested_at IS NOT NULL AS bill_awaiting_payment FROM dining_tables
      WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id} FOR SHARE`;
    const [locked]=await tx`SELECT id FROM table_sessions WHERE id=${session.id} AND expires_at>now() AND revoked_at IS NULL FOR UPDATE`;
    if(!locked)return err(401,'invalid session');
@@ -277,7 +278,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
  const orders=await tx`SELECT o.id,o.status,o.total_satang,o.note,o.created_at,
    (SELECT cd.pos_order_number FROM outbox_events e JOIN connector_deliveries cd ON cd.event_id=e.id
      WHERE e.tenant_id=o.tenant_id AND e.branch_id=o.branch_id AND e.kind='order.created' AND e.payload->>'order_id'=o.id::text LIMIT 1) AS pos_order_number,
-   coalesce((SELECT jsonb_agg(jsonb_build_object('name',i.name_snapshot,'quantity',i.quantity,'note',i.note,'status',i.kitchen_status,
+   coalesce((SELECT jsonb_agg(jsonb_build_object('name',i.name_snapshot,'quantity',i.quantity,'note',i.note,'status',i.kitchen_status,'total_satang',i.line_total_satang,
      'addons',(SELECT coalesce(jsonb_agg(jsonb_build_object('name',a->>'name','quantity',(a->>'quantity')::int)),'[]'::jsonb) FROM jsonb_array_elements(i.addons_snapshot) a)
    ) ORDER BY i.id) FROM order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS items
    FROM orders o JOIN table_sessions s ON s.id=o.table_session_id AND (s.tenant_id,s.branch_id)=(o.tenant_id,o.branch_id)
@@ -292,9 +293,33 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
          AND NOT (d.pos_active_order_numbers ? cd.pos_order_number)
      ))
    ORDER BY o.created_at DESC LIMIT 20`;
- const [table]=await tx`SELECT bill_awaiting_payment FROM dining_tables
+ const [table]=await tx`SELECT bill_awaiting_payment,bill_requested_at,pos_bill FROM dining_tables
    WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id}`;
- return Response.json({orders,bill_awaiting_payment:table?.bill_awaiting_payment===true},{headers:{'Cache-Control':'no-store'}});
+ return Response.json({orders,bill_awaiting_payment:table?.bill_awaiting_payment===true,
+   bill_requested:table?.bill_awaiting_payment===true||!!table?.bill_requested_at,bill:table?.pos_bill??null,
+   as_of:new Date().toISOString()},{headers:{'Cache-Control':'no-store'}});
+ });
+})
+.post('/api/v1/table-session/bill-request',async({request})=>{
+ const secret=bearer(request);if(!secret)return err(401,'missing session');
+ const [session]=await sql`SELECT tenant_id,branch_id,table_id,qr_generation,id FROM table_sessions WHERE token_hash=${sha256(secret)} AND expires_at>now() AND revoked_at IS NULL`;
+ if(!session)return err(401,'invalid session');
+ if(!billRequestAttempts.allow(session.id))return err(429,'too many bill requests');
+ return inTenant(sql,{tenantId:session.tenant_id,branchId:session.branch_id},async tx=>{
+  const [table]=await tx`SELECT bill_awaiting_payment,bill_requested_at,pos_bill,pos_table_id FROM dining_tables
+    WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id} FOR UPDATE`;
+  if(!table?.pos_table_id)return err(409,'table closed');
+  if(table.bill_awaiting_payment||table.bill_requested_at)
+   return Response.json({bill_requested:true},{headers:{'Cache-Control':'no-store'}});
+  // Something must be on the table's bill: the POS shared one, or this visit ordered on the Cloud.
+  const [ordered]=await tx`SELECT 1 FROM orders o JOIN table_sessions s ON s.id=o.table_session_id AND (s.tenant_id,s.branch_id)=(o.tenant_id,o.branch_id)
+    WHERE o.tenant_id=${session.tenant_id} AND o.branch_id=${session.branch_id} AND s.table_id=${session.table_id}
+      AND (CASE WHEN ${session.qr_generation}::uuid IS NULL THEN s.id=${session.id} ELSE s.qr_generation=${session.qr_generation}::uuid END)
+    LIMIT 1`;
+  if(!table.pos_bill&&!ordered)return Response.json({error:'nothing to bill',code:'no_open_order'},{status:409,headers:{'Cache-Control':'no-store'}});
+  await tx`UPDATE dining_tables SET bill_requested_at=now()
+    WHERE id=${session.table_id} AND tenant_id=${session.tenant_id} AND branch_id=${session.branch_id}`;
+  return Response.json({bill_requested:true},{headers:{'Cache-Control':'no-store'}});
  });
 })
 .get('/api/v1/orders/:id',async({request,params})=>{

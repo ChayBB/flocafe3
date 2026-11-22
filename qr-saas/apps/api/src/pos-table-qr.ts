@@ -11,6 +11,32 @@ interface Options {
   publicOrigin?: string;
 }
 
+const BillSnapshot = t.Object({
+  order_number: t.String({ maxLength: 80 }),
+  items: t.Array(
+    t.Object({
+      id: t.Integer(),
+      product_id: t.String({ maxLength: 128 }),
+      product_name: t.String({ maxLength: 200 }),
+      quantity: t.Number({ minimum: 0, maximum: 100000 }),
+      status: t.String({ maxLength: 40 }),
+      total: t.Number(),
+      ordered_by: t.Union([t.Null(), t.String({ maxLength: 120 })]),
+      ordered_by_guest: t.Boolean(),
+    }),
+    { maxItems: 300 },
+  ),
+  bill: t.Object({
+    subtotal: t.Number(),
+    discount_amount: t.Number(),
+    service_charge: t.Number(),
+    tax_amount: t.Number(),
+    tax_included: t.Boolean(),
+    round_off: t.Number(),
+    total: t.Number(),
+  }),
+});
+
 function reply(status: number, body: object) {
   return Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
@@ -23,9 +49,13 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
         const identity = await authorize(request);
         if (!identity) return reply(401, { error: 'unauthorized' });
         const { tenantId, branchId, installationId } = identity;
-        await inTenant(sql, identity, async (tx) => {
+        const rejected = body.rejected_bill_requests ?? [];
+        const billRequests = await inTenant(sql, identity, async (tx) => {
           await tx`
           UPDATE dining_tables d SET name = s.name, bill_awaiting_payment = s.awaiting_payment,
+            pos_bill = s.bill,
+            bill_requested_at = CASE WHEN s.awaiting_payment OR NOT s.active OR s.pos_table_id = ANY(${rejected}::text[])
+              THEN NULL ELSE d.bill_requested_at END,
             pos_active_order_numbers = coalesce(s.active_order_numbers, d.pos_active_order_numbers),
             pos_active_orders_synced_at = CASE WHEN s.active_order_numbers IS NOT NULL THEN now() ELSE d.pos_active_orders_synced_at END,
             qr_ordering_until = CASE WHEN s.active THEN (date_trunc('day', now() AT TIME ZONE 'Asia/Bangkok') + CASE WHEN (now() AT TIME ZONE 'Asia/Bangkok')::time < time '07:00' THEN interval '7 hours' ELSE interval '1 day 7 hours' END) AT TIME ZONE 'Asia/Bangkok' ELSE NULL END,
@@ -33,11 +63,13 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
               WHEN d.qr_ordering_until > now() THEN coalesce(d.qr_session_generation, gen_random_uuid())
               ELSE gen_random_uuid() END
           FROM jsonb_to_recordset(${tx.json(body.tables)})
-            AS s(pos_table_id text, name text, active boolean, awaiting_payment boolean, active_order_numbers jsonb)
+            AS s(pos_table_id text, name text, active boolean, awaiting_payment boolean, active_order_numbers jsonb, bill jsonb)
           WHERE d.tenant_id = ${tenantId} AND d.branch_id = ${branchId}
             AND d.pos_installation_id IS NOT DISTINCT FROM ${installationId}::uuid
             AND d.pos_table_id = s.pos_table_id
             AND (d.name IS DISTINCT FROM s.name OR d.bill_awaiting_payment IS DISTINCT FROM s.awaiting_payment
+              OR d.pos_bill IS DISTINCT FROM s.bill
+              OR (d.bill_requested_at IS NOT NULL AND (s.awaiting_payment OR NOT s.active OR s.pos_table_id = ANY(${rejected}::text[])))
               OR (s.active_order_numbers IS NOT NULL AND (d.pos_active_order_numbers IS DISTINCT FROM s.active_order_numbers OR d.pos_active_orders_synced_at IS NULL))
               OR (s.active AND (d.qr_ordering_until IS NULL OR d.qr_ordering_until < now() + interval '1 day' OR d.qr_session_generation IS NULL))
               OR (NOT s.active AND (d.qr_ordering_until IS NOT NULL OR d.qr_session_generation IS NOT NULL)))
@@ -53,8 +85,15 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
             AND d.pos_installation_id IS NOT DISTINCT FROM ${installationId}::uuid
             AND d.pos_table_id = ANY(${inactive}) AND s.revoked_at IS NULL
         `;
+          return tx<{ pos_table_id: string; requested_at: Date }[]>`
+          SELECT pos_table_id, bill_requested_at AS requested_at FROM dining_tables
+          WHERE tenant_id = ${tenantId} AND branch_id = ${branchId}
+            AND pos_installation_id IS NOT DISTINCT FROM ${installationId}::uuid
+            AND pos_table_id = ANY(${body.tables.map((table) => table.pos_table_id)}::text[])
+            AND bill_requested_at IS NOT NULL AND NOT bill_awaiting_payment
+        `;
         });
-        return reply(200, { ok: true });
+        return reply(200, { ok: true, bill_requests: billRequests });
       },
       {
         body: t.Object({
@@ -65,8 +104,12 @@ export function posTableQr({ sql, authorize, publicOrigin }: Options) {
               active: t.Boolean(),
               awaiting_payment: t.Boolean(),
               active_order_numbers: t.Optional(t.Array(t.String({ minLength: 1, maxLength: 80 }))),
+              bill: t.Optional(t.Union([t.Null(), BillSnapshot])),
             }),
             { minItems: 1, maxItems: 250 },
+          ),
+          rejected_bill_requests: t.Optional(
+            t.Array(t.String({ minLength: 1, maxLength: 128 }), { maxItems: 250 }),
           ),
         }),
       },

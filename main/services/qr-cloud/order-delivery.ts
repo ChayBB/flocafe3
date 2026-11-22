@@ -1,9 +1,18 @@
 import { getDatabase } from '../../db';
-import { tableAwaitingBillPayment } from '../../lib/guest-order';
+import {
+  GUEST_USER_ID,
+  guestOpenOrderId,
+  guestTableOrder,
+  tableAwaitingBillPayment,
+} from '../../lib/guest-order';
+import { ensureGuestUser } from '../../lib/guest-order-placement';
+import { requestOrderBill } from '../orders';
+import { notifyOrderUpdated } from '../kds';
 import { isTerminalItemStatus } from '../../../shared/order-item-status';
 import {
   acknowledgeConnectorOrder,
   syncConnectorTableStates,
+  type CloudTableBill,
   QrCloudClientError,
   reportConnectorKitchenStatus,
 } from './client';
@@ -133,6 +142,64 @@ export async function processCloudOrderDelivery(config: QrCloudConfig, signal: A
   await syncOwnerReports(config, signal).catch(() => undefined);
 }
 
+// Cloud bill requests the POS could not take (nothing to bill), reported back on the next sync.
+const rejectedBillRequests = new Set<string>();
+
+/** The table's open bill for Cloud guests, without the customer's name. */
+export function cloudTableBill(
+  db: ReturnType<typeof getDatabase>,
+  tableId: string,
+): CloudTableBill | null {
+  const order = guestTableOrder(db, tableId);
+  if (!order) return null;
+  return {
+    order_number: order.order_number,
+    items: order.items.map(
+      ({
+        id,
+        product_id,
+        product_name,
+        quantity,
+        status,
+        total,
+        ordered_by,
+        ordered_by_guest,
+      }) => ({
+        id,
+        product_id,
+        product_name,
+        quantity,
+        status,
+        total,
+        ordered_by,
+        ordered_by_guest,
+      }),
+    ),
+    bill: order.bill,
+  };
+}
+
+/**
+ * A Cloud guest asked for the table's bill: the POS records it as the guest, exactly like a local
+ * table-QR request, so the table's staff are alerted. Returns false when there is nothing to bill.
+ */
+export function applyCloudBillRequest(
+  db: ReturnType<typeof getDatabase>,
+  tableId: string,
+): boolean {
+  const orderId = guestOpenOrderId(db, tableId);
+  if (!orderId) return false;
+  try {
+    ensureGuestUser();
+    requestOrderBill(db, orderId, GUEST_USER_ID);
+    notifyOrderUpdated();
+    return true;
+  } catch (error) {
+    if ((error as { statusCode?: number }).statusCode) return false;
+    throw error;
+  }
+}
+
 async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {
   const pos = getDatabase();
   const tables = pos.prepare('SELECT id, number, is_active FROM tables ORDER BY id').all() as {
@@ -147,9 +214,11 @@ async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {
     .all() as { table_id: string; order_number: string }[];
   for (let offset = 0; offset < tables.length; offset += 250) {
     if (signal.aborted || readConfig().cloudUrl !== config.cloudUrl) return;
-    await syncConnectorTableStates(
+    const batch = tables.slice(offset, offset + 250);
+    const rejected = batch.map((table) => table.id).filter((id) => rejectedBillRequests.has(id));
+    const response = (await syncConnectorTableStates(
       { config, token: readConnectorSetting(), caPem: readApprovedCa()?.pem, signal },
-      tables.slice(offset, offset + 250).map((table) => ({
+      batch.map((table) => ({
         pos_table_id: table.id,
         name: table.number,
         active: Boolean(table.is_active),
@@ -157,8 +226,18 @@ async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {
         active_order_numbers: activeOrders
           .filter((order) => order.table_id === table.id)
           .map((order) => order.order_number),
+        bill: activeOrders.some((order) => order.table_id === table.id)
+          ? cloudTableBill(pos, table.id)
+          : null,
       })),
-    );
+      rejected,
+    )) as { bill_requests?: { pos_table_id?: unknown }[] } | null;
+    for (const id of rejected) rejectedBillRequests.delete(id);
+    for (const request of response?.bill_requests ?? []) {
+      const tableId = request?.pos_table_id;
+      if (typeof tableId !== 'string' || !batch.some((table) => table.id === tableId)) continue;
+      if (!applyCloudBillRequest(pos, tableId)) rejectedBillRequests.add(tableId);
+    }
   }
 }
 

@@ -201,7 +201,13 @@ async function verifyOrderAcceptance() {
     active: boolean;
     awaiting_payment: boolean;
     active_order_numbers: string[];
+    bill: {
+      order_number: string;
+      items: { product_name: string; ordered_by_guest: boolean }[];
+    } | null;
   }[][] = [];
+  const billRequestReplies: { pos_table_id: string }[] = [];
+  const rejectedBillReports: string[][] = [];
   https.request = (
     options: { method: string; path: string; rejectUnauthorized: boolean },
     callback: (response: unknown) => void,
@@ -222,10 +228,12 @@ async function verifyOrderAcceptance() {
       const receipt = ack ? JSON.parse(body!) : null;
       const tableAction = options.path.endsWith('/table-qr') ? JSON.parse(body!) : null;
       if (options.path.endsWith('/table-states')) {
-        tableStates.push(JSON.parse(body!).tables);
+        const sync = JSON.parse(body!);
+        tableStates.push(sync.tables);
+        if (sync.rejected_bill_requests) rejectedBillReports.push(sync.rejected_bill_requests);
         response.statusCode = 200;
         callback(response);
-        response.end(JSON.stringify({ ok: true }));
+        response.end(JSON.stringify({ ok: true, bill_requests: billRequestReplies.splice(0) }));
         return;
       }
       if (options.path.endsWith('/order-status')) {
@@ -562,6 +570,49 @@ async function verifyOrderAcceptance() {
     db.prepare("UPDATE tables SET status = 'occupied' WHERE id = ?").run('cloud-table-a');
     db.prepare(
       'UPDATE orders SET bill_requested_at = NULL, bill_payment_received_at = NULL WHERE id = ?',
+    ).run(placed.id);
+
+    // A Cloud guest asks for the bill: the POS records it as the guest, and reports a table with
+    // nothing to bill back as rejected.
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.equal(latestTable()?.bill?.order_number, placed.order_number, 'the open bill is shared');
+    assert.ok(latestTable()?.bill?.items.length, 'with its dishes');
+    assert.equal(
+      tableStates.at(-1)?.find((table) => table.pos_table_id === 'cloud-table-b')?.bill,
+      null,
+      'a table with no order shares no bill',
+    );
+    assert.equal(
+      'customer_name' in (latestTable()?.bill ?? {}),
+      false,
+      "the customer's name stays on the POS",
+    );
+    billRequestReplies.push({ pos_table_id: 'cloud-table-a' }, { pos_table_id: 'cloud-table-b' });
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    const billed = db
+      .prepare('SELECT bill_requested_at, bill_requested_by FROM orders WHERE id = ?')
+      .get(placed.id) as { bill_requested_at: string | null; bill_requested_by: string | null };
+    assert.ok(billed.bill_requested_at, 'the Cloud request reaches the POS');
+    assert.equal(
+      billed.bill_requested_by,
+      'guest-self-order',
+      'as the guest, so table staff are alerted',
+    );
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.equal(
+      latestTable()?.awaiting_payment,
+      true,
+      'the Cloud then holds the table for payment',
+    );
+    assert.deepEqual(
+      rejectedBillReports.at(-1),
+      ['cloud-table-b'],
+      'nothing to bill is reported back',
+    );
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.equal(rejectedBillReports.length, 1, 'a rejection is reported once');
+    db.prepare(
+      'UPDATE orders SET bill_requested_at = NULL, bill_requested_by = NULL, bill_requested_by_name = NULL WHERE id = ?',
     ).run(placed.id);
 
     const automatic = config.updateConfig({ automatic: true });

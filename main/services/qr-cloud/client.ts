@@ -247,13 +247,42 @@ export function syncConnectorTableStates(
     active: boolean;
     awaiting_payment: boolean;
     active_order_numbers: string[];
+    bill: CloudTableBill | null;
   }[],
+  rejectedBillRequests: string[] = [],
 ): Promise<unknown> {
   return requestConnectorJson(
     options,
     '/api/v1/connectors/table-states',
-    JSON.stringify({ tables }),
+    JSON.stringify({
+      tables,
+      ...(rejectedBillRequests.length ? { rejected_bill_requests: rejectedBillRequests } : {}),
+    }),
   );
+}
+
+/** The open order's bill as a table-QR guest on the Cloud reads it; amounts come from the POS. */
+export interface CloudTableBill {
+  order_number: string;
+  items: {
+    id: number;
+    product_id: string;
+    product_name: string;
+    quantity: number;
+    status: string;
+    total: number;
+    ordered_by: string | null;
+    ordered_by_guest: boolean;
+  }[];
+  bill: {
+    subtotal: number;
+    discount_amount: number;
+    service_charge: number;
+    tax_amount: number;
+    tax_included: boolean;
+    round_off: number;
+    total: number;
+  };
 }
 
 export function acknowledgeConnectorOrder(
@@ -306,7 +335,11 @@ export function fetchOwnerMenuChanges(options: FetchEventsOptions): Promise<unkn
 export function reportOwnerMenuChange(
   options: FetchEventsOptions,
   changeId: string,
-  result: { outcome: 'applied' | 'conflict' | 'failed'; pos_value?: string | null; detail?: string },
+  result: {
+    outcome: 'applied' | 'conflict' | 'failed';
+    pos_value?: string | null;
+    detail?: string;
+  },
 ): Promise<unknown> {
   if (!CONNECTOR_EVENT_ID.test(changeId)) throw new QrCloudClientError('bad_response');
   return requestConnectorJson(
@@ -316,7 +349,10 @@ export function reportOwnerMenuChange(
   );
 }
 
-export function publishOwnerReports(options: FetchEventsOptions, reports: unknown[]): Promise<unknown> {
+export function publishOwnerReports(
+  options: FetchEventsOptions,
+  reports: unknown[],
+): Promise<unknown> {
   return requestConnectorJson(options, '/api/v1/connectors/reports', JSON.stringify({ reports }));
 }
 
