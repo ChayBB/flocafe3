@@ -2753,11 +2753,6 @@ export default function ServerStandalonePage() {
         tables={tables.filter(
           (table) => table.owner_user_id === user.id || table.backup_user_id === user.id,
         )}
-        coverUrl={
-          regional?.store_cover_version
-            ? `/api/server-app/branding/cover?v=${regional.store_cover_version}`
-            : '/images/server-app-cover-1920x1080.jpg'
-        }
         language={language}
         onLanguage={chooseLanguage}
         dark={staffSeesDark}

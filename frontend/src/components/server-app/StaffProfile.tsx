@@ -1,11 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { AxiosInstance } from 'axios';
 import {
   ArrowLeft,
   BarChart3,
-  CalendarDays,
   ChevronRight,
   Clock,
   Home,
@@ -27,17 +26,28 @@ export type StaffFontSize = 'small' | 'normal' | 'large';
 type ProfileData = {
   business_date: string;
   timezone: string;
-  attendance: { business_date: string; clock_in_at: string; clock_out_at: string | null }[];
+  attendance: {
+    business_date: string;
+    clock_in_at: string;
+    clock_out_at: string | null;
+  }[];
   summary: { sales: number; bills: number; guests: number };
 };
 
-type Panel = 'profile' | 'personal' | 'tables' | 'sales' | 'leave' | 'preferences' | 'history';
+type Panel = 'profile' | 'personal' | 'tables' | 'sales' | 'preferences' | 'history';
+
+const card = 'rounded-2xl border-2 border-border bg-card p-4';
+const action =
+  'flex min-h-12 min-w-12 items-center justify-center gap-2 rounded-xl px-3 text-base font-semibold';
+const accentText = 'text-blue-800 dark:text-blue-300';
+const accentSoft = 'bg-blue-50 dark:bg-blue-950/50';
+const choice = (selected: boolean) =>
+  `${action} border-2 text-lg ${selected ? `border-blue-800 dark:border-blue-300 ${accentSoft} ${accentText}` : 'border-border bg-background'}`;
 
 export function StaffProfile({
   api,
   user,
   tables,
-  coverUrl,
   language,
   onLanguage,
   dark,
@@ -59,7 +69,6 @@ export function StaffProfile({
     status?: string;
     backup_user_id?: string | null;
   }[];
-  coverUrl: string;
   language: Language;
   onLanguage: (language: Language) => void;
   dark: boolean;
@@ -77,6 +86,7 @@ export function StaffProfile({
   const locale = useLocale();
   const [panel, setPanel] = useState<Panel>('profile');
   const [snapshot, setSnapshot] = useState<ProfileData | null>(null);
+  const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [failed, setFailed] = useState(false);
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
@@ -84,7 +94,9 @@ export function StaffProfile({
     let cancelled = false;
     void api.get<ProfileData>('/api/staff-profile').then(
       ({ data }) => {
-        if (!cancelled) setSnapshot(data);
+        if (cancelled) return;
+        setSnapshot(data);
+        setLoadedAt(new Date());
       },
       () => {
         if (!cancelled) setFailed(true);
@@ -99,13 +111,13 @@ export function StaffProfile({
     (entry) => entry.business_date === snapshot.business_date,
   );
   const active = Boolean(today && !today.clock_out_at);
-  const formatTime = (value: string | null) =>
+  const formatTime = (value: string | Date | null) =>
     value
       ? new Intl.DateTimeFormat(locale, {
           hour: '2-digit',
           minute: '2-digit',
           timeZone: snapshot?.timezone,
-        }).format(parseDbTimestamp(value))
+        }).format(typeof value === 'string' ? parseDbTimestamp(value) : value)
       : '—';
   const roles: Record<
     string,
@@ -120,132 +132,154 @@ export function StaffProfile({
   const role = roles[user.role] ? staff(roles[user.role]) : user.role;
   const tiles = [
     { id: 'personal', icon: UserRound, detail: t('personalHint') },
-    { id: 'tables', icon: Utensils, detail: t('tableCount', { count: tables.length }) },
-    { id: 'sales', icon: BarChart3, detail: snapshot ? formatMoney(snapshot.summary.sales) : '—' },
-    { id: 'leave', icon: CalendarDays, detail: t('leaveHint') },
-    { id: 'preferences', icon: Settings, detail: t('preferencesHint') },
+    {
+      id: 'tables',
+      icon: Utensils,
+      detail: t('tableCount', { count: tables.length }),
+    },
+    {
+      id: 'sales',
+      icon: BarChart3,
+      detail: snapshot ? formatMoney(snapshot.summary.sales) : '—',
+    },
     { id: 'history', icon: Clock, detail: t('historyHint') },
+    { id: 'preferences', icon: Settings, detail: t('preferencesHint') },
   ] as const;
-  const card = 'rounded-2xl border border-border bg-card p-4 shadow-sm';
-  const action = 'flex min-h-11 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium';
+
+  const sectionHeader = (title: string, extra?: ReactNode) => (
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <h2 className="text-xl font-bold">{title}</h2>
+      {extra}
+    </div>
+  );
+  const viewAll = (target: Panel) =>
+    panel === 'profile' && (
+      <button type="button" onClick={() => setPanel(target)} className={`${action} ${accentText}`}>
+        {t('viewAll')}
+        <ChevronRight size={20} aria-hidden="true" />
+      </button>
+    );
 
   const summary = (
     <section className={card}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="font-bold">{t('todaySummary')}</h2>
+      {sectionHeader(
+        t('todaySummary'),
         <button
           type="button"
-          className={action}
+          className={`${action} border-2 border-border`}
           aria-label={t('refresh')}
           onClick={() => {
             setFailed(false);
             setRefresh((value) => value + 1);
           }}
         >
-          <RefreshCw size={18} className="text-teal-600" />
-        </button>
-      </div>
+          <RefreshCw size={22} className={accentText} aria-hidden="true" />
+        </button>,
+      )}
+      {loadedAt && (
+        <p className="mb-3 text-base text-muted-foreground">
+          {t('lastUpdated', { time: formatTime(loadedAt) })}
+        </p>
+      )}
       {failed && (
-        <p role="status" className="mb-2 text-sm text-muted-foreground">
+        <p role="status" className="mb-3 text-base font-semibold text-red-700 dark:text-red-300">
           {t('summaryUnavailable')}
         </p>
       )}
-      <div className="grid grid-cols-3 gap-2 text-center">
+      <div className="grid grid-cols-1 gap-2 min-[400px]:grid-cols-3">
         {(
           [
-            [
-              ShoppingBag,
-              'sales',
-              snapshot && formatMoney(snapshot.summary.sales),
-              'bg-teal-500/10 text-teal-700 dark:text-teal-300',
-            ],
-            [
-              ReceiptText,
-              'bills',
-              snapshot?.summary.bills,
-              'bg-sky-500/10 text-sky-700 dark:text-sky-300',
-            ],
-            [
-              Users,
-              'guests',
-              snapshot?.summary.guests,
-              'bg-violet-500/10 text-violet-700 dark:text-violet-300',
-            ],
+            [ShoppingBag, 'sales', snapshot && formatMoney(snapshot.summary.sales)],
+            [ReceiptText, 'bills', snapshot?.summary.bills],
+            [Users, 'guests', snapshot?.summary.guests],
           ] as const
-        ).map(([Metric, label, value, color]) => {
-          return (
-            <div key={String(label)} className={`min-w-0 rounded-xl p-2 ${color}`}>
-              <Metric className="mx-auto mb-1" size={22} />
-              <p className="text-xs font-medium">{t(label)}</p>
-              <p className="break-words font-bold tabular-nums" dir="auto">
+        ).map(([Metric, label, value]) => (
+          <div
+            key={label}
+            className="flex min-w-0 items-center gap-3 rounded-xl bg-muted/60 p-3 min-[400px]:flex-col min-[400px]:text-center"
+          >
+            <Metric size={26} className={`shrink-0 ${accentText}`} aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-base">{t(label)}</p>
+              <p className="break-words text-2xl font-bold tabular-nums" dir="auto">
                 {value ?? '—'}
               </p>
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </section>
   );
   const tableList = (
     <section className={card}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="font-bold">
-          {t('tables')}{' '}
-          <small className="font-normal">{t('tableCount', { count: tables.length })}</small>
-        </h2>
-        {panel === 'profile' && (
-          <button type="button" onClick={() => setPanel('tables')} className={action}>
-            {t('viewAll')}
-            <ChevronRight size={16} />
-          </button>
-        )}
-      </div>
+      {sectionHeader(
+        `${t('tables')} (${t('tableCount', { count: tables.length })})`,
+        viewAll('tables'),
+      )}
       {tables.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('noTables')}</p>
+        <p className="text-lg text-muted-foreground">{t('noTables')}</p>
       ) : (
-        <div className="grid grid-cols-4 gap-2">
-          {tables.map((table) => (
-            <button
-              key={table.id}
-              type="button"
-              onClick={() => onTable(table.id)}
-              className={`flex min-h-10 items-center justify-center gap-1 rounded-xl border px-1 text-sm font-semibold ${table.status === 'available' ? 'border-green-500/40 bg-green-500/10 text-green-800 dark:text-green-300' : 'border-border bg-muted'}`}
-            >
-              <Utensils size={14} /> <span className="truncate">{table.name ?? table.number}</span>
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-3 gap-2 min-[400px]:grid-cols-4">
+            {[...tables]
+              .sort((a, b) =>
+                String(a.name ?? a.number).localeCompare(String(b.name ?? b.number), undefined, {
+                  numeric: true,
+                }),
+              )
+              .map((table) => {
+                const available = table.status === 'available';
+                return (
+                  <button
+                    key={table.id}
+                    type="button"
+                    onClick={() => onTable(table.id)}
+                    className={`flex min-h-14 items-center justify-center gap-2 rounded-xl border-2 px-1 text-xl font-bold ${available ? 'border-green-700 bg-background dark:border-green-400' : 'border-border bg-muted'}`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`size-3 shrink-0 rounded-full ${available ? 'bg-green-700 dark:bg-green-400' : 'bg-muted-foreground'}`}
+                    />
+                    <span className="truncate">{table.name ?? table.number}</span>
+                    <span className="sr-only">{t(available ? 'tableAvailable' : 'tableBusy')}</span>
+                  </button>
+                );
+              })}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-base" aria-hidden="true">
+            <span className="flex items-center gap-2">
+              <span className="size-3 rounded-full bg-green-700 dark:bg-green-400" />
+              {t('tableAvailable')}
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="size-3 rounded-full bg-muted-foreground" />
+              {t('tableBusy')}
+            </span>
+          </div>
+        </>
       )}
     </section>
   );
   const history = (
     <section className={card}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="font-bold">{panel === 'profile' ? t('todayWork') : t('history')}</h2>
-        {panel === 'profile' && (
-          <button type="button" onClick={() => setPanel('history')} className={action}>
-            {t('viewAll')}
-            <ChevronRight size={16} />
-          </button>
-        )}
-      </div>
+      {sectionHeader(panel === 'profile' ? t('todayWork') : t('history'), viewAll('history'))}
       {!(panel === 'profile' ? today : snapshot?.attendance.length) ? (
-        <p className="text-sm text-muted-foreground">{t('noAttendance')}</p>
+        <p className="text-lg text-muted-foreground">{t('noAttendance')}</p>
       ) : (
         (panel === 'profile' && today ? [today] : (snapshot?.attendance ?? [])).map((entry) => (
           <div
             key={entry.business_date}
-            className="flex flex-wrap items-center justify-between gap-2 border-t border-border py-2 text-sm"
+            className="flex flex-wrap items-center justify-between gap-2 border-t-2 border-border py-3 text-lg first-of-type:border-t-0"
           >
             <span className="flex items-center gap-2">
-              <Clock size={17} className="text-brand" />
+              <Clock size={22} className={accentText} aria-hidden="true" />
               {entry.business_date}
             </span>
-            <span dir="ltr" className="tabular-nums">
+            <span dir="ltr" className="font-semibold tabular-nums">
               {formatTime(entry.clock_in_at)} – {formatTime(entry.clock_out_at)}
             </span>
             {!entry.clock_out_at && (
-              <span className="rounded-full bg-green-500/10 px-2 py-1 text-xs text-green-800 dark:text-green-300">
+              <span className="rounded-full border-2 border-green-700 px-3 py-1 text-base font-semibold text-green-800 dark:border-green-400 dark:text-green-300">
                 {t('clockedIn')}
               </span>
             )}
@@ -256,66 +290,70 @@ export function StaffProfile({
   );
 
   return (
-    <div data-testid="server-app-staff-profile" className="min-h-dvh bg-muted/35 text-foreground">
-      <div className="mx-auto min-h-dvh max-w-lg bg-background shadow-sm">
-        <header
-          className={`relative flex items-center justify-between gap-3 px-4 py-4 ${panel === 'profile' ? 'min-h-32 items-start bg-neutral-900 bg-cover bg-center text-white' : 'border-b border-border'}`}
-          style={
-            panel === 'profile'
-              ? { backgroundImage: `linear-gradient(#26130588,#261305d9),url("${coverUrl}")` }
-              : undefined
-          }
-        >
+    <div data-testid="server-app-staff-profile" className="min-h-dvh bg-muted/40 text-foreground">
+      <div className="mx-auto min-h-dvh max-w-lg bg-background">
+        <header className="sticky top-0 z-10 flex items-center gap-2 border-b-2 border-border bg-card px-2 py-2">
           <button
             type="button"
             className={action}
             aria-label={t('back')}
             onClick={panel === 'profile' ? onClose : () => setPanel('profile')}
           >
-            <ArrowLeft size={22} />
+            <ArrowLeft size={26} aria-hidden="true" />
           </button>
-          <h1 className="mt-2 flex-1 text-xl font-bold">{t(panel)}</h1>
+          <h1 className="min-w-0 flex-1 truncate text-2xl font-bold">{t(panel)}</h1>
           {panel === 'profile' && (
-            <button type="button" className={action} aria-label={t('logout')} onClick={onLogout}>
-              <LogOut size={20} />
+            <button type="button" className={`${action} border-2 border-border`} onClick={onLogout}>
+              <LogOut size={22} aria-hidden="true" />
+              <span className="hidden min-[400px]:inline">{t('logout')}</span>
+              <span className="sr-only min-[400px]:hidden">{t('logout')}</span>
             </button>
           )}
         </header>
-        <main className={`relative space-y-3 px-3 pb-24 ${panel === 'profile' ? '-mt-8' : 'pt-4'}`}>
+        <main className={`space-y-4 px-3 pt-4 ${panel === 'profile' ? 'pb-28' : 'pb-8'}`}>
           {panel === 'profile' && (
             <>
               <section className={`flex items-center gap-4 ${card}`}>
                 <div
-                  className="grid size-20 shrink-0 place-items-center rounded-full bg-brand/10 text-2xl font-bold text-brand"
+                  className={`grid size-20 shrink-0 place-items-center rounded-full text-3xl font-bold ${accentSoft} ${accentText}`}
                   aria-hidden="true"
                 >
                   {Array.from(user.name.trim()).slice(0, 2).join('')}
                 </div>
                 <div className="min-w-0">
-                  <h2 className="break-words text-xl font-bold">{user.name}</h2>
-                  <p className="text-sm text-muted-foreground">{role}</p>
+                  <h2 className="break-words text-2xl font-bold">{user.name}</h2>
+                  <p className="text-lg text-muted-foreground">{role}</p>
                   {active && (
-                    <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-1 text-xs font-semibold text-green-800 dark:text-green-300">
-                      <span className="size-2 rounded-full bg-green-600" />
+                    <p className="mt-2 inline-flex items-center gap-2 rounded-full border-2 border-green-700 px-3 py-1 text-base font-semibold text-green-800 dark:border-green-400 dark:text-green-300">
+                      <span className="size-3 rounded-full bg-green-700 dark:bg-green-400" />
                       {t('working')}
                     </p>
                   )}
                 </div>
               </section>
-              <div className="grid grid-cols-2 gap-2">
-                {tiles.map(({ id, icon: Icon, detail }) => (
+              <div className="grid grid-cols-2 gap-3">
+                {tiles.map(({ id, icon: Icon, detail }, index) => (
                   <button
                     key={id}
                     type="button"
                     onClick={() => setPanel(id)}
-                    className={`flex min-w-0 items-center gap-2 text-start ${card}`}
+                    className={`flex min-w-0 gap-3 text-start active:bg-muted ${card} ${index === tiles.length - 1 && tiles.length % 2 ? 'col-span-2 items-center' : 'min-h-32 flex-col items-start justify-between'}`}
                   >
-                    <Icon size={23} className="shrink-0 text-brand" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-bold">{t(id)}</span>
-                      <span className="block text-xs text-muted-foreground">{detail}</span>
+                    <span
+                      className={`grid size-12 shrink-0 place-items-center rounded-xl ${accentSoft}`}
+                      aria-hidden="true"
+                    >
+                      <Icon size={28} className={accentText} />
                     </span>
-                    <ChevronRight size={15} className="shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-lg font-bold leading-snug">{t(id)}</span>
+                      <span
+                        className="block break-words text-base text-muted-foreground"
+                        dir="auto"
+                      >
+                        {detail}
+                      </span>
+                    </span>
                   </button>
                 ))}
               </div>
@@ -326,34 +364,29 @@ export function StaffProfile({
           )}
           {panel === 'personal' && (
             <section className={card}>
-              <dl className="space-y-3 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">{t('name')}</dt>
-                  <dd className="font-semibold">{user.name}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">{t('email')}</dt>
-                  <dd className="break-all font-semibold">{user.email || '—'}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">{t('role')}</dt>
-                  <dd className="font-semibold">{role}</dd>
-                </div>
+              <dl className="divide-y-2 divide-border text-lg">
+                {(
+                  [
+                    ['name', user.name],
+                    ['email', user.email || '—'],
+                    ['role', role],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div key={label} className="py-3 first:pt-0 last:pb-0">
+                    <dt className="text-base text-muted-foreground">{t(label)}</dt>
+                    <dd className="break-all font-semibold">{value}</dd>
+                  </div>
+                ))}
               </dl>
             </section>
           )}
           {panel === 'tables' && tableList}
           {panel === 'sales' && summary}
           {panel === 'history' && history}
-          {panel === 'leave' && (
-            <section className={card}>
-              <p className="text-sm text-muted-foreground">{t('leaveUnavailable')}</p>
-            </section>
-          )}
           {panel === 'preferences' && (
-            <section className={`space-y-4 ${card}`}>
+            <section className={`space-y-6 ${card}`}>
               <div>
-                <p className="mb-2 text-sm font-semibold">{t('fontSize')}</p>
+                <p className="mb-2 text-lg font-bold">{t('fontSize')}</p>
                 <div className="grid grid-cols-3 gap-2">
                   {(['small', 'normal', 'large'] as const).map((size) => (
                     <button
@@ -361,15 +394,27 @@ export function StaffProfile({
                       key={size}
                       aria-pressed={fontSize === size}
                       onClick={() => onFontSize(size)}
-                      className={`${action} justify-center border ${fontSize === size ? 'border-brand bg-brand/10 text-brand' : 'border-border'}`}
+                      className={choice(fontSize === size)}
                     >
                       {t(size)}
+                      <span
+                        aria-hidden="true"
+                        className={
+                          size === 'small'
+                            ? 'text-base'
+                            : size === 'normal'
+                              ? 'text-xl'
+                              : 'text-2xl'
+                        }
+                      >
+                        A
+                      </span>
                     </button>
                   ))}
                 </div>
               </div>
               <div>
-                <p className="mb-2 text-sm font-semibold">{t('theme')}</p>
+                <p className="mb-2 text-lg font-bold">{t('theme')}</p>
                 <div className="grid grid-cols-2 gap-2">
                   {[false, true].map((value) => (
                     <button
@@ -379,44 +424,61 @@ export function StaffProfile({
                       onClick={() => {
                         if (dark !== value) onDark();
                       }}
-                      className={`${action} justify-center border ${dark === value ? 'border-brand bg-brand/10 text-brand' : 'border-border'}`}
+                      className={choice(dark === value)}
                     >
                       {t(value ? 'dark' : 'light')}
                     </button>
                   ))}
                 </div>
               </div>
-              <label className="block text-sm font-semibold">
-                {t('language')}
-                <select
-                  value={language}
-                  onChange={(event) => onLanguage(event.target.value as Language)}
-                  className="mt-2 min-h-11 w-full rounded-xl border border-border bg-background px-3 font-normal"
-                >
-                  <option value="th">ไทย</option>
-                  <option value="en">English</option>
-                </select>
-              </label>
+              <div>
+                <p className="mb-2 text-lg font-bold">{t('language')}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      ['th', 'ไทย'],
+                      ['en', 'English'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      type="button"
+                      key={value}
+                      lang={value}
+                      aria-pressed={language === value}
+                      onClick={() => onLanguage(value)}
+                      className={choice(language === value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </section>
           )}
         </main>
         {panel === 'profile' && (
-          <nav className="fixed inset-x-0 bottom-0 z-10 mx-auto grid max-w-lg grid-cols-4 border-t border-border bg-card pb-[env(safe-area-inset-bottom)]">
+          <nav className="fixed inset-x-0 bottom-0 z-10 mx-auto grid max-w-lg grid-cols-4 border-t-2 border-border bg-card pb-[env(safe-area-inset-bottom)]">
             {[
               { label: 'home', icon: Home, run: onClose },
               { label: 'orders', icon: ReceiptText, run: onOrders },
-              { label: 'tables', icon: Utensils, run: () => onTable() },
-              { label: 'profile', icon: UserRound, run: () => setPanel('profile') },
+              { label: 'navTables', icon: Utensils, run: () => onTable() },
+              {
+                label: 'navProfile',
+                icon: UserRound,
+                run: () => setPanel('profile'),
+              },
             ].map(({ label, icon: Icon, run }) => (
               <button
                 key={label}
                 type="button"
                 onClick={run}
-                aria-current={label === 'profile' ? 'page' : undefined}
-                className={`flex min-h-14 flex-col items-center justify-center gap-1 text-xs ${label === 'profile' ? 'font-semibold text-brand' : 'text-muted-foreground'}`}
+                aria-current={label === 'navProfile' ? 'page' : undefined}
+                className={`flex min-h-16 flex-col items-center justify-center gap-1 px-1 text-base leading-tight ${label === 'navProfile' ? `font-bold ${accentText}` : 'text-muted-foreground'}`}
               >
-                <Icon size={20} />
-                {t(label as 'home' | 'orders' | 'tables' | 'profile')}
+                <Icon size={26} aria-hidden="true" />
+                <span className="max-w-full truncate">
+                  {t(label as 'home' | 'orders' | 'navTables' | 'navProfile')}
+                </span>
               </button>
             ))}
           </nav>
