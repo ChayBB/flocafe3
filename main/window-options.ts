@@ -68,8 +68,8 @@ export function createMainWindow(
     windowStatePersistence: true,
     width: 1400,
     height: 900,
-    minWidth: 1024,
-    minHeight: 768,
+    minWidth: MAIN_WINDOW_MIN_WIDTH,
+    minHeight: MAIN_WINDOW_MIN_HEIGHT,
     title: 'Flo',
     titleBarStyle: platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(resolvedTitleBarMode === 'native-overlay'
@@ -95,6 +95,81 @@ export function createMainWindow(
   });
 }
 
+export interface WindowRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export const MAIN_WINDOW_MIN_WIDTH = 1024;
+export const MAIN_WINDOW_MIN_HEIGHT = 700;
+const RESTORED_WIDTH_RATIO = 0.8;
+const RESTORED_HEIGHT_RATIO = 0.85;
+// A restored size this close to the work area is a maximized window in disguise.
+const NEAR_MAXIMIZED_RATIO = 0.95;
+
+function clampSize(value: number, min: number, max: number): number {
+  return Math.max(Math.min(min, max), Math.min(Math.round(value), max));
+}
+
+function clampPosition(value: number, start: number, span: number, size: number): number {
+  return Math.round(Math.min(Math.max(value, start), start + span - size));
+}
+
+/** Windowed bounds proportional to the display work area, centred on it. */
+export function computeDefaultWindowBounds(workArea: WindowRect): WindowRect {
+  const width = clampSize(
+    workArea.width * RESTORED_WIDTH_RATIO,
+    MAIN_WINDOW_MIN_WIDTH,
+    workArea.width,
+  );
+  const height = clampSize(
+    workArea.height * RESTORED_HEIGHT_RATIO,
+    MAIN_WINDOW_MIN_HEIGHT,
+    workArea.height,
+  );
+  return {
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+/**
+ * Keeps a remembered windowed size when it is sensible on this display, clamped into the work
+ * area; otherwise (missing, tiny, near-maximized or off this display) falls back to the default.
+ */
+export function fitWindowBounds(
+  current: WindowRect | null | undefined,
+  workArea: WindowRect,
+): WindowRect {
+  const valid =
+    current &&
+    [current.x, current.y, current.width, current.height].every(Number.isFinite) &&
+    current.width >= Math.min(MAIN_WINDOW_MIN_WIDTH, workArea.width) &&
+    current.height >= Math.min(MAIN_WINDOW_MIN_HEIGHT, workArea.height);
+  if (!valid) return computeDefaultWindowBounds(workArea);
+  const nearMaximized =
+    current.width >= workArea.width * NEAR_MAXIMIZED_RATIO &&
+    current.height >= workArea.height * NEAR_MAXIMIZED_RATIO;
+  const intersects =
+    current.x < workArea.x + workArea.width &&
+    current.x + current.width > workArea.x &&
+    current.y < workArea.y + workArea.height &&
+    current.y + current.height > workArea.y;
+  if (nearMaximized || !intersects) return computeDefaultWindowBounds(workArea);
+  const width = Math.min(Math.round(current.width), workArea.width);
+  const height = Math.min(Math.round(current.height), workArea.height);
+  return {
+    x: clampPosition(current.x, workArea.x, workArea.width, width),
+    y: clampPosition(current.y, workArea.y, workArea.height, height),
+    width,
+    height,
+  };
+}
+
 /** Minimal window surface needed to service a window-control action. */
 export type WindowControlTarget = Pick<
   BrowserWindow,
@@ -102,12 +177,14 @@ export type WindowControlTarget = Pick<
 > & {
   isFullScreen?: () => boolean;
   setFullScreen?: (flag: boolean) => void;
+  setBounds?: (bounds: WindowRect) => void;
 };
 
 /** Applies a window action (minimize, toggle-maximize, close) preserving close-to-tray. */
 export function applyWindowControlAction(
   win: WindowControlTarget,
   action: unknown,
+  resolveRestoredBounds?: () => WindowRect | null,
 ): { success: true } | { error: string } {
   if (action !== 'minimize' && action !== 'toggle-maximize' && action !== 'close') {
     return { error: 'Unsupported window action' };
@@ -124,7 +201,10 @@ export function applyWindowControlAction(
           win.unmaximize();
         }
       } else if (win.isMaximized()) {
+        // Resolve before unmaximizing so the display is the one the maximized window fills.
+        const restored = resolveRestoredBounds?.() ?? null;
         win.unmaximize();
+        if (restored && typeof win.setBounds === 'function') win.setBounds(restored);
       } else {
         win.maximize();
       }

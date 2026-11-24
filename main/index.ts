@@ -9,6 +9,7 @@ import {
   shell,
   powerMonitor,
   nativeTheme,
+  screen,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -115,8 +116,10 @@ import { clearStaleRenderCachesOnVersionChange } from './startup-cache';
 import {
   attachChildWindowLifecycleGuards,
   createLocalWindowOpenHandler,
+  computeDefaultWindowBounds,
   createMainWindow,
   createMainWindowWillNavigateHandler,
+  fitWindowBounds,
   resolveTitleBarMode,
   type TitleBarMode,
 } from './window-options';
@@ -900,21 +903,31 @@ function createWindow(): void {
   }
   const initialIsDark = resolveInitialIsDark(themeMode, nativeTheme.shouldUseDarkColors);
   currentEffectiveIsDark = initialIsDark;
+  const initialBounds = computeDefaultWindowBounds(screen.getPrimaryDisplay().workArea);
   const createdWindow = createMainWindow(
     BrowserWindow,
     path.join(__dirname, 'preload.js'),
     process.platform,
     initialIsDark,
     resolvedTitleBarMode,
-    // Hidden windows are throttled by Chromium; the native E2E harness still
-    // needs live timers and WebSocket traffic from a window it never shows.
-    process.env.FLO_E2E_HIDDEN_WINDOW === '1'
-      ? { webPreferences: { backgroundThrottling: false } }
-      : undefined,
+    {
+      width: initialBounds.width,
+      height: initialBounds.height,
+      // Hidden windows are throttled by Chromium; the native E2E harness still
+      // needs live timers and WebSocket traffic from a window it never shows.
+      ...(process.env.FLO_E2E_HIDDEN_WINDOW === '1'
+        ? { webPreferences: { backgroundThrottling: false } }
+        : {}),
+    },
   );
   mainWindow = createdWindow;
 
   mainWindow.once('ready-to-show', () => {
+    // A remembered windowed size may not suit the display it reopens on.
+    if (!createdWindow.isMaximized() && !createdWindow.isFullScreen()) {
+      const bounds = createdWindow.getBounds();
+      createdWindow.setBounds(fitWindowBounds(bounds, screen.getDisplayMatching(bounds).workArea));
+    }
     // The native E2E harness drives the app through Playwright from a window it
     // never shows, so it must not spawn DevTools on the developer's desktop.
     if (isDev && process.env.FLO_E2E_HIDDEN_WINDOW !== '1') {

@@ -16,7 +16,9 @@ import {
   applyWindowControlAction,
   createKdsWindow,
   createLocalWindowOpenHandler,
+  computeDefaultWindowBounds,
   createMainWindow,
+  fitWindowBounds,
   resolveTitleBarMode,
 } from '../main/window-options';
 
@@ -213,6 +215,66 @@ assert.deepEqual(applyWindowControlAction(win as any, 'toggle-maximize'), { succ
 assert.equal(win.fullscreen, false, 'toggle-maximize exits fullscreen if window is fullscreen');
 assert.deepEqual(applyWindowControlAction(win as any, 'close'), { success: true });
 assert.deepEqual(win.calls, ['minimize', 'maximize', 'unmaximize', 'fullscreen:false', 'close']);
+
+const fullHd = { x: 0, y: 0, width: 1920, height: 1040 };
+const laptop = { x: 0, y: 0, width: 1366, height: 728 };
+const rightMonitor = { x: 1920, y: 0, width: 2560, height: 1400 };
+assert.deepEqual(
+  computeDefaultWindowBounds(fullHd),
+  { x: 192, y: 78, width: 1536, height: 884 },
+  'default windowed size is ~80% x 85% of the work area, centred',
+);
+assert.deepEqual(
+  computeDefaultWindowBounds(laptop),
+  { x: 137, y: 14, width: 1093, height: 700 },
+  'a 1366x768 laptop gets the minimum height and 80% width',
+);
+assert.deepEqual(
+  computeDefaultWindowBounds({ x: 0, y: 0, width: 900, height: 600 }),
+  { x: 0, y: 0, width: 900, height: 600 },
+  'a work area below the minimum is filled, never exceeded',
+);
+assert.deepEqual(
+  fitWindowBounds({ x: 100, y: 50, width: 1200, height: 800 }, fullHd),
+  { x: 100, y: 50, width: 1200, height: 800 },
+  'a sensible remembered size is kept',
+);
+assert.deepEqual(
+  fitWindowBounds({ x: 800, y: 300, width: 1200, height: 900 }, laptop),
+  { x: 166, y: 0, width: 1200, height: 728 },
+  'a remembered size larger than the display is clamped into its work area',
+);
+assert.deepEqual(
+  fitWindowBounds({ x: 0, y: 0, width: 400, height: 300 }, fullHd),
+  computeDefaultWindowBounds(fullHd),
+  'a tiny remembered window restores to the proportional default',
+);
+assert.deepEqual(
+  fitWindowBounds({ x: 0, y: 0, width: 1920, height: 1040 }, fullHd),
+  computeDefaultWindowBounds(fullHd),
+  'a near-maximized normal size restores to the proportional default',
+);
+assert.deepEqual(
+  fitWindowBounds({ x: 100, y: 50, width: 1200, height: 800 }, rightMonitor),
+  computeDefaultWindowBounds(rightMonitor),
+  'bounds from another monitor restore centred on the current one',
+);
+assert.deepEqual(fitWindowBounds(null, fullHd), computeDefaultWindowBounds(fullHd));
+
+const restoreWin = new FakeWindow() as FakeWindow & {
+  bounds?: unknown;
+  setBounds: (b: unknown) => void;
+};
+restoreWin.setBounds = (b) => {
+  restoreWin.bounds = b;
+  restoreWin.calls.push('setBounds');
+};
+const restoredBounds = computeDefaultWindowBounds(fullHd);
+applyWindowControlAction(restoreWin as any, 'toggle-maximize', () => restoredBounds);
+assert.equal(restoreWin.bounds, undefined, 'maximizing does not resize');
+applyWindowControlAction(restoreWin as any, 'toggle-maximize', () => restoredBounds);
+assert.deepEqual(restoreWin.calls, ['maximize', 'unmaximize', 'setBounds']);
+assert.deepEqual(restoreWin.bounds, restoredBounds, 'restore applies display-fitted bounds');
 
 for (const bad of ['destroy', '', 'minimize ', 'MAXIMIZE', undefined, null, 42]) {
   assert.deepEqual(

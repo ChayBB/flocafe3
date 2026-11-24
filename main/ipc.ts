@@ -1,4 +1,4 @@
-import { ipcMain, dialog, app, BrowserWindow, Menu, shell } from 'electron';
+import { ipcMain, dialog, app, BrowserWindow, Menu, screen, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
@@ -25,7 +25,7 @@ import {
 } from './services/restore-file-selection';
 import { runHealthCheck, applySafeFixes } from './services/schema-health';
 import { getStatus as getWhatsAppStatus, sanitizeLogText } from './services/whatsapp';
-import { createKdsWindow, applyWindowControlAction } from './window-options';
+import { createKdsWindow, applyWindowControlAction, fitWindowBounds } from './window-options';
 import {
   isApplicationMenuSender,
   listApplicationMenuEntries,
@@ -465,7 +465,9 @@ export function registerIpcHandlers(
   handle('window-action', (event, action: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return { error: 'Window unavailable' };
-    return applyWindowControlAction(win, action);
+    return applyWindowControlAction(win, action, () =>
+      fitWindowBounds(win.getNormalBounds(), screen.getDisplayMatching(win.getBounds()).workArea),
+    );
   });
 
   // Application menu for the frameless Windows/Linux title bar. Electron does
