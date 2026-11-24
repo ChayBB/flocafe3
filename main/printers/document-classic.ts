@@ -28,6 +28,7 @@ import {
   normalizeReceiptLogoSize,
   receiptLogoOffsetDots,
   receiptLogoPrintScale,
+  receiptLogoScaleIsFractional,
 } from '../../shared/print/image-raster';
 import {
   displayCellWidth,
@@ -589,6 +590,7 @@ export function renderBillDocumentToClassicLines(
             maxBandHeight,
             receiptLogoPrintScale(block.logoSize),
             receiptLogoOffsetDots(block.logoOffsetMm),
+            receiptLogoScaleIsFractional(block.logoSize),
           );
           if (bands.length > 0) {
             const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));

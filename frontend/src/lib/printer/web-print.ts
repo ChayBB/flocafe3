@@ -70,6 +70,20 @@ export function escapeHtml(value: unknown): string {
 }
 
 /** Render one kernel-annotated value with bidi-isolated LTR span when RTL. */
+
+/** Medium (the original size) caps the logo at 120px; slider scales grow that cap linearly. */
+function receiptLogoImgAttrs(logoSize: unknown, logoOffsetMm: unknown): string {
+  const size = normalizeReceiptLogoSize(logoSize);
+  const styles: string[] = [];
+  if (typeof size === 'number') {
+    styles.push('max-width: 100%', `max-height: ${Math.round(60 * size)}px`);
+  }
+  const offsetMm = normalizeReceiptLogoOffsetMm(logoOffsetMm);
+  if (offsetMm !== 0) styles.push('position: relative', `left: ${offsetMm}mm`);
+  const className =
+    typeof size === 'number' ? 'receipt-logo' : `receipt-logo receipt-logo--${size}`;
+  return `class="${className}"${styles.length > 0 ? ` style="${styles.join('; ')}"` : ''}`;
+}
 function directionalValue(value: DirectionalText | null, base: TextDirection): string {
   if (!value) return '';
   if (value.direction === 'ltr' && base === 'rtl') {
@@ -443,7 +457,7 @@ export function generateBillHtml(
     ${messages?.onlineOrderBanner ? `<div class="online-order-banner">${escapeHtml(messages.onlineOrderBanner.label.primary)}${messages.onlineOrderBanner.platform.text ? `<div class="online-order-detail">${escapeHtml(messages.onlineOrderBanner.platform.text)}</div>` : ''}${messages.onlineOrderBanner.externalOrderId.text ? `<div class="online-order-detail">#${escapeHtml(messages.onlineOrderBanner.externalOrderId.text)}</div>` : ''}</div>` : ''}
     <!-- Header -->
     <div class="header">
-      ${header?.logo && header.logo.startsWith('data:image/') ? `<div class="logo-container"><img class="receipt-logo receipt-logo--${normalizeReceiptLogoSize(header.logoSize)}"${header.logoOffsetMm ? ` style="position: relative; left: ${normalizeReceiptLogoOffsetMm(header.logoOffsetMm)}mm"` : ''} src="${escapeHtml(header.logo)}" alt="Logo" /></div>` : ''}
+      ${header?.logo && header.logo.startsWith('data:image/') ? `<div class="logo-container"><img ${receiptLogoImgAttrs(header.logoSize, header.logoOffsetMm)} src="${escapeHtml(header.logo)}" alt="Logo" /></div>` : ''}
       ${header?.name ? `<h1>${escapeHtml(header.name.text)}</h1>` : ''}
       ${header?.address ? `<p>${escapeHtml(header.address.text).replace(/\n/g, '<br>')}</p>` : ''}
       ${header?.phone && header.phoneLabel ? `<p>${escapeHtml(header.phoneLabel.primary)}: ${directionalValue(header.phone, base)}</p>` : ''}

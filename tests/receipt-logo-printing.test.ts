@@ -680,6 +680,41 @@ async function run() {
     );
   }
 
+  console.log('--- 3c2. Logo size slider scale ---');
+  assertEqualOrThrow(normalizeReceiptLogoSize('1.5'), 1.5, 'stored slider scale parses');
+  assertEqualOrThrow(normalizeReceiptLogoSize(9), 3, 'slider scale clamps to the maximum');
+  assertEqualOrThrow(normalizeReceiptLogoSize(0.1), 0.5, 'slider scale clamps to the minimum');
+  const sliderBands = getLogoRasterBands(sizeLogoJson, 384, 200, 1.5, 0, true);
+  assertEqualOrThrow(bandInkColumns(sliderBands), 96, 'x1.5 logo width');
+  assertEqualOrThrow(
+    sliderBands.reduce((sum, band) => sum + band.heightDots, 0),
+    60,
+    'x1.5 logo height',
+  );
+  assertOrThrow(
+    sliderBands.every((band) => band.widthDots === 384),
+    'slider logo bands span the printable width',
+  );
+  const sliderFit = getLogoRasterBands(wideLogoJson, 384, 200, 3, 0, true);
+  assertEqualOrThrow(bandInkColumns(sliderFit), 384, 'large slider scale fits the paper width');
+  assertEqualOrThrow(
+    sliderFit.reduce((sum, band) => sum + band.heightDots, 0),
+    77,
+    'fitted slider logo keeps its aspect ratio',
+  );
+  for (const template of ['classic', 'compact'] as const) {
+    assertEqualOrThrow(
+      gsV0Heights(sizedReceipt(template, '1.5')).totalHeight,
+      60,
+      `${template}: x1.5 slider logo height`,
+    );
+    assertEqualOrThrow(
+      gsV0Heights(sizedReceipt(template, '0.5')).totalHeight,
+      20,
+      `${template}: x0.5 slider logo height`,
+    );
+  }
+
   console.log('--- 3d. Logo offset setting ---');
   assertEqualOrThrow(receiptLogoOffsetDots(undefined), 0, 'unset offset is centred');
   assertEqualOrThrow(receiptLogoOffsetDots(2.5), 20, '2.5 mm is 20 dots');
@@ -1128,6 +1163,22 @@ async function run() {
     assertEqualOrThrow(offsetRes.status, 200, 'logo offset saves');
     const afterOffset = await api(baseUrl, '/api/settings/printing', { headers: authHeaders });
     assertEqualOrThrow(afterOffset.data.bill_logo_offset_mm, -2.5, 'logo offset reloads');
+    for (const badScale of [0.4, 3.1, 1.55]) {
+      const badScaleRes = await api(baseUrl, '/api/settings/printing', {
+        method: 'PUT',
+        headers: authHeaders,
+        body: { ...printingBody, bill_logo_size: badScale },
+      });
+      assertEqualOrThrow(badScaleRes.status, 400, `logo scale ${badScale} is rejected`);
+    }
+    const scaleRes = await api(baseUrl, '/api/settings/printing', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: { ...printingBody, bill_logo_size: 1.7 },
+    });
+    assertEqualOrThrow(scaleRes.status, 200, 'logo slider scale saves');
+    const afterScale = await api(baseUrl, '/api/settings/printing', { headers: authHeaders });
+    assertEqualOrThrow(afterScale.data.bill_logo_size, 1.7, 'logo slider scale reloads');
 
     // Update bill_show_logo toggle via PUT /api/settings/printing
     const toggleRes = await api(baseUrl, '/api/settings/printing', {

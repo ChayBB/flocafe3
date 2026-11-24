@@ -64,6 +64,7 @@ import {
   getLogoRasterBands,
   receiptLogoOffsetDots,
   receiptLogoPrintScale,
+  receiptLogoScaleIsFractional,
   type ReceiptLogoSize,
 } from '@print/image-raster';
 import { concatBytes, encodeGsV0Band, rasterCapabilityEnabled } from '@print/raster';
@@ -696,6 +697,7 @@ export function buildClassicReceiptBytes(
       maxBandHeight,
       receiptLogoPrintScale(header?.logoSize),
       receiptLogoOffsetDots(header?.logoOffsetMm),
+      receiptLogoScaleIsFractional(header?.logoSize),
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
@@ -1243,6 +1245,7 @@ export function buildCompactReceiptBytes(
       maxBandHeight,
       receiptLogoPrintScale(header?.logoSize),
       receiptLogoOffsetDots(header?.logoOffsetMm),
+      receiptLogoScaleIsFractional(header?.logoSize),
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));

@@ -13,26 +13,80 @@ const MAX_LOGO_HEIGHT_DOTS = 0xffff;
 /** Receipt logos print at twice their stored size unless the merchant picks another size. */
 export const RECEIPT_LOGO_PRINT_SCALE = 2;
 
-export const RECEIPT_LOGO_SIZES = ['small', 'medium', 'large'] as const;
-export type ReceiptLogoSize = (typeof RECEIPT_LOGO_SIZES)[number];
+export const RECEIPT_LOGO_SIZE_PRESETS = ['small', 'medium', 'large'] as const;
+export type ReceiptLogoSizePreset = (typeof RECEIPT_LOGO_SIZE_PRESETS)[number];
+/**
+ * A preset keeps whole-number scaling (`medium` is the original fixed size); a number is a
+ * free scale factor from the size slider that resamples and fits the paper width.
+ */
+export type ReceiptLogoSize = ReceiptLogoSizePreset | number;
 export const DEFAULT_RECEIPT_LOGO_SIZE: ReceiptLogoSize = 'medium';
+export const RECEIPT_LOGO_SCALE_MIN = 0.5;
+export const RECEIPT_LOGO_SCALE_MAX = 3;
+export const RECEIPT_LOGO_SCALE_STEP = 0.1;
 
-const RECEIPT_LOGO_SIZE_SCALE: Record<ReceiptLogoSize, number> = {
+const RECEIPT_LOGO_PRESET_SCALE: Record<ReceiptLogoSizePreset, number> = {
   small: 1,
   medium: RECEIPT_LOGO_PRINT_SCALE,
   large: 3,
 };
 
-export function isReceiptLogoSize(value: unknown): value is ReceiptLogoSize {
-  return typeof value === 'string' && (RECEIPT_LOGO_SIZES as readonly string[]).includes(value);
+function isReceiptLogoSizePreset(value: unknown): value is ReceiptLogoSizePreset {
+  return (
+    typeof value === 'string' && (RECEIPT_LOGO_SIZE_PRESETS as readonly string[]).includes(value)
+  );
 }
 
+function isReceiptLogoScale(value: unknown): value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+  const steps = value / RECEIPT_LOGO_SCALE_STEP;
+  return (
+    value >= RECEIPT_LOGO_SCALE_MIN &&
+    value <= RECEIPT_LOGO_SCALE_MAX &&
+    Math.abs(steps - Math.round(steps)) < 1e-9
+  );
+}
+
+export function isReceiptLogoSize(value: unknown): value is ReceiptLogoSize {
+  return isReceiptLogoSizePreset(value) || isReceiptLogoScale(value);
+}
+
+/** Accepts a preset, a scale number, or a stored numeric string; anything else is `medium`. */
 export function normalizeReceiptLogoSize(value: unknown): ReceiptLogoSize {
-  return isReceiptLogoSize(value) ? value : DEFAULT_RECEIPT_LOGO_SIZE;
+  if (isReceiptLogoSizePreset(value)) return value;
+  const parsed = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof parsed === 'number' && Number.isFinite(parsed)) {
+    const clamped = Math.min(RECEIPT_LOGO_SCALE_MAX, Math.max(RECEIPT_LOGO_SCALE_MIN, parsed));
+    return Math.round(clamped / RECEIPT_LOGO_SCALE_STEP) / (1 / RECEIPT_LOGO_SCALE_STEP);
+  }
+  return DEFAULT_RECEIPT_LOGO_SIZE;
 }
 
 export function receiptLogoPrintScale(size: unknown): number {
-  return RECEIPT_LOGO_SIZE_SCALE[normalizeReceiptLogoSize(size)];
+  const normalized = normalizeReceiptLogoSize(size);
+  return typeof normalized === 'number' ? normalized : RECEIPT_LOGO_PRESET_SCALE[normalized];
+}
+
+/** True when the size came from the slider and scales by a free factor. */
+export function receiptLogoScaleIsFractional(size: unknown): boolean {
+  return typeof normalizeReceiptLogoSize(size) === 'number';
+}
+
+/** Printed logo width in dots for a stored variant, mirroring `getLogoRasterBands`. */
+export function receiptLogoPrintedWidthDots(
+  variantWidth: number,
+  targetWidthDots: number,
+  size: unknown,
+): number {
+  const scale = receiptLogoPrintScale(size);
+  if (receiptLogoScaleIsFractional(size)) {
+    return Math.max(1, Math.min(targetWidthDots, Math.round(variantWidth * scale)));
+  }
+  const factor = Math.max(
+    1,
+    Math.min(Math.floor(scale), Math.floor(targetWidthDots / variantWidth)),
+  );
+  return variantWidth * factor;
 }
 
 export const RECEIPT_LOGO_OFFSET_LIMIT_MM = 10;
@@ -370,10 +424,28 @@ function upscalePixels(
   return out;
 }
 
+function resamplePixels(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  outWidth: number,
+  outHeight: number,
+): Uint8Array {
+  const out = new Uint8Array(outWidth * outHeight);
+  for (let y = 0; y < outHeight; y += 1) {
+    const srcRow = Math.min(height - 1, Math.floor((y * height) / outHeight)) * width;
+    for (let x = 0; x < outWidth; x += 1) {
+      out[y * outWidth + x] =
+        pixels[srcRow + Math.min(width - 1, Math.floor((x * width) / outWidth))];
+    }
+  }
+  return out;
+}
+
 /**
  * Parse and resolve raster bands for the target printer width from stored logo data.
- * `scale` enlarges the logo by a whole-number factor, never past the paper width;
- * `offsetDots` shifts it horizontally from centre.
+ * `scale` enlarges the logo by a whole-number factor, or by a free factor when `fractional`,
+ * never past the paper width; `offsetDots` shifts it horizontally from centre.
  */
 export function getLogoRasterBands(
   storedLogoData: ReceiptLogoData | string | null | undefined,
@@ -381,6 +453,7 @@ export function getLogoRasterBands(
   maxBandHeight = DEFAULT_RASTER_MAX_BAND_HEIGHT,
   scale = 1,
   offsetDots = 0,
+  fractional = false,
 ): RasterBand[] {
   if (
     !storedLogoData ||
@@ -426,18 +499,23 @@ export function getLogoRasterBands(
     }
     if (packed.length !== Math.ceil(variant.width / 8) * variant.height) return [];
 
-    const factor = Math.max(
-      1,
-      Math.min(Math.floor(scale), Math.floor(targetWidthDots / variant.width)),
-    );
-    const width = variant.width * factor;
-    const height = variant.height * factor;
-    const unpacked = upscalePixels(
-      unpack1BitPixels(packed, variant.width, variant.height),
-      variant.width,
-      variant.height,
-      factor,
-    );
+    const source = unpack1BitPixels(packed, variant.width, variant.height);
+    let width: number;
+    let height: number;
+    let unpacked: Uint8Array;
+    if (fractional) {
+      width = receiptLogoPrintedWidthDots(variant.width, targetWidthDots, scale);
+      height = Math.max(1, Math.round((variant.height * width) / variant.width));
+      unpacked = resamplePixels(source, variant.width, variant.height, width, height);
+    } else {
+      const factor = Math.max(
+        1,
+        Math.min(Math.floor(scale), Math.floor(targetWidthDots / variant.width)),
+      );
+      width = variant.width * factor;
+      height = variant.height * factor;
+      unpacked = upscalePixels(source, variant.width, variant.height, factor);
+    }
     const centered = centerPixels(unpacked, width, height, targetWidthDots, offsetDots);
     const bands: RasterBand[] = [];
     for (let row = 0; row < height; row += maxBandHeight) {

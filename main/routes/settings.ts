@@ -111,7 +111,10 @@ import {
   parseReceiptLogoData,
   RECEIPT_LOGO_OFFSET_LIMIT_MM,
   RECEIPT_LOGO_OFFSET_STEP_MM,
-  RECEIPT_LOGO_SIZES,
+  RECEIPT_LOGO_SCALE_MAX,
+  RECEIPT_LOGO_SCALE_MIN,
+  RECEIPT_LOGO_SCALE_STEP,
+  RECEIPT_LOGO_SIZE_PRESETS,
 } from '../../shared/print/image-raster';
 import {
   BILL_LANGUAGE_POLICY_KEY,
@@ -215,7 +218,7 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   bill_template: 'classic',
   bill_footer_message: '',
   bill_show_logo: 'false',
-  bill_logo_size: DEFAULT_RECEIPT_LOGO_SIZE,
+  bill_logo_size: String(DEFAULT_RECEIPT_LOGO_SIZE),
   bill_logo_offset_mm: '0',
   bill_show_large_order_number: 'true',
   receipt_logo: '',
@@ -2506,9 +2509,9 @@ router.put(
         }
       }
       if (values.bill_logo_size !== undefined && !isReceiptLogoSize(values.bill_logo_size)) {
-        return res
-          .status(400)
-          .json({ error: `bill_logo_size must be one of: ${RECEIPT_LOGO_SIZES.join(', ')}` });
+        return res.status(400).json({
+          error: `bill_logo_size must be one of ${RECEIPT_LOGO_SIZE_PRESETS.join(', ')} or a scale from ${RECEIPT_LOGO_SCALE_MIN} to ${RECEIPT_LOGO_SCALE_MAX} in steps of ${RECEIPT_LOGO_SCALE_STEP}`,
+        });
       }
       if (
         values.bill_logo_offset_mm !== undefined &&
@@ -2590,7 +2593,7 @@ router.put(
         }
       }
       if (isReceiptLogoSize(values.bill_logo_size)) {
-        entries.bill_logo_size = values.bill_logo_size;
+        entries.bill_logo_size = String(values.bill_logo_size);
       }
       if (isReceiptLogoOffsetMm(values.bill_logo_offset_mm)) {
         entries.bill_logo_offset_mm = String(

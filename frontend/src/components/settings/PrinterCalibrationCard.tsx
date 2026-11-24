@@ -7,7 +7,11 @@ import {
   parseReceiptLogoData,
   RECEIPT_LOGO_OFFSET_LIMIT_MM,
   RECEIPT_LOGO_OFFSET_STEP_MM,
-  RECEIPT_LOGO_SIZES,
+  DEFAULT_RECEIPT_LOGO_SIZE,
+  RECEIPT_LOGO_SCALE_MAX,
+  RECEIPT_LOGO_SCALE_MIN,
+  RECEIPT_LOGO_SCALE_STEP,
+  receiptLogoPrintedWidthDots,
   receiptLogoPrintScale,
   type ReceiptLogoSize,
 } from '@print/image-raster';
@@ -49,11 +53,7 @@ function printedLogoWidthMm(
   const variant =
     parsed.variants[String(targetDots)] ?? parsed.variants['576'] ?? parsed.variants['384'];
   if (!variant) return null;
-  const factor = Math.max(
-    1,
-    Math.min(receiptLogoPrintScale(size), Math.floor(targetDots / variant.width)),
-  );
-  return (variant.width * factor) / DOTS_PER_MM;
+  return receiptLogoPrintedWidthDots(variant.width, targetDots, size) / DOTS_PER_MM;
 }
 
 function columnsFromPaperWidth(paperWidth: string): number {
@@ -100,6 +100,7 @@ export function PrinterCalibrationCard({
   const logoShiftOwnPct =
     logoWidthMm === null || logoWidthMm === 0 ? 0 : (logoShiftMm / logoWidthMm) * 100;
   const logoEditable = logoSizeEditable && showLogo;
+  const logoScale = receiptLogoPrintScale(logoSize);
 
   return (
     <div
@@ -147,26 +148,50 @@ export function PrinterCalibrationCard({
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <label htmlFor="printer-calibration-logo-size" className="flex flex-col">
-              <span className="text-foreground">{t('logoSize')}</span>
-              <span className="text-[11px] text-muted-foreground">
-                {showLogo ? t('logoSizeHint') : t('printerCalibrationLogoOffHint')}
+          <div>
+            <div className="mb-1 flex items-center justify-between gap-3">
+              <label htmlFor="printer-calibration-logo-size" className="flex flex-col">
+                <span className="text-foreground">{t('logoSize')}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {showLogo ? t('logoSizeHint') : t('printerCalibrationLogoOffHint')}
+                </span>
+              </label>
+              <span className="flex shrink-0 items-center gap-2">
+                {logoSize !== DEFAULT_RECEIPT_LOGO_SIZE && logoEditable && (
+                  <button
+                    type="button"
+                    onClick={() => onLogoSizeChange(DEFAULT_RECEIPT_LOGO_SIZE)}
+                    className="rounded-full px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+                  >
+                    {t('logoSizeReset')}
+                  </button>
+                )}
+                <span className="font-semibold text-foreground" dir="ltr">
+                  ×{logoScale.toFixed(1)}
+                  {logoWidthMm !== null && (
+                    <span className="ms-1 text-xs font-normal text-muted-foreground">
+                      ({logoWidthMm.toFixed(0)} mm)
+                    </span>
+                  )}
+                </span>
               </span>
-            </label>
-            <select
+            </div>
+            <input
               id="printer-calibration-logo-size"
-              value={logoSize}
+              type="range"
+              min={RECEIPT_LOGO_SCALE_MIN}
+              max={RECEIPT_LOGO_SCALE_MAX}
+              step={RECEIPT_LOGO_SCALE_STEP}
+              value={logoScale}
               disabled={!logoEditable}
-              onChange={(e) => onLogoSizeChange(e.target.value as ReceiptLogoSize)}
-              className="rounded-md border border-border px-3 py-1.5 text-sm shadow-sm focus:border-brand focus:ring-brand disabled:cursor-not-allowed disabled:bg-muted"
-            >
-              {RECEIPT_LOGO_SIZES.map((size) => (
-                <option key={size} value={size}>
-                  {t(`logoSize_${size}` as 'logoSize_small' | 'logoSize_medium' | 'logoSize_large')}
-                </option>
-              ))}
-            </select>
+              onChange={(e) => onLogoSizeChange(Number(e.target.value))}
+              className="w-full accent-brand disabled:opacity-50"
+              dir="ltr"
+            />
+            <div className="flex justify-between text-[11px] text-muted-foreground" dir="ltr">
+              <span>{t('logoSizeSmaller')}</span>
+              <span>{t('logoSizeLarger')}</span>
+            </div>
           </div>
 
           <div>
