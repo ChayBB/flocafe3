@@ -60,7 +60,12 @@ import {
 } from '@print/document';
 import { layoutStyledUnit } from '@print/layout';
 import type { ResolvedPrintLanguages } from '@print/types';
-import { getLogoRasterBands, RECEIPT_LOGO_PRINT_SCALE } from '@print/image-raster';
+import {
+  getLogoRasterBands,
+  receiptLogoOffsetDots,
+  receiptLogoPrintScale,
+  type ReceiptLogoSize,
+} from '@print/image-raster';
 import { concatBytes, encodeGsV0Band, rasterCapabilityEnabled } from '@print/raster';
 import { formatItemHeading } from './item-heading';
 import { isExcludedFromBillReceipt } from '../../../../shared/order-item-status';
@@ -90,6 +95,10 @@ export interface ReceiptOptions {
   receiptLogo?: string;
   /** Stored 1-bit raster logo JSON */
   receiptLogoRaster?: string;
+  /** Printed logo size; defaults to medium */
+  receiptLogoSize?: ReceiptLogoSize;
+  /** Horizontal logo shift in mm; negative moves left */
+  receiptLogoOffsetMm?: number;
   /** Show the customer name when available. Default: true */
   showCustomerName?: boolean;
   /** Show the customer phone when available. Default: true */
@@ -416,6 +425,8 @@ function buildReceiptEnvironment(
     showLogo: opts.showLogo,
     receiptLogo: opts.receiptLogo,
     receiptLogoRaster: opts.receiptLogoRaster,
+    receiptLogoSize: opts.receiptLogoSize,
+    receiptLogoOffsetMm: opts.receiptLogoOffsetMm,
     showCustomerName: opts.showCustomerName,
     showCustomerPhone: opts.showCustomerPhone,
     deliveryShowCustomerPhoneAlways: opts.deliveryShowCustomerPhoneAlways,
@@ -683,7 +694,8 @@ export function buildClassicReceiptBytes(
       header.logoRaster,
       widthDots,
       maxBandHeight,
-      RECEIPT_LOGO_PRINT_SCALE,
+      receiptLogoPrintScale(header?.logoSize),
+      receiptLogoOffsetDots(header?.logoOffsetMm),
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
@@ -1229,7 +1241,8 @@ export function buildCompactReceiptBytes(
       header.logoRaster,
       widthDots,
       maxBandHeight,
-      RECEIPT_LOGO_PRINT_SCALE,
+      receiptLogoPrintScale(header?.logoSize),
+      receiptLogoOffsetDots(header?.logoOffsetMm),
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));

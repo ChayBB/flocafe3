@@ -33,6 +33,11 @@ import type { BilingualLabel } from './bilingual';
 import type { DirectionSpec } from './direction';
 import { resolveDirectionSpec, resolveValueDirection } from './direction';
 import { graphemeSegments } from './width';
+import {
+  normalizeReceiptLogoOffsetMm,
+  normalizeReceiptLogoSize,
+  type ReceiptLogoSize,
+} from './image-raster';
 import type { PrintLanguageCode, ResolvedPrintLanguages, TextDirection } from './types';
 
 // ---------------------------------------------------------------------------
@@ -195,6 +200,8 @@ export interface BusinessSnapshot {
   readonly showLogo?: boolean;
   readonly receiptLogo?: string;
   readonly receiptLogoRaster?: string;
+  readonly receiptLogoSize?: ReceiptLogoSize;
+  readonly receiptLogoOffsetMm?: number;
 }
 
 /**
@@ -260,6 +267,8 @@ export interface BusinessHeaderBlock {
   readonly phoneLabel: SemanticLabel | null;
   readonly logo?: string | null;
   readonly logoRaster?: string | null;
+  readonly logoSize?: ReceiptLogoSize;
+  readonly logoOffsetMm?: number;
 }
 
 /** Invoice identity: title concept, number, canonical timestamp, table. */
@@ -604,6 +613,12 @@ export function buildBillDocument(printData: PrintData, printContext: PrintConte
     direction: base,
     logo: business.showLogo && business.receiptLogo ? business.receiptLogo : null,
     logoRaster: business.showLogo && business.receiptLogoRaster ? business.receiptLogoRaster : null,
+    ...(business.showLogo && (business.receiptLogo || business.receiptLogoRaster)
+      ? {
+          logoSize: normalizeReceiptLogoSize(business.receiptLogoSize),
+          logoOffsetMm: normalizeReceiptLogoOffsetMm(business.receiptLogoOffsetMm),
+        }
+      : {}),
     name: business.showName ? optionalDirectional(business.name, base) : null,
     address: business.showAddress ? optionalDirectional(business.address, base) : null,
     phone: business.showPhone ? optionalDirectional(business.phone, base) : null,

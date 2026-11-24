@@ -20,6 +20,9 @@ import {
   centerPixels,
   getLogoRasterBands,
   RECEIPT_LOGO_PRINT_SCALE,
+  receiptLogoPrintScale,
+  receiptLogoOffsetDots,
+  normalizeReceiptLogoSize,
   parseReceiptLogoData,
   findLogoContentBounds,
   normalizeGrayscaleContrast,
@@ -104,6 +107,57 @@ function createSampleLogoData(): { logoUrl: string; rasterJson: string } {
     logoUrl,
     rasterJson: JSON.stringify(rasterObj),
   };
+}
+
+function gsV0Heights(bytes: Uint8Array): { widths: number[]; totalHeight: number } {
+  const widths: number[] = [];
+  let totalHeight = 0;
+  for (let i = 0; i + 7 < bytes.length; i += 1) {
+    if (bytes[i] === 0x1d && bytes[i + 1] === 0x76 && bytes[i + 2] === 0x30) {
+      const widthBytes = bytes[i + 4] | (bytes[i + 5] << 8);
+      const height = bytes[i + 6] | (bytes[i + 7] << 8);
+      widths.push(widthBytes * 8);
+      totalHeight += height;
+      i += 7 + widthBytes * height;
+    }
+  }
+  return { widths, totalHeight };
+}
+
+function bandInkColumns(bands: { widthDots: number; pixels: Uint8Array }[]): number {
+  let min = Infinity;
+  let max = -1;
+  for (const band of bands) {
+    for (let i = 0; i < band.pixels.length; i += 1) {
+      if (band.pixels[i] === 0) continue;
+      const x = i % band.widthDots;
+      if (x < min) min = x;
+      if (x > max) max = x;
+    }
+  }
+  return max < 0 ? 0 : max - min + 1;
+}
+
+function bandInkLeft(bands: { widthDots: number; pixels: Uint8Array }[]): number {
+  let min = Infinity;
+  for (const band of bands) {
+    for (let i = 0; i < band.pixels.length; i += 1) {
+      if (band.pixels[i] !== 0) min = Math.min(min, i % band.widthDots);
+    }
+  }
+  return min;
+}
+
+function solidLogoJson(width: number, height: number): string {
+  const pixels = new Uint8Array(width * height).fill(1);
+  const dataBase64 = uint8ToBase64(pack1BitPixels(pixels, width, height));
+  const variant = { width, height, dataBase64 };
+  const logo: ReceiptLogoData = {
+    version: 1,
+    originalDataUrl: 'data:image/png;base64,AA==',
+    variants: { '384': variant, '576': variant },
+  };
+  return JSON.stringify(logo);
 }
 
 async function run() {
@@ -542,6 +596,154 @@ async function run() {
     'Compact receipt ESC/POS bytes should not contain GS v 0 command when show_logo is false',
   );
 
+  console.log('--- 3c. Logo size setting ---');
+  assertEqualOrThrow(receiptLogoPrintScale(undefined), RECEIPT_LOGO_PRINT_SCALE, 'unset is 2x');
+  assertEqualOrThrow(receiptLogoPrintScale('medium'), RECEIPT_LOGO_PRINT_SCALE, 'medium is 2x');
+  assertEqualOrThrow(receiptLogoPrintScale('small'), 1, 'small is 1x');
+  assertEqualOrThrow(receiptLogoPrintScale('large'), 3, 'large is 3x');
+  assertEqualOrThrow(normalizeReceiptLogoSize('huge'), 'medium', 'unknown size falls back');
+
+  const sizeLogoJson = solidLogoJson(64, 40);
+  for (const [size, expectedWidth, expectedHeight] of [
+    ['small', 64, 40],
+    ['medium', 128, 80],
+    ['large', 192, 120],
+  ] as const) {
+    const bands = getLogoRasterBands(sizeLogoJson, 384, 200, receiptLogoPrintScale(size));
+    assertEqualOrThrow(
+      bands.reduce((sum, band) => sum + band.heightDots, 0),
+      expectedHeight,
+      `${size} logo height on 58mm`,
+    );
+    assertEqualOrThrow(bandInkColumns(bands), expectedWidth, `${size} logo width on 58mm`);
+    assertOrThrow(
+      bands.every((band) => band.widthDots === 384 && band.widthDots % 8 === 0),
+      `${size} logo bands span the printable width in whole bytes`,
+    );
+  }
+
+  const wideLogoJson = solidLogoJson(200, 40);
+  const wideLarge58 = getLogoRasterBands(wideLogoJson, 384, 200, receiptLogoPrintScale('large'));
+  assertEqualOrThrow(bandInkColumns(wideLarge58), 200, 'large wide logo clamps to 1x on 58mm');
+  assertOrThrow(
+    wideLarge58.every((band) => band.widthDots === 384),
+    'clamped logo never exceeds 384 dots',
+  );
+  const wideLarge80 = getLogoRasterBands(wideLogoJson, 576, 200, receiptLogoPrintScale('large'));
+  assertEqualOrThrow(bandInkColumns(wideLarge80), 400, 'large wide logo clamps to 2x on 80mm');
+  assertEqualOrThrow(
+    wideLarge80.reduce((sum, band) => sum + band.heightDots, 0),
+    80,
+    'clamped logo keeps its aspect ratio',
+  );
+
+  const sizedReceipt = (template: 'classic' | 'compact', size?: string): Uint8Array =>
+    formatReceipt(
+      dummyOrder,
+      dummyBill,
+      {
+        name: 'Flo Cafe',
+        country: 'US',
+        currency: 'USD',
+        show_logo: true,
+        receipt_logo: logoUrl,
+        receipt_logo_raster: sizeLogoJson,
+        show_name: true,
+        ...(size === undefined ? {} : { receipt_logo_size: size }),
+      },
+      template,
+      32,
+    );
+  for (const template of ['classic', 'compact'] as const) {
+    const unset = sizedReceipt(template);
+    assertEqualOrThrow(
+      Buffer.from(sizedReceipt(template, 'medium')).toString('hex'),
+      Buffer.from(unset).toString('hex'),
+      `${template}: medium bytes match a shop with no saved size`,
+    );
+    assertEqualOrThrow(
+      Buffer.from(sizedReceipt(template, '')).toString('hex'),
+      Buffer.from(unset).toString('hex'),
+      `${template}: empty stored size prints like medium`,
+    );
+    assertEqualOrThrow(gsV0Heights(unset).totalHeight, 80, `${template}: default logo height`);
+    assertEqualOrThrow(
+      gsV0Heights(sizedReceipt(template, 'small')).totalHeight,
+      40,
+      `${template}: small logo height`,
+    );
+    const large = gsV0Heights(sizedReceipt(template, 'large'));
+    assertEqualOrThrow(large.totalHeight, 120, `${template}: large logo height`);
+    assertOrThrow(
+      large.widths.length > 0 && large.widths.every((width) => width === 384),
+      `${template}: large logo bands stay within 384 dots`,
+    );
+  }
+
+  console.log('--- 3d. Logo offset setting ---');
+  assertEqualOrThrow(receiptLogoOffsetDots(undefined), 0, 'unset offset is centred');
+  assertEqualOrThrow(receiptLogoOffsetDots(2.5), 20, '2.5 mm is 20 dots');
+  assertEqualOrThrow(receiptLogoOffsetDots('-1.5'), -12, 'stored string offset parses');
+  assertEqualOrThrow(receiptLogoOffsetDots(99), 80, 'offset clamps to +10 mm');
+  assertEqualOrThrow(receiptLogoOffsetDots('abc'), 0, 'garbage offset is centred');
+
+  const centredLeft = bandInkLeft(getLogoRasterBands(sizeLogoJson, 384, 200, 1));
+  assertEqualOrThrow(centredLeft, 160, 'small logo starts centred');
+  assertEqualOrThrow(
+    bandInkLeft(getLogoRasterBands(sizeLogoJson, 384, 200, 1, 40)),
+    200,
+    'positive offset moves the logo right',
+  );
+  assertEqualOrThrow(
+    bandInkLeft(getLogoRasterBands(sizeLogoJson, 384, 200, 1, -40)),
+    120,
+    'negative offset moves the logo left',
+  );
+  const pushedRight = getLogoRasterBands(sizeLogoJson, 384, 200, 1, 10_000);
+  assertEqualOrThrow(bandInkLeft(pushedRight), 320, 'offset clamps at the right paper edge');
+  assertEqualOrThrow(bandInkColumns(pushedRight), 64, 'clamped logo keeps its full width');
+  assertEqualOrThrow(
+    bandInkLeft(getLogoRasterBands(sizeLogoJson, 384, 200, 1, -10_000)),
+    0,
+    'offset clamps at the left paper edge',
+  );
+
+  const offsetReceipt = (template: 'classic' | 'compact', offset?: number | string): Uint8Array =>
+    formatReceipt(
+      dummyOrder,
+      dummyBill,
+      {
+        name: 'Flo Cafe',
+        country: 'US',
+        currency: 'USD',
+        show_logo: true,
+        receipt_logo: logoUrl,
+        receipt_logo_raster: sizeLogoJson,
+        show_name: true,
+        ...(offset === undefined ? {} : { receipt_logo_offset_mm: offset }),
+      },
+      template,
+      32,
+    );
+  for (const template of ['classic', 'compact'] as const) {
+    const centred = Buffer.from(offsetReceipt(template)).toString('hex');
+    assertEqualOrThrow(
+      Buffer.from(offsetReceipt(template, '0')).toString('hex'),
+      centred,
+      `${template}: zero offset bytes match a shop with no saved offset`,
+    );
+    const shifted = offsetReceipt(template, '5');
+    assertOrThrow(
+      Buffer.from(shifted).toString('hex') !== centred,
+      `${template}: a 5 mm offset changes the logo bytes`,
+    );
+    assertEqualOrThrow(
+      gsV0Heights(shifted).totalHeight,
+      80,
+      `${template}: offset keeps the logo height`,
+    );
+  }
+
   console.log(
     '--- 3b. Non-Latin / Persian store header preserves logo bitmap during rasterization ---',
   );
@@ -862,6 +1064,70 @@ async function run() {
       true,
       'GET should return bill_show_logo enabled when saved with logo',
     );
+
+    const defaultPrinting = await api(baseUrl, '/api/settings/printing', { headers: authHeaders });
+    assertEqualOrThrow(
+      defaultPrinting.data.bill_logo_size,
+      'medium',
+      'logo size defaults to medium',
+    );
+    const printingBody = {
+      printer_trim_decimals: true,
+      bill_language_policy: { primary: { mode: 'fixed', language: 'en' }, additional: [] },
+      kot_language_policy: { primary: { mode: 'fixed', language: 'en' }, additional: [] },
+      bill_show_name: true,
+      bill_show_address: true,
+      bill_show_phone: true,
+      bill_show_tax_id: false,
+      bill_show_tax_breakdown: true,
+      bill_show_customer_name: true,
+      bill_show_customer_phone: true,
+      bill_show_table_number: true,
+      bill_delivery_show_customer_phone_always: true,
+    };
+    const badSize = await api(baseUrl, '/api/settings/printing', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: { ...printingBody, bill_logo_size: 'huge' },
+    });
+    assertEqualOrThrow(badSize.status, 400, 'unknown logo size is rejected');
+    const largeSize = await api(baseUrl, '/api/settings/printing', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: { ...printingBody, bill_logo_size: 'large' },
+    });
+    assertEqualOrThrow(largeSize.status, 200, 'logo size saves');
+    const afterSize = await api(baseUrl, '/api/settings/printing', { headers: authHeaders });
+    assertEqualOrThrow(afterSize.data.bill_logo_size, 'large', 'logo size reloads');
+    const keepSize = await api(baseUrl, '/api/settings/printing', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: printingBody,
+    });
+    assertEqualOrThrow(keepSize.status, 200, 'printing save without logo size succeeds');
+    const businessSize = await api(baseUrl, '/api/settings/business', { headers: authHeaders });
+    assertEqualOrThrow(
+      businessSize.data.bill_logo_size,
+      'large',
+      'omitting logo size keeps the saved size',
+    );
+    assertEqualOrThrow(businessSize.data.bill_logo_offset_mm, 0, 'logo offset defaults to 0');
+    for (const badOffset of [10.5, 0.3, '2']) {
+      const badOffsetRes = await api(baseUrl, '/api/settings/printing', {
+        method: 'PUT',
+        headers: authHeaders,
+        body: { ...printingBody, bill_logo_offset_mm: badOffset },
+      });
+      assertEqualOrThrow(badOffsetRes.status, 400, `logo offset ${badOffset} is rejected`);
+    }
+    const offsetRes = await api(baseUrl, '/api/settings/printing', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: { ...printingBody, bill_logo_offset_mm: -2.5 },
+    });
+    assertEqualOrThrow(offsetRes.status, 200, 'logo offset saves');
+    const afterOffset = await api(baseUrl, '/api/settings/printing', { headers: authHeaders });
+    assertEqualOrThrow(afterOffset.data.bill_logo_offset_mm, -2.5, 'logo offset reloads');
 
     // Update bill_show_logo toggle via PUT /api/settings/printing
     const toggleRes = await api(baseUrl, '/api/settings/printing', {

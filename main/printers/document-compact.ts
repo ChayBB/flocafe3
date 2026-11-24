@@ -15,7 +15,11 @@ import {
   type RasterSemanticLineGroup,
   type RasterTextLayout,
 } from '../../shared/print/raster';
-import { getLogoRasterBands, RECEIPT_LOGO_PRINT_SCALE } from '../../shared/print/image-raster';
+import {
+  getLogoRasterBands,
+  receiptLogoOffsetDots,
+  receiptLogoPrintScale,
+} from '../../shared/print/image-raster';
 import {
   displayCellWidth,
   padToDisplayCells,
@@ -256,7 +260,8 @@ export function renderBillDocumentToCompactLines(
       header.logoRaster,
       widthDots,
       maxBandHeight,
-      RECEIPT_LOGO_PRINT_SCALE,
+      receiptLogoPrintScale(header?.logoSize),
+      receiptLogoOffsetDots(header?.logoOffsetMm),
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));

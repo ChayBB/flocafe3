@@ -597,6 +597,7 @@ export const SETTINGS_SEARCH_CATALOG: readonly SettingsSearchEntry[] = [
     hintKey: 'billContentHint',
     extraKeys: [
       'showLogo',
+      'logoSize',
       'showRestaurantName',
       'showRestaurantAddress',
       'showRestaurantPhone',

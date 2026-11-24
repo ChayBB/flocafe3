@@ -22,7 +22,13 @@ import {
   type RasterSemanticLineGroup,
   type RasterTextLayout,
 } from '../../shared/print/raster';
-import { getLogoRasterBands, RECEIPT_LOGO_PRINT_SCALE } from '../../shared/print/image-raster';
+import {
+  getLogoRasterBands,
+  normalizeReceiptLogoOffsetMm,
+  normalizeReceiptLogoSize,
+  receiptLogoOffsetDots,
+  receiptLogoPrintScale,
+} from '../../shared/print/image-raster';
 import {
   displayCellWidth,
   padToDisplayCells,
@@ -235,6 +241,8 @@ export function buildBillPrintData(
       receiptLogo: typeof business?.receipt_logo === 'string' ? business.receipt_logo : '',
       receiptLogoRaster:
         typeof business?.receipt_logo_raster === 'string' ? business.receipt_logo_raster : '',
+      receiptLogoSize: normalizeReceiptLogoSize(business?.receipt_logo_size),
+      receiptLogoOffsetMm: normalizeReceiptLogoOffsetMm(business?.receipt_logo_offset_mm),
     },
   };
 }
@@ -579,7 +587,8 @@ export function renderBillDocumentToClassicLines(
             block.logoRaster,
             widthDots,
             maxBandHeight,
-            RECEIPT_LOGO_PRINT_SCALE,
+            receiptLogoPrintScale(block.logoSize),
+            receiptLogoOffsetDots(block.logoOffsetMm),
           );
           if (bands.length > 0) {
             const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));

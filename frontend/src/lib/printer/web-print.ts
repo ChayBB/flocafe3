@@ -15,6 +15,11 @@ import {
 } from '@/lib/countries';
 import { columnsForReceiptPaperSize } from '@print/width';
 import { normalizePrinterTextSize, type PrinterTextSize } from '@print/text-size';
+import {
+  normalizeReceiptLogoOffsetMm,
+  normalizeReceiptLogoSize,
+  type ReceiptLogoSize,
+} from '@print/image-raster';
 import { parseDbTimestamp } from '@/lib/utils';
 import { loadLocaleMessages } from '@/lib/i18n/loader';
 import {
@@ -89,6 +94,8 @@ export interface WebPrintOptions {
   showLogo?: boolean;
   receiptLogo?: string;
   receiptLogoRaster?: string;
+  receiptLogoSize?: ReceiptLogoSize;
+  receiptLogoOffsetMm?: number;
   showTaxBreakdown?: boolean;
   showCustomerName?: boolean;
   showCustomerPhone?: boolean;
@@ -315,6 +322,8 @@ export function generateBillHtml(
     showLogo = false,
     receiptLogo,
     receiptLogoRaster,
+    receiptLogoSize,
+    receiptLogoOffsetMm,
     showTaxBreakdown = true,
     showCustomerName = true,
     showCustomerPhone = true,
@@ -341,6 +350,8 @@ export function generateBillHtml(
     showLogo,
     receiptLogo,
     receiptLogoRaster,
+    receiptLogoSize,
+    receiptLogoOffsetMm,
     showTaxBreakdown,
     showCustomerName,
     showCustomerPhone,
@@ -432,7 +443,7 @@ export function generateBillHtml(
     ${messages?.onlineOrderBanner ? `<div class="online-order-banner">${escapeHtml(messages.onlineOrderBanner.label.primary)}${messages.onlineOrderBanner.platform.text ? `<div class="online-order-detail">${escapeHtml(messages.onlineOrderBanner.platform.text)}</div>` : ''}${messages.onlineOrderBanner.externalOrderId.text ? `<div class="online-order-detail">#${escapeHtml(messages.onlineOrderBanner.externalOrderId.text)}</div>` : ''}</div>` : ''}
     <!-- Header -->
     <div class="header">
-      ${header?.logo && header.logo.startsWith('data:image/') ? `<div class="logo-container"><img class="receipt-logo" src="${escapeHtml(header.logo)}" alt="Logo" /></div>` : ''}
+      ${header?.logo && header.logo.startsWith('data:image/') ? `<div class="logo-container"><img class="receipt-logo receipt-logo--${normalizeReceiptLogoSize(header.logoSize)}"${header.logoOffsetMm ? ` style="position: relative; left: ${normalizeReceiptLogoOffsetMm(header.logoOffsetMm)}mm"` : ''} src="${escapeHtml(header.logo)}" alt="Logo" /></div>` : ''}
       ${header?.name ? `<h1>${escapeHtml(header.name.text)}</h1>` : ''}
       ${header?.address ? `<p>${escapeHtml(header.address.text).replace(/\n/g, '<br>')}</p>` : ''}
       ${header?.phone && header.phoneLabel ? `<p>${escapeHtml(header.phoneLabel.primary)}: ${directionalValue(header.phone, base)}</p>` : ''}
@@ -628,6 +639,8 @@ export function getPaperStyles(size: PaperSize, textSize?: PrinterTextSize): str
     .online-order-banner .online-order-detail { font-size: 13px; font-weight: 600; letter-spacing: normal; margin-top: 2px; color: #000; }
     .header { text-align: center; margin-bottom: 12px; padding-bottom: 8px; color: #000; border-bottom: 1px solid #000; }
     .receipt-logo { max-width: 80%; max-height: 120px; object-fit: contain; margin: 0 auto 8px auto; display: block; }
+    .receipt-logo--small { max-width: 50%; max-height: 60px; }
+    .receipt-logo--large { max-width: 100%; max-height: 180px; }
     .header h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; color: #000; }
     .bill-details { margin-bottom: 12px; color: #000; }
     .bill-details table { width: 100%; }

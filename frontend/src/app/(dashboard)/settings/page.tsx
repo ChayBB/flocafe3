@@ -28,7 +28,12 @@ import type {
   PrimaryLanguageSelection,
   ReceiptLanguagePolicy,
 } from '@print/types';
-import { shouldAutoEnableBillShowLogo } from '@print/image-raster';
+import {
+  isReceiptLogoSize,
+  normalizeReceiptLogoOffsetMm,
+  normalizeReceiptLogoSize,
+  shouldAutoEnableBillShowLogo,
+} from '@print/image-raster';
 import {
   parseStoredKotLanguagePolicy,
   parseStoredReceiptLanguagePolicy,
@@ -1827,6 +1832,8 @@ export default function SettingsPage() {
         ? posSettings.kotLanguagePolicy.primary.language
         : 'inherit',
     billShowLogo: posSettings.billShowLogo,
+    billLogoSize: posSettings.billLogoSize,
+    billLogoOffsetMm: posSettings.billLogoOffsetMm,
     billShowName: posSettings.billShowName,
     billShowAddress: posSettings.billShowAddress,
     billShowPhone: posSettings.billShowPhone,
@@ -1930,6 +1937,8 @@ export default function SettingsPage() {
         kot_language_policy: kotLanguagePolicy,
         ...(zReportLanguagePolicyLoaded ? { z_report_language_policy: zReportLanguagePolicy } : {}),
         bill_show_logo: formSnapshot.billShowLogo,
+        bill_logo_size: formSnapshot.billLogoSize,
+        bill_logo_offset_mm: formSnapshot.billLogoOffsetMm,
         bill_show_name: formSnapshot.billShowName,
         bill_show_address: formSnapshot.billShowAddress,
         bill_show_phone: formSnapshot.billShowPhone,
@@ -1960,6 +1969,8 @@ export default function SettingsPage() {
       posSettings.setBillLanguagePolicy(billLanguagePolicy);
       posSettings.setKotLanguagePolicy(kotLanguagePolicy);
       posSettings.setBillShowLogo(formSnapshot.billShowLogo);
+      posSettings.setBillLogoSize(formSnapshot.billLogoSize);
+      posSettings.setBillLogoOffsetMm(formSnapshot.billLogoOffsetMm);
       posSettings.setBillShowName(formSnapshot.billShowName);
       posSettings.setBillShowAddress(formSnapshot.billShowAddress);
       posSettings.setBillShowPhone(formSnapshot.billShowPhone);
@@ -2312,6 +2323,8 @@ export default function SettingsPage() {
       setTaxIdFormatCountryCode(loaded.countryCode);
       const billDisplay = {
         billShowLogo: d.bill_show_logo === true,
+        billLogoSize: normalizeReceiptLogoSize(d.bill_logo_size),
+        billLogoOffsetMm: normalizeReceiptLogoOffsetMm(d.bill_logo_offset_mm),
         billShowName: d.bill_show_name !== false,
         billShowAddress: d.bill_show_address !== false,
         billShowPhone: d.bill_show_phone !== false,
@@ -2666,6 +2679,8 @@ export default function SettingsPage() {
         setTaxIdFormatCountryCode(loaded.countryCode);
         const billDisplay = {
           billShowLogo: d.bill_show_logo === true,
+          billLogoSize: normalizeReceiptLogoSize(d.bill_logo_size),
+          billLogoOffsetMm: normalizeReceiptLogoOffsetMm(d.bill_logo_offset_mm),
           billShowName: d.bill_show_name !== false,
           billShowAddress: d.bill_show_address !== false,
           billShowPhone: d.bill_show_phone !== false,
@@ -2875,6 +2890,15 @@ export default function SettingsPage() {
         }
       }
 
+      if (isReceiptLogoSize(printingPayload.bill_logo_size)) {
+        posSettings.setBillLogoSize(printingPayload.bill_logo_size);
+        printingPatch.billLogoSize = printingPayload.bill_logo_size;
+      }
+      if (printingPayload.bill_logo_offset_mm !== undefined) {
+        const billLogoOffsetMm = normalizeReceiptLogoOffsetMm(printingPayload.bill_logo_offset_mm);
+        posSettings.setBillLogoOffsetMm(billLogoOffsetMm);
+        printingPatch.billLogoOffsetMm = billLogoOffsetMm;
+      }
       if (typeof printingPayload.cash_drawer_pulse_enabled === 'boolean') {
         printingPatch.cashDrawerPulseEnabled = printingPayload.cash_drawer_pulse_enabled;
       }

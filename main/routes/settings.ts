@@ -102,7 +102,17 @@ import {
 } from '../services/print-templates';
 import { listMerchantPrintTemplates } from '../services/merchant-print-templates';
 import { isSyntacticallyValidCurrencyCode } from '../../shared/print/currency';
-import { parseReceiptLogoData } from '../../shared/print/image-raster';
+import {
+  DEFAULT_RECEIPT_LOGO_SIZE,
+  isReceiptLogoOffsetMm,
+  isReceiptLogoSize,
+  normalizeReceiptLogoOffsetMm,
+  normalizeReceiptLogoSize,
+  parseReceiptLogoData,
+  RECEIPT_LOGO_OFFSET_LIMIT_MM,
+  RECEIPT_LOGO_OFFSET_STEP_MM,
+  RECEIPT_LOGO_SIZES,
+} from '../../shared/print/image-raster';
 import {
   BILL_LANGUAGE_POLICY_KEY,
   KOT_LANGUAGE_POLICY_KEY,
@@ -205,6 +215,8 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   bill_template: 'classic',
   bill_footer_message: '',
   bill_show_logo: 'false',
+  bill_logo_size: DEFAULT_RECEIPT_LOGO_SIZE,
+  bill_logo_offset_mm: '0',
   bill_show_large_order_number: 'true',
   receipt_logo: '',
   receipt_logo_raster: '',
@@ -334,6 +346,8 @@ function businessShape(s: Record<string, string>) {
     bill_show_table_number: s.bill_show_table_number !== 'false',
     bill_show_large_order_number: s.bill_show_large_order_number !== 'false',
     bill_show_logo: s.bill_show_logo === 'true',
+    bill_logo_size: normalizeReceiptLogoSize(s.bill_logo_size),
+    bill_logo_offset_mm: normalizeReceiptLogoOffsetMm(s.bill_logo_offset_mm),
     receipt_logo: s.receipt_logo || '',
     receipt_logo_raster: s.receipt_logo_raster || '',
     bill_footer_message: s.bill_footer_message || '',
@@ -2387,6 +2401,8 @@ const PRINTING_BATCH_KEYS = new Set<string>([
   Z_REPORT_LANGUAGE_POLICY_KEY,
   'cash_drawer_pulse_enabled',
   'cash_drawer_pulse_methods',
+  'bill_logo_size',
+  'bill_logo_offset_mm',
 ]);
 
 function parseCashDrawerPulseMethods(raw: string | undefined): string[] {
@@ -2421,6 +2437,8 @@ function printingShape(s: Record<string, string>) {
       ? parseStoredLanguagePolicy(Z_REPORT_LANGUAGE_POLICY_KEY, s[Z_REPORT_LANGUAGE_POLICY_KEY])
       : null,
     bill_show_logo: s.bill_show_logo === 'true',
+    bill_logo_size: normalizeReceiptLogoSize(s.bill_logo_size),
+    bill_logo_offset_mm: normalizeReceiptLogoOffsetMm(s.bill_logo_offset_mm),
     bill_show_name: s.bill_show_name !== 'false',
     bill_show_address: s.bill_show_address !== 'false',
     bill_show_phone: s.bill_show_phone !== 'false',
@@ -2486,6 +2504,19 @@ router.put(
         if (values[key] !== undefined && typeof values[key] !== 'boolean') {
           return res.status(400).json({ error: `${key} must be a boolean` });
         }
+      }
+      if (values.bill_logo_size !== undefined && !isReceiptLogoSize(values.bill_logo_size)) {
+        return res
+          .status(400)
+          .json({ error: `bill_logo_size must be one of: ${RECEIPT_LOGO_SIZES.join(', ')}` });
+      }
+      if (
+        values.bill_logo_offset_mm !== undefined &&
+        !isReceiptLogoOffsetMm(values.bill_logo_offset_mm)
+      ) {
+        return res.status(400).json({
+          error: `bill_logo_offset_mm must be a multiple of ${RECEIPT_LOGO_OFFSET_STEP_MM} between -${RECEIPT_LOGO_OFFSET_LIMIT_MM} and ${RECEIPT_LOGO_OFFSET_LIMIT_MM}`,
+        });
       }
 
       const billLanguagePolicy = validateLanguagePolicySetting(
@@ -2557,6 +2588,14 @@ router.put(
         if (values[key] !== undefined) {
           entries[key] = values[key] ? 'true' : 'false';
         }
+      }
+      if (isReceiptLogoSize(values.bill_logo_size)) {
+        entries.bill_logo_size = values.bill_logo_size;
+      }
+      if (isReceiptLogoOffsetMm(values.bill_logo_offset_mm)) {
+        entries.bill_logo_offset_mm = String(
+          normalizeReceiptLogoOffsetMm(values.bill_logo_offset_mm),
+        );
       }
       if (hasCashDrawerEnabled) {
         entries.cash_drawer_pulse_enabled = values.cash_drawer_pulse_enabled ? 'true' : 'false';

@@ -3,6 +3,12 @@ import { persist } from 'zustand/middleware';
 import { isLanguage, type Language } from '@/lib/i18n/languages';
 import { defaultPrintLanguagePolicy } from '@print/policy';
 import type { KotLanguagePolicy, ReceiptLanguagePolicy } from '@print/types';
+import {
+  DEFAULT_RECEIPT_LOGO_SIZE,
+  normalizeReceiptLogoOffsetMm,
+  normalizeReceiptLogoSize,
+  type ReceiptLogoSize,
+} from '@print/image-raster';
 
 export type PaperSize = 'thermal58' | 'thermal80';
 export type PrinterPrintMode = 'escpos' | 'browser';
@@ -44,6 +50,8 @@ export interface PosSettingsState {
   receiptLogo: string;
   receiptLogoRaster: string;
   billShowLogo: boolean;
+  billLogoSize: ReceiptLogoSize;
+  billLogoOffsetMm: number;
   billShowName: boolean;
   billShowAddress: boolean;
   billShowPhone: boolean;
@@ -93,6 +101,8 @@ export interface PosSettingsState {
   setReceiptLogo: (l: string) => void;
   setReceiptLogoRaster: (r: string) => void;
   setBillShowLogo: (v: boolean) => void;
+  setBillLogoSize: (v: ReceiptLogoSize) => void;
+  setBillLogoOffsetMm: (v: number) => void;
   setBillShowName: (v: boolean) => void;
   setBillShowAddress: (v: boolean) => void;
   setBillShowPhone: (v: boolean) => void;
@@ -119,6 +129,10 @@ export interface PosSettingsState {
 export interface ReceiptSettingsHydrationData {
   bill_show_logo?: boolean | string | null;
   billShowLogo?: boolean | string | null;
+  bill_logo_size?: string | null;
+  billLogoSize?: string | null;
+  bill_logo_offset_mm?: number | string | null;
+  billLogoOffsetMm?: number | string | null;
   bill_show_name?: boolean | string | null;
   billShowName?: boolean | string | null;
   bill_show_address?: boolean | string | null;
@@ -186,6 +200,8 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       receiptLogo: '',
       receiptLogoRaster: '',
       billShowLogo: false,
+      billLogoSize: DEFAULT_RECEIPT_LOGO_SIZE,
+      billLogoOffsetMm: 0,
       billShowName: true,
       billShowAddress: true,
       billShowPhone: true,
@@ -232,6 +248,8 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       setReceiptLogo: (l) => set({ receiptLogo: l }),
       setReceiptLogoRaster: (r) => set({ receiptLogoRaster: r }),
       setBillShowLogo: (v) => set({ billShowLogo: v }),
+      setBillLogoSize: (v) => set({ billLogoSize: normalizeReceiptLogoSize(v) }),
+      setBillLogoOffsetMm: (v) => set({ billLogoOffsetMm: normalizeReceiptLogoOffsetMm(v) }),
       setBillShowName: (v) => set({ billShowName: v }),
       setBillShowAddress: (v) => set({ billShowAddress: v }),
       setBillShowPhone: (v) => set({ billShowPhone: v }),
@@ -259,6 +277,14 @@ export const usePosSettingsStore = create<PosSettingsState>()(
           const showLogo = d.bill_show_logo ?? d.billShowLogo;
           if (showLogo !== undefined && showLogo !== null) {
             updates.billShowLogo = showLogo === true || showLogo === 'true';
+          }
+          const logoSize = d.bill_logo_size ?? d.billLogoSize;
+          if (logoSize !== undefined && logoSize !== null) {
+            updates.billLogoSize = normalizeReceiptLogoSize(logoSize);
+          }
+          const logoOffset = d.bill_logo_offset_mm ?? d.billLogoOffsetMm;
+          if (logoOffset !== undefined && logoOffset !== null) {
+            updates.billLogoOffsetMm = normalizeReceiptLogoOffsetMm(logoOffset);
           }
           const showName = d.bill_show_name ?? d.billShowName;
           if (showName !== undefined && showName !== null) {

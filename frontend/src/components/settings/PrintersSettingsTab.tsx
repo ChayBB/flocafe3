@@ -24,6 +24,7 @@ import { Toggle } from '@/components/settings/Toggle';
 import { SettingsTabShell } from '@/components/settings/SettingsTabShell';
 import { LanPrinterDiscovery } from '@/components/settings/LanPrinterDiscovery';
 import { PrinterStatusBadge } from '@/components/settings/PrinterStatusBadge';
+import { PrinterCalibrationCard } from '@/components/settings/PrinterCalibrationCard';
 import { printFailureHint } from '@/lib/printer/print-failure-help';
 import { extractPrintErrorToastOptions } from '@/lib/printer/warnings';
 import { LANGUAGES, type Language } from '@/lib/i18n';
@@ -36,6 +37,7 @@ import { type KotPrintLayout, usePrinterStore } from '@/hooks/usePrinter';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import type { PrinterTextSize } from '@print/text-size';
+import type { ReceiptLogoSize } from '@print/image-raster';
 
 const SELECTABLE_LANGUAGES: Language[] = (Object.keys(LANGUAGES) as Language[]).filter(
   (lang) => LANGUAGES[lang].selectable,
@@ -103,6 +105,8 @@ export type PrintingForm = {
   zReportSecondLanguage: string;
   kotLanguage: string;
   billShowLogo: boolean;
+  billLogoSize: ReceiptLogoSize;
+  billLogoOffsetMm: number;
   billShowName: boolean;
   billShowAddress: boolean;
   billShowPhone: boolean;
@@ -1006,6 +1010,37 @@ export function PrintersSettingsTab({
                   </div>
                 )}
               </div>
+
+              <PrinterCalibrationCard
+                printerName={printerForm.name}
+                portLabel={
+                  printerForm.connection_type === 'network'
+                    ? [printerForm.ip_address, printerForm.port].filter(Boolean).join(':')
+                    : printerForm.connection_type === 'usb'
+                      ? printerForm.device_name
+                      : 'WebUSB'
+                }
+                profileId={printerForm.profile_id}
+                paperWidth={printerForm.paper_width}
+                onColumnsChange={(paperWidth) => {
+                  setPaperWidthTouched(true);
+                  setPrinterForm((p) => ({ ...p, paper_width: paperWidth }));
+                }}
+                showLogo={printingForm.billShowLogo}
+                logoSize={printingForm.billLogoSize}
+                logoSizeEditable={canEditPrintingOptions}
+                onLogoSizeChange={(billLogoSize) => {
+                  if (!canEditPrintingOptions) return;
+                  markHydrationTouched('billLogoSize');
+                  setPrintingForm((previous) => ({ ...previous, billLogoSize }));
+                }}
+                logoOffsetMm={printingForm.billLogoOffsetMm}
+                onLogoOffsetChange={(billLogoOffsetMm) => {
+                  if (!canEditPrintingOptions) return;
+                  markHydrationTouched('billLogoOffsetMm');
+                  setPrintingForm((previous) => ({ ...previous, billLogoOffsetMm }));
+                }}
+              />
 
               <div className="mt-4 flex gap-2">
                 <button

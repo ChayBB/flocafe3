@@ -10,8 +10,58 @@ import { type RasterBand, DEFAULT_RASTER_MAX_BAND_HEIGHT } from './raster';
 const MAX_LOGO_RASTER_JSON_LENGTH = 250_000;
 const MAX_LOGO_WIDTH_DOTS = 576;
 const MAX_LOGO_HEIGHT_DOTS = 0xffff;
-/** Receipt logos print at twice their stored size. */
+/** Receipt logos print at twice their stored size unless the merchant picks another size. */
 export const RECEIPT_LOGO_PRINT_SCALE = 2;
+
+export const RECEIPT_LOGO_SIZES = ['small', 'medium', 'large'] as const;
+export type ReceiptLogoSize = (typeof RECEIPT_LOGO_SIZES)[number];
+export const DEFAULT_RECEIPT_LOGO_SIZE: ReceiptLogoSize = 'medium';
+
+const RECEIPT_LOGO_SIZE_SCALE: Record<ReceiptLogoSize, number> = {
+  small: 1,
+  medium: RECEIPT_LOGO_PRINT_SCALE,
+  large: 3,
+};
+
+export function isReceiptLogoSize(value: unknown): value is ReceiptLogoSize {
+  return typeof value === 'string' && (RECEIPT_LOGO_SIZES as readonly string[]).includes(value);
+}
+
+export function normalizeReceiptLogoSize(value: unknown): ReceiptLogoSize {
+  return isReceiptLogoSize(value) ? value : DEFAULT_RECEIPT_LOGO_SIZE;
+}
+
+export function receiptLogoPrintScale(size: unknown): number {
+  return RECEIPT_LOGO_SIZE_SCALE[normalizeReceiptLogoSize(size)];
+}
+
+export const RECEIPT_LOGO_OFFSET_LIMIT_MM = 10;
+export const RECEIPT_LOGO_OFFSET_STEP_MM = 0.5;
+const RECEIPT_LOGO_DOTS_PER_MM = 8;
+
+/** Horizontal logo shift in millimetres; negative moves left. Invalid input means centred. */
+export function normalizeReceiptLogoOffsetMm(value: unknown): number {
+  const parsed = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof parsed !== 'number' || !Number.isFinite(parsed)) return 0;
+  const clamped = Math.min(
+    RECEIPT_LOGO_OFFSET_LIMIT_MM,
+    Math.max(-RECEIPT_LOGO_OFFSET_LIMIT_MM, parsed),
+  );
+  return Math.round(clamped / RECEIPT_LOGO_OFFSET_STEP_MM) * RECEIPT_LOGO_OFFSET_STEP_MM || 0;
+}
+
+export function isReceiptLogoOffsetMm(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Math.abs(value) <= RECEIPT_LOGO_OFFSET_LIMIT_MM &&
+    Number.isInteger(value / RECEIPT_LOGO_OFFSET_STEP_MM)
+  );
+}
+
+export function receiptLogoOffsetDots(offsetMm: unknown): number {
+  return Math.round(normalizeReceiptLogoOffsetMm(offsetMm) * RECEIPT_LOGO_DOTS_PER_MM);
+}
 
 export interface PackedLogoVariant {
   readonly width: number;
@@ -273,19 +323,22 @@ export function ditherGrayscalePixels(
 
 /**
  * Center a pixel bitmap horizontally within a target dot width by padding with 0s.
+ * `offsetDots` shifts it from centre, clamped so the bitmap stays inside the target width.
  */
 export function centerPixels(
   sourcePixels: Uint8Array,
   sourceWidth: number,
   sourceHeight: number,
   targetWidthDots: number,
+  offsetDots = 0,
 ): Uint8Array {
   if (sourceWidth === targetWidthDots) {
     return new Uint8Array(sourcePixels);
   }
 
   const padded = new Uint8Array(targetWidthDots * sourceHeight);
-  const leftPad = Math.max(0, Math.floor((targetWidthDots - sourceWidth) / 2));
+  const spare = Math.max(0, targetWidthDots - sourceWidth);
+  const leftPad = Math.min(spare, Math.max(0, Math.floor(spare / 2) + Math.round(offsetDots)));
   const copyWidth = Math.min(sourceWidth, targetWidthDots);
 
   for (let y = 0; y < sourceHeight; y += 1) {
@@ -319,13 +372,15 @@ function upscalePixels(
 
 /**
  * Parse and resolve raster bands for the target printer width from stored logo data.
- * `scale` enlarges the logo by a whole-number factor, never past the paper width.
+ * `scale` enlarges the logo by a whole-number factor, never past the paper width;
+ * `offsetDots` shifts it horizontally from centre.
  */
 export function getLogoRasterBands(
   storedLogoData: ReceiptLogoData | string | null | undefined,
   targetWidthDots: number,
   maxBandHeight = DEFAULT_RASTER_MAX_BAND_HEIGHT,
   scale = 1,
+  offsetDots = 0,
 ): RasterBand[] {
   if (
     !storedLogoData ||
@@ -383,7 +438,7 @@ export function getLogoRasterBands(
       variant.height,
       factor,
     );
-    const centered = centerPixels(unpacked, width, height, targetWidthDots);
+    const centered = centerPixels(unpacked, width, height, targetWidthDots, offsetDots);
     const bands: RasterBand[] = [];
     for (let row = 0; row < height; row += maxBandHeight) {
       const heightDots = Math.min(maxBandHeight, height - row);

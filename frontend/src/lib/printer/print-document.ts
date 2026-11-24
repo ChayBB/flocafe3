@@ -31,6 +31,7 @@ import { usePosSettingsStore } from '@/store/pos-settings';
 import { getCountryByCode, getCurrencySymbol, resolveTenantCurrency } from '@countries';
 import { resolveTaxComponents } from './tax-components';
 import { shouldShowCustomerNumber } from '@print/document';
+import type { ReceiptLogoSize } from '@print/image-raster';
 import type { Bill, Order, OrderItem } from '@/lib/types';
 import { parseVariantSelection } from './item-heading';
 import { itemLine, ticketItemLine } from '../../../../shared/item-line';
@@ -55,6 +56,8 @@ export interface BillBusinessOptions {
   showLogo?: boolean;
   receiptLogo?: string;
   receiptLogoRaster?: string;
+  receiptLogoSize?: ReceiptLogoSize;
+  receiptLogoOffsetMm?: number;
   showCustomerName?: boolean;
   showCustomerPhone?: boolean;
   deliveryShowCustomerPhoneAlways?: boolean;
@@ -267,6 +270,8 @@ export function buildBillPrintData(bill: Bill, opts: BillBusinessOptions = {}): 
       showLogo: opts.showLogo === true,
       receiptLogo: opts.receiptLogo,
       receiptLogoRaster: opts.receiptLogoRaster,
+      receiptLogoSize: opts.receiptLogoSize,
+      receiptLogoOffsetMm: opts.receiptLogoOffsetMm,
       showName: opts.showBusinessName !== false,
       showAddress: !!opts.address,
       showPhone: !!opts.phone,
