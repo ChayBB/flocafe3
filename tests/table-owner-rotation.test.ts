@@ -529,6 +529,161 @@ async function main() {
     assertEqualOrThrow(manualAudit?.previous_user_id, 'staff-b', 'audit names the previous owner');
     assertEqualOrThrow(manualAudit?.actor_user_id, owner.userId, 'manual changes are attributed');
 
+    // ── Edit replaces one person's tables ──
+    const putEdit = (body: unknown, headers = owner.authHeader) =>
+      api(baseUrl, '/api/tables/staff-tables/edit', { method: 'PUT', headers, body });
+    // staff-c now owns t1, t3 and backs up t2; staff-a owns t2; staff-b owns t4.
+    assertEqualOrThrow(
+      (
+        await putEdit(
+          { user_id: 'staff-c', own_table_ids: [], backup_table_ids: [] },
+          cashierHeader,
+        )
+      ).status,
+      403,
+      'cashier cannot edit table staff',
+    );
+    assertEqualOrThrow(
+      (await putEdit({ user_id: 'staff-c', own_table_ids: 't1', backup_table_ids: [] })).status,
+      400,
+      'own tables must be a list',
+    );
+    assertEqualOrThrow(
+      (await putEdit({ user_id: 'staff-gone', own_table_ids: [], backup_table_ids: [] })).status,
+      400,
+      'inactive staff cannot be edited',
+    );
+    assertEqualOrThrow(
+      (await putEdit({ user_id: 'staff-c', own_table_ids: ['t9'], backup_table_ids: [] })).status,
+      400,
+      'inactive tables are rejected',
+    );
+    assertEqualOrThrow(
+      (await putEdit({ user_id: 'staff-c', own_table_ids: ['t1'], backup_table_ids: ['t1'] }))
+        .status,
+      400,
+      'a table cannot be both own and backup',
+    );
+    const editRes = await putEdit({
+      user_id: 'staff-c',
+      own_table_ids: ['t2', 't3'],
+      backup_table_ids: ['t1', 't4'],
+    });
+    assertEqualOrThrow(editRes.status, 200, 'manager edits one person’s tables');
+    let edited = owners(db);
+    let editedBackups = backupsOf(db);
+    assertEqualOrThrow(edited.t1, null, 'an own table taken away is left unassigned');
+    assertEqualOrThrow(editedBackups.t1, 'staff-c', 'an own table can switch to backup');
+    assertEqualOrThrow(edited.t2, 'staff-c', 'a backup table can switch to own');
+    assertEqualOrThrow(editedBackups.t2, null, 'switching to own clears them as backup');
+    assertEqualOrThrow(edited.t3, 'staff-c', 'kept own tables stay');
+    assertEqualOrThrow(edited.t4, 'staff-b', 'backing up keeps the owner');
+    assertEqualOrThrow(editedBackups.t4, 'staff-c', 'new backup is stored');
+    const editAudit = db
+      .prepare("SELECT * FROM table_owner_audit WHERE action = 'manual_edit' AND table_id = 't2'")
+      .all();
+    assertOrThrow(
+      editAudit.some(
+        (row: any) =>
+          row.previous_user_id === 'staff-a' &&
+          row.next_user_id === 'staff-c' &&
+          row.actor_user_id === owner.userId,
+      ),
+      'taking another person’s table is audited with the previous owner',
+    );
+    const clearRes = await putEdit({ user_id: 'staff-c', own_table_ids: [], backup_table_ids: [] });
+    assertEqualOrThrow(clearRes.status, 200, 'manager clears one person’s tables');
+    edited = owners(db);
+    editedBackups = backupsOf(db);
+    assertEqualOrThrow(edited.t2, null, 'cleared own tables have no owner');
+    assertEqualOrThrow(edited.t3, null, 'every cleared own table is unassigned');
+    assertEqualOrThrow(editedBackups.t1, null, 'cleared backups are removed');
+    assertEqualOrThrow(edited.t4, 'staff-b', 'other people’s tables stay');
+    assertEqualOrThrow(
+      clearRes.data.staff.find((m: any) => m.id === 'staff-c').tables.length,
+      0,
+      'the returned roster shows the edit',
+    );
+
+    // ── Backup tables switch ──
+    const putAssignment = (body: unknown, headers = owner.authHeader) =>
+      api(baseUrl, '/api/tables/owner-assignment', { method: 'PUT', headers, body });
+    assertEqualOrThrow(
+      readTableOwnerAssignmentSettings(db).backup_enabled,
+      true,
+      'backup tables are on by default',
+    );
+    assertEqualOrThrow(
+      (await putStaffTables({ user_id: 'staff-c', table_ids: ['t4'], kind: 'backup' })).status,
+      200,
+      'backup added while the switch is on',
+    );
+    assertEqualOrThrow(
+      (await putAssignment({ backup_enabled: false }, cashierHeader)).status,
+      403,
+      'cashier cannot switch backup tables',
+    );
+    assertEqualOrThrow(
+      (await putAssignment({ backup_enabled: 'no' })).status,
+      400,
+      'backup switch must be a boolean',
+    );
+    const offRes = await putAssignment({ backup_enabled: false });
+    assertEqualOrThrow(offRes.status, 200, 'manager turns backup tables off');
+    assertEqualOrThrow(offRes.data.backup_enabled, false, 'the saved switch is returned');
+    assertEqualOrThrow(offRes.data.mode, 'manual', 'switching backups keeps the mode');
+    assertEqualOrThrow(backupsOf(db).t4, 'staff-c', 'saved backups are kept while off');
+    const listOff = await api(baseUrl, '/api/tables', { headers: owner.authHeader });
+    assertEqualOrThrow(listOff.data.backup_enabled, false, 'table list reports the switch');
+    assertEqualOrThrow(
+      listOff.data.tables.find((table: any) => table.id === 't4').backup_user_id,
+      null,
+      'table list hides backups while off',
+    );
+    const rosterOff = readTableStaffRoster(db);
+    assertEqualOrThrow(rosterOff.backup_enabled, false, 'roster reports the switch');
+    assertEqualOrThrow(
+      rosterOff.staff.find((member: any) => member.id === 'staff-c').backup_tables.length,
+      0,
+      'roster hides backup tables while off',
+    );
+    const disabledAdd = await putStaffTables({
+      user_id: 'staff-c',
+      table_ids: ['t5'],
+      kind: 'backup',
+    });
+    assertEqualOrThrow(disabledAdd.status, 400, 'no new backups while off');
+    assertEqualOrThrow(disabledAdd.data.code, 'TABLE_BACKUP_DISABLED', 'refusal names the switch');
+    assertEqualOrThrow(
+      (await putEdit({ user_id: 'staff-c', own_table_ids: [], backup_table_ids: ['t5'] })).status,
+      400,
+      'edit cannot add backups while off',
+    );
+    assertEqualOrThrow(
+      (await putEdit({ user_id: 'staff-c', own_table_ids: ['t5'], backup_table_ids: [] })).status,
+      200,
+      'own tables can still be edited while off',
+    );
+    assertEqualOrThrow(backupsOf(db).t4, 'staff-c', 'editing own tables keeps hidden backups');
+    assertOrThrow(
+      db.prepare("SELECT 1 FROM table_owner_audit WHERE action = 'backup_toggled'").get() !==
+        undefined,
+      'the switch is audited',
+    );
+    saveTableStaffRoster(db, roster(['staff-a', 'staff-b', 'staff-c']), owner.userId);
+    updateTableOwnerAssignmentSettings(db, { mode: 'rotate_daily', shuffle_days: 3 }, owner.userId);
+    assertOrThrow(
+      Object.values(backupsOf(db)).every((backup) => backup === null),
+      'automatic assignment plans no backups while off',
+    );
+    const onRes = await putAssignment({ backup_enabled: true });
+    assertEqualOrThrow(onRes.status, 200, 'manager turns backup tables back on');
+    assertOrThrow(
+      onRes.data.changes > 0 && Object.values(backupsOf(db)).some((backup) => backup !== null),
+      'turning backups on in an automatic mode replans them at once',
+    );
+    updateTableOwnerAssignmentSettings(db, { mode: 'manual', shuffle_days: 3 }, owner.userId);
+
     // ── Compact table ranges ──
     assertEqualOrThrow(
       formatTableRanges(['1', '2', '3', '4', '5', '7', '8', '9', '10']),

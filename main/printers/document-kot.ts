@@ -1,6 +1,7 @@
 /** PrintDocument v1 kitchen order ticket renderer; maps KotDocument onto ESC/POS token-line layout. */
 
 import { parseDbTimestamp } from '../db';
+import { WEIGHT_PENDING_NOTE } from '../lib/weight-pending';
 import { printLabel } from '../print/print-labels.generated';
 import type { PrintConceptId } from '../../shared/print/concepts';
 import type { PrinterCutMode } from './profiles';
@@ -337,6 +338,9 @@ function kotHeaderLines(
   return lines;
 }
 
+/** The kitchen's "waiting for weight" marker prints 30% larger on raster tickets. */
+const WEIGHT_PENDING_TEXT_SCALE = 1.3;
+
 function kotItemLines(
   row: KotItemsBlock['rows'][number],
   cols: number,
@@ -345,6 +349,7 @@ function kotItemLines(
   capabilities?: ThermalPrinterCapabilities,
   sourceLines?: string[],
   sourceControlLines?: string[],
+  sourceTextScales?: (number | undefined)[],
 ): string[] {
   const lines: string[] = [];
   const itemPrefix = row.quantity + 'x  ';
@@ -380,18 +385,34 @@ function kotItemLines(
     sourceControlLines?.push(addonLine);
   }
   if (row.specialInstructions) {
-    const commentStart = lines.length;
-    pushWrappedShapedLine(
-      lines,
-      row.specialInstructions.text,
-      Math.max(1, cols - 5),
-      arabicShaping,
-      language,
-      capabilities,
-      (segment, index) => (index === 0 ? '  >> ' : '     ') + segment,
-    );
-    sourceLines?.push('  >> ' + row.specialInstructions.text);
-    sourceControlLines?.push(lines[commentStart] ?? '');
+    const noteParts = row.specialInstructions.text.split(' | ');
+    const awaitingWeight = noteParts.some((part) => part.trim() === WEIGHT_PENDING_NOTE);
+    const note = awaitingWeight
+      ? noteParts
+          .filter((part) => part.trim() !== WEIGHT_PENDING_NOTE)
+          .join(' | ')
+          .trim()
+      : row.specialInstructions.text;
+    if (awaitingWeight) {
+      lines.push('  >> ' + WEIGHT_PENDING_NOTE);
+      sourceLines?.push('  >> ' + WEIGHT_PENDING_NOTE);
+      sourceControlLines?.push(lines.at(-1) ?? '');
+      if (sourceTextScales) sourceTextScales[sourceLines!.length - 1] = WEIGHT_PENDING_TEXT_SCALE;
+    }
+    if (note) {
+      const commentStart = lines.length;
+      pushWrappedShapedLine(
+        lines,
+        note,
+        Math.max(1, cols - 5),
+        arabicShaping,
+        language,
+        capabilities,
+        (segment, index) => (index === 0 ? '  >> ' : '     ') + segment,
+      );
+      sourceLines?.push('  >> ' + note);
+      sourceControlLines?.push(lines[commentStart] ?? '');
+    }
   }
   return lines;
 }
@@ -433,6 +454,7 @@ export function renderKotDocumentToLines(
       const rowStart = lines.length;
       const sourceLines: string[] = [];
       const sourceControlLines: string[] = [];
+      const sourceTextScales: (number | undefined)[] = [];
       const rowLines = kotItemLines(
         row,
         cols,
@@ -441,6 +463,7 @@ export function renderKotDocumentToLines(
         options.capabilities,
         sourceLines,
         sourceControlLines,
+        sourceTextScales,
       );
       lines.push(...rowLines);
       if (options.rasterGroups) {
@@ -449,7 +472,14 @@ export function renderKotDocumentToLines(
           lineIndex: rowStart,
           lineCount: lines.length - rowStart,
         };
-        options.rasterGroups.push({ ...group, sourceLines, sourceControlLines });
+        options.rasterGroups.push({
+          ...group,
+          sourceLines,
+          sourceControlLines,
+          ...(sourceTextScales.length > 0
+            ? { sourceTextScales: Array.from(sourceTextScales) }
+            : {}),
+        });
       }
     }
   }

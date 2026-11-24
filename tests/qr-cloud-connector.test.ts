@@ -166,7 +166,7 @@ async function verifyOrderAcceptance() {
   inbox.storeEvents([{ id: eventId, kind: 'order.created', payload: { order_id: orderId } }]);
   inbox.openInbox().exec('DROP TABLE order_acceptances; PRAGMA user_version = 1');
   inbox.closeInbox();
-  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 6);
+  assert.equal(inbox.openInbox().pragma('user_version', { simple: true }), 7);
   assert.ok(
     inbox.openInbox().prepare("SELECT 1 FROM sqlite_master WHERE name = 'open_table_qr'").get(),
     'an upgraded inbox gains the open table QR ledger',
@@ -611,6 +611,26 @@ async function verifyOrderAcceptance() {
     );
     await processCloudOrderDelivery(config.readConfig(), signal);
     assert.equal(rejectedBillReports.length, 1, 'a rejection is reported once');
+    inbox.rememberDeletedPosTable('cloud-table-deleted', 'QA-Gone');
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.deepEqual(
+      tableStates.at(-1)?.find((table) => table.pos_table_id === 'cloud-table-deleted'),
+      {
+        pos_table_id: 'cloud-table-deleted',
+        name: 'QA-Gone',
+        active: false,
+        awaiting_payment: false,
+        active_order_numbers: [],
+        bill: null,
+      },
+      'a deleted table is sent to the Cloud as closed',
+    );
+    await processCloudOrderDelivery(config.readConfig(), signal);
+    assert.equal(
+      tableStates.at(-1)?.some((table) => table.pos_table_id === 'cloud-table-deleted'),
+      false,
+      'and forgotten once the Cloud has taken it',
+    );
     db.prepare(
       'UPDATE orders SET bill_requested_at = NULL, bill_requested_by = NULL, bill_requested_by_name = NULL WHERE id = ?',
     ).run(placed.id);
@@ -808,6 +828,21 @@ async function verifyOrderAcceptance() {
       { weight_pending: 1, pending_price_mode: 'weight', unit_price: 180 },
       'a weighed Cloud dish waits for the kitchen to weigh it at its per-kg price',
     );
+    db.prepare("INSERT INTO products (id, name, price) VALUES ('cloud-chef', 'ตามใจฉัน', 0)").run();
+    db.prepare(
+      "INSERT INTO addon_groups (id, name, kitchen_price) VALUES ('cloud-chef-price', 'เมนูตามใจเธอ', 1)",
+    ).run();
+    db.prepare(
+      "INSERT INTO addon_group_product (product_id, addon_group_id) VALUES ('cloud-chef', 'cloud-chef-price')",
+    ).run();
+    const chefOrder = await placeGuestOrder(undefined, {
+      tableId: 'cloud-table-b',
+      key: 'chef-choice',
+      source: 'cloud',
+      note: null,
+      items: [{ product_id: 'cloud-chef', quantity: 1, expected_cloud_price_satang: 0 }],
+    });
+    assert.equal(chefOrder.kind, 'placed', JSON.stringify(chefOrder));
     console.log(
       'Served-order top-ups, concurrent friends, payment hold and closed-bill boundaries passed',
     );

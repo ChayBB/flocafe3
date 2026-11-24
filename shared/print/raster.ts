@@ -48,6 +48,8 @@ export interface RasterSemanticLineGroup {
   readonly sourceLines?: readonly string[];
   readonly sourceControlLines?: readonly string[];
   readonly sourceLayouts?: readonly (RasterTextLayout | undefined)[];
+  /** Per source line font scale for raster rows, e.g. 1.3 prints that row 30% larger. */
+  readonly sourceTextScales?: readonly (number | undefined)[];
   readonly financialSourceLines?: readonly boolean[];
   readonly financial?: boolean;
 }
@@ -63,6 +65,8 @@ export interface RasterRenderRequest {
   readonly layout?: RasterTextLayout;
   readonly style: RasterStyle;
   readonly styles?: readonly RasterStyle[];
+  /** Font and line-height multiplier, between 1 and {@link MAX_RASTER_TEXT_SCALE}. */
+  readonly textScale?: number;
   readonly financial: boolean;
   readonly maxLines: number;
   /** An optional data: URL for a font bundled by the application, never a network URL. */
@@ -335,6 +339,8 @@ export function isBundledFontDataUrl(dataUrl: unknown): boolean {
   );
 }
 
+export const MAX_RASTER_TEXT_SCALE = 2;
+
 export function isRasterRenderRequest(value: unknown): value is RasterRenderRequest {
   if (!value || typeof value !== 'object') return false;
   const request = value as Partial<RasterRenderRequest>;
@@ -353,6 +359,11 @@ export function isRasterRenderRequest(value: unknown): value is RasterRenderRequ
     (request.maxBandHeight as number) <= DEFAULT_RASTER_MAX_BAND_HEIGHT &&
     (request.direction === 'ltr' || request.direction === 'rtl') &&
     (request.align === undefined || request.align === 'left' || request.align === 'center') &&
+    (request.textScale === undefined ||
+      (typeof request.textScale === 'number' &&
+        Number.isFinite(request.textScale) &&
+        request.textScale >= 1 &&
+        request.textScale <= MAX_RASTER_TEXT_SCALE)) &&
     (request.layout === undefined ||
       (!!request.layout &&
         (request.layout.kind === 'financial-summary' || request.layout.kind === 'financial-item') &&

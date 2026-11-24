@@ -755,7 +755,13 @@ function resolveItemAddons(
     const requiredMin = group.is_required
       ? Math.max(1, group.min_selection || 1)
       : group.min_selection || 0;
-    if (requiredMin > 0 && selection.totalQty < requiredMin) {
+    // A group with no options to pick (such as a kitchen-price marker) cannot be satisfied.
+    const hasOptions =
+      requiredMin > 0 &&
+      db
+        .prepare('SELECT 1 FROM addons WHERE addon_group_id = ? AND is_active = 1 LIMIT 1')
+        .get(groupId);
+    if (hasOptions && selection.totalQty < requiredMin) {
       throw new Error(
         `Selection for group "${group.name}" requires at least ${requiredMin} item(s)`,
       );
@@ -7810,6 +7816,54 @@ router.patch(
   orderWriteRateLimit,
   requirePermission('orders.create'),
   completePendingPriceLine('kitchen_price'),
+);
+
+router.patch(
+  '/:orderId/items/:itemId/approve-kitchen-price',
+  orderWriteRateLimit,
+  requirePermission('orders.create'),
+  (req: Request, res: Response) => {
+    const db = getDatabase();
+    const { orderId, itemId } = req.params;
+    const actorId = (req as Request & { user: { userId: string } }).user.userId;
+    const entryId = Number(req.body?.price_entry_id);
+    const approved = withTxn(() => {
+      const latest = db
+        .prepare(
+          `SELECT MAX(a.id) AS id FROM order_audit_log a
+         JOIN order_items i ON i.id = a.order_item_id AND i.order_id = a.order_id
+         JOIN orders o ON o.id = i.order_id
+         WHERE o.id = ? AND i.id = ? AND o.table_id IS NOT NULL
+           AND o.status NOT IN ('completed', 'cancelled')
+           AND i.pending_price_mode = 'kitchen_price' AND i.weight_pending = 0
+           AND i.status NOT IN ('cancelled', 'voided', 'void_adjustment', 'refunded')
+           AND a.action = 'item_kitchen_priced'`,
+        )
+        .get(orderId, itemId) as { id: number | null };
+      if (latest.id === null || latest.id !== entryId) return false;
+      const alreadyApproved = db
+        .prepare(
+          `SELECT 1 FROM order_audit_log
+         WHERE order_id = ? AND order_item_id = ? AND action = 'item_kitchen_price_approved'
+           AND id > ? LIMIT 1`,
+        )
+        .get(orderId, itemId, entryId);
+      if (!alreadyApproved) {
+        recordOrderAudit(db, {
+          orderId: String(orderId),
+          orderItemId: String(itemId),
+          actorUserId: actorId,
+          action: 'item_kitchen_price_approved',
+          details: { price_entry_id: entryId },
+        });
+      }
+      return true;
+    });
+    if (!approved)
+      return res.status(409).json({ error: 'The kitchen price has changed or is unavailable' });
+    notifyOrderUpdated();
+    res.json({ success: true });
+  },
 );
 
 // PATCH /api/orders/:orderId/items/:itemId/takeaway — pack an item not yet served to go; the KDS flags it.

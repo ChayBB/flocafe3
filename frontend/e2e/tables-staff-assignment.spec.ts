@@ -167,6 +167,51 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     const backupTable = afterMove.tables.find((table: { id: string }) => table.id === tableB);
     expect(backupTable.backup_user_id).toBe(first.id);
 
+    const editDialog = page.getByTestId('staff-tables-edit-dialog');
+    await page.getByTestId(`staff-roster-edit-${second.id}`).click();
+    await expect(page.getByTestId(`staff-tables-edit-owner-${tableA}`)).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.getByTestId(`staff-tables-edit-backup-${tableA}`).click();
+    await expect(page.getByTestId(`staff-tables-edit-holder-${tableA}`)).toHaveText('No one yet');
+    await page.getByTestId(`staff-tables-edit-owner-${tableB}`).click();
+    await page.getByTestId('staff-tables-edit-submit').click();
+    await expect(editDialog).toBeHidden();
+    await expect(page.getByTestId(`staff-roster-backup-${second.id}`)).toContainText(nameA);
+    await expect(page.getByTestId(`staff-roster-tables-${second.id}`)).toContainText(nameB);
+    let edited = await (
+      await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
+    ).json();
+    const byId = (id: string) =>
+      edited.tables.find((table: { id: string }) => table.id === id) as {
+        owner_user_id: string | null;
+        backup_user_id: string | null;
+      };
+    expect(byId(tableA).owner_user_id).toBeNull();
+    expect(byId(tableA).backup_user_id).toBe(second.id);
+    expect(byId(tableB).owner_user_id).toBe(second.id);
+    expect(byId(tableB).backup_user_id).toBe(first.id);
+
+    await page.getByTestId(`staff-roster-edit-${first.id}`).click();
+    await expect(page.getByTestId(`staff-tables-edit-backup-${tableB}`)).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.getByTestId(`staff-tables-edit-owner-${tableB}`).click();
+    await page.getByTestId('staff-tables-edit-submit').click();
+    await expect(page.getByTestId('staff-tables-edit-confirm')).toHaveText(
+      `Move tables ${nameB} from ${second.name} to ${first.name}?`,
+    );
+    await page.getByTestId('staff-tables-edit-submit').click();
+    await expect(editDialog).toBeHidden();
+    edited = await (
+      await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
+    ).json();
+    expect(byId(tableB).owner_user_id).toBe(first.id);
+    expect(byId(tableB).backup_user_id).toBeNull();
+    await expect(page.getByTestId(`staff-roster-tables-${first.id}`)).toContainText(nameB);
+
     const modeSaved = () =>
       page.waitForResponse(
         (res) =>
@@ -190,6 +235,7 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     expect((await modeResponse).ok()).toBeTruthy();
     await expect(page.getByText(/Tables assigned for today/)).toBeVisible();
     await expect(page.getByTestId('table-staff-assignment-status')).toHaveText('Enabled');
+    await expect(page.getByTestId(`staff-roster-edit-${second.id}`)).toHaveCount(0);
     let stored = await (
       await page.request.get(`${BASE}/api/tables/owner-assignment`, { headers: authHeaders })
     ).json();
@@ -250,6 +296,7 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     await page.reload();
     await page.getByTestId('tables-view-staff').click();
     await expect(page.getByTestId('staff-assignment-shuffle-days')).toHaveValue('5');
+    await expect(page.getByTestId(`staff-roster-edit-${second.id}`)).toHaveCount(0);
   } finally {
     const rosterNow = await page.request
       .get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
@@ -296,6 +343,119 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
         headers: authHeaders,
         data: { mode: original.mode, shuffle_days: original.shuffle_days },
       })
+      .catch(() => {});
+  }
+});
+
+test('add-tables dialog uses the brand colour and the backup switch hides backup tables', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const authHeaders = {
+    Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+  };
+  const number = `E2E-BACKUP-${Date.now()}`;
+  const created = await page.request.post(`${BASE}/api/tables`, {
+    headers: authHeaders,
+    data: { number, capacity: 2 },
+  });
+  expect(created.ok()).toBeTruthy();
+  const tableId = (await created.json()).table.id as string;
+
+  try {
+    await page.goto(`${BASE}/auth/login`);
+    await page.locator('#email').fill('manager@flo.local');
+    await page.locator('#password').fill(E2E_PASSWORD);
+    await page.locator('button[type="submit"]').click();
+    await page.waitForURL('**/pos/**', { timeout: 20_000 });
+    await setLanguage(page, 'en');
+    await page.goto(`${BASE}/tables`);
+    await page.getByTestId('tables-view-staff').click();
+
+    const roster = await (
+      await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
+    ).json();
+    expect(roster.backup_enabled).toBe(true);
+    const member = roster.staff[0] as { id: string };
+    const toggle = page.getByTestId('staff-backup-toggle');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('staff-backup-setting')).toContainText('Use backup tables');
+
+    const dialog = page.getByTestId('staff-tables-dialog');
+    await page.getByTestId(`staff-roster-add-${member.id}`).click();
+    await expect(page.getByTestId('staff-tables-kind-owner')).toHaveClass(/bg-brand/);
+    await expect(page.getByTestId('staff-tables-kind-backup')).not.toHaveClass(/bg-brand/);
+    const submit = page.getByTestId('staff-tables-submit');
+    await expect(submit).toHaveClass(/bg-brand/);
+    await expect(submit).toBeDisabled();
+    await page.getByTestId(`staff-tables-option-${tableId}`).check();
+    await expect(page.getByTestId(`staff-tables-row-${tableId}`)).toHaveAttribute(
+      'data-selected',
+      'true',
+    );
+    await expect(page.getByTestId(`staff-tables-option-${tableId}`)).toHaveClass(/accent-brand/);
+    await expect(submit).toBeEnabled();
+    await page.getByTestId('staff-tables-kind-backup').click();
+    await expect(page.getByTestId('staff-tables-kind-backup')).toHaveClass(/bg-brand/);
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
+
+    // A backend that ignores the switch (Flo not restarted) must not report success.
+    const dropSwitch = async (route: import('@playwright/test').Route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      delete body.backup_enabled;
+      if (route.request().method() === 'PUT') {
+        await page.request.put(`${BASE}/api/tables/owner-assignment`, {
+          headers: authHeaders,
+          data: { backup_enabled: true },
+        });
+      }
+      await route.fulfill({ response, json: body });
+    };
+    await page.route('**/api/tables/owner-assignment', dropSwitch);
+    await page.route('**/api/tables/staff-roster', dropSwitch);
+    await toggle.click();
+    await expect(
+      page.getByText('Backup tables setting was not saved', { exact: false }),
+    ).toBeVisible();
+    await expect(page.getByText('Backup tables turned off')).toHaveCount(0);
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await page.unroute('**/api/tables/owner-assignment');
+    await page.unroute('**/api/tables/staff-roster');
+
+    const switched = page.waitForResponse(
+      (res) =>
+        res.url().includes('/api/tables/owner-assignment') && res.request().method() === 'PUT',
+    );
+    await toggle.click();
+    expect((await switched).ok()).toBeTruthy();
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(page.getByText('Backup tables turned off')).toHaveCount(1);
+    const stored = await (
+      await page.request.get(`${BASE}/api/tables/owner-assignment`, { headers: authHeaders })
+    ).json();
+    expect(stored.backup_enabled).toBe(false);
+
+    await page.getByTestId(`staff-roster-add-${member.id}`).click();
+    await expect(dialog).toBeVisible();
+    await expect(page.getByTestId('staff-tables-kind-backup')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+    await page.reload();
+    await page.getByTestId('tables-view-staff').click();
+    await expect(page.getByTestId('staff-backup-toggle')).toHaveAttribute('aria-checked', 'false');
+    await page.getByTestId('staff-backup-toggle').click();
+    await expect(page.getByTestId('staff-backup-toggle')).toHaveAttribute('aria-checked', 'true');
+  } finally {
+    await page.request
+      .put(`${BASE}/api/tables/owner-assignment`, {
+        headers: authHeaders,
+        data: { backup_enabled: true },
+      })
+      .catch(() => {});
+    await page.request
+      .delete(`${BASE}/api/tables/${tableId}`, { headers: authHeaders })
       .catch(() => {});
   }
 });

@@ -660,6 +660,99 @@ async function runTests() {
       !JSON.stringify(diagnostic).includes('کافه'),
       'no receipt text enters the automatic diagnostic capture',
     );
+
+    console.log('\nTest 9b: printing an unbilled order opens its bill with the real bill number');
+    const unbilledOrderId = Number(
+      db
+        .prepare(
+          `INSERT INTO orders (order_number, status, type, subtotal, tax_amount, total, created_at, updated_at)
+           VALUES ('ORD-PREBILL-1', 'served', 'dine_in', 50, 0, 50, datetime('now'), datetime('now'))`,
+        )
+        .run().lastInsertRowid,
+    );
+    db.prepare(
+      `INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal, total, created_at, updated_at)
+       VALUES (?, 'prod-prebill', 'Latte', 50, 1, 50, 50, datetime('now'), datetime('now'))`,
+    ).run(unbilledOrderId);
+    const billsOf = () =>
+      db.prepare('SELECT * FROM bills WHERE order_id = ?').all(unbilledOrderId) as any[];
+
+    const prebillPreview = await request(app)
+      .post('/api/printers/print-bill')
+      .send({ orderId: unbilledOrderId, preview: true });
+    assert(
+      prebillPreview.status === 200,
+      `pre-bill preview succeeds (got ${prebillPreview.status})`,
+    );
+    assert(billsOf().length === 0, 'a preview opens no bill and allocates no bill number');
+
+    // The fixture printer refuses this store's currency text, so the print itself may fail.
+    await request(app).post('/api/printers/print-bill').send({ orderId: unbilledOrderId });
+    const [openedBill] = billsOf();
+    assert(
+      billsOf().length === 1 && openedBill.payment_status === 'unpaid' && openedBill.total === 50,
+      'printing an unbilled order opens one unpaid bill for the order total',
+    );
+    assert(
+      /^INV-/.test(String(openedBill.bill_number)),
+      `the opened bill carries a real INV number (got ${openedBill.bill_number})`,
+    );
+    const billedPreview = await request(app)
+      .post('/api/printers/print-bill')
+      .send({ orderId: unbilledOrderId, preview: true });
+    const billRow = String(billedPreview.body.text)
+      .split('\n')
+      .find((line) => line.includes(openedBill.bill_number));
+    assert(
+      billRow !== undefined && !billRow.includes('ORD-PREBILL-1'),
+      `the bill-number row shows the INV bill number, not the ORD order number (got ${billRow})`,
+    );
+
+    await request(app)
+      .post('/api/printers/print-bill')
+      .send({ orderId: unbilledOrderId, isReprint: true });
+    assert(
+      billsOf().length === 1 && billsOf()[0].bill_number === openedBill.bill_number,
+      'a reprint keeps the same bill and bill number',
+    );
+    const firstStaffPrint = await request(app)
+      .post('/api/printers/print-bill')
+      .send({ orderId: unbilledOrderId, staffPrintOnce: true });
+    assert(
+      firstStaffPrint.status === 502 && firstStaffPrint.body.staff_print_locked === true,
+      'a printer failure after dispatch keeps the staff invoice locked',
+    );
+    assert(
+      billsOf()[0].printed_at === null,
+      'a failed print keeps the actual print timestamp empty',
+    );
+    const duplicateStaffPrint = await request(app)
+      .post('/api/printers/print-bill')
+      .send({ orderId: unbilledOrderId, staffPrintOnce: true });
+    assert(
+      duplicateStaffPrint.status === 409 &&
+        duplicateStaffPrint.body.code === 'BILL_ALREADY_PRINTED',
+      'the staff print endpoint rejects another print of the same invoice',
+    );
+
+    const cancelledOrderId = Number(
+      db
+        .prepare(
+          `INSERT INTO orders (order_number, status, type, subtotal, total, created_at, updated_at)
+           VALUES ('ORD-PREBILL-CANCELLED', 'cancelled', 'dine_in', 0, 0, datetime('now'), datetime('now'))`,
+        )
+        .run().lastInsertRowid,
+    );
+    await request(app).post('/api/printers/print-bill').send({ orderId: cancelledOrderId });
+    assert(
+      (
+        db
+          .prepare('SELECT COUNT(*) AS n FROM bills WHERE order_id = ?')
+          .get(cancelledOrderId) as any
+      ).n === 0,
+      'printing a cancelled order opens no bill',
+    );
+
     await new Promise<void>((resolve, reject) =>
       transportServer.close((error) => (error ? reject(error) : resolve())),
     );

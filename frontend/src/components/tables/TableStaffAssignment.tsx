@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, Hand, Plus, RotateCw, Shuffle, User } from 'lucide-react';
+import { Check, Hand, Pencil, Plus, RotateCw, Shuffle, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useLocale, useTranslations } from 'use-intl';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Ltr } from '@/components/layout/Ltr';
+import { Toggle } from '@/components/settings/Toggle';
 import { formatTableRanges } from '@/lib/table-ranges';
 import StaffTablesDialog, { type StaffTablesDialogTable } from './StaffTablesDialog';
+import StaffTablesEditDialog from './StaffTablesEditDialog';
 
 type AssignmentMode = 'manual' | 'rotate_daily' | 'shuffle_interval';
 
@@ -16,6 +18,7 @@ interface AssignmentSettings {
   mode: AssignmentMode;
   shuffle_days: number;
   last_run: string | null;
+  backup_enabled: boolean;
 }
 
 interface StaffRoster {
@@ -32,6 +35,7 @@ interface StaffRoster {
   table_count: number;
   table_count_default: number;
   table_count_custom: boolean;
+  backup_enabled: boolean;
 }
 
 const SHUFFLE_DAYS_MIN = 1;
@@ -52,7 +56,9 @@ export default function TableStaffAssignment() {
   const [tableCount, setTableCount] = useState('');
   const [saving, setSaving] = useState(false);
   const [addingFor, setAddingFor] = useState<{ id: string; name: string } | null>(null);
+  const [editingFor, setEditingFor] = useState<{ id: string; name: string } | null>(null);
   const [confirmMode, setConfirmMode] = useState<AssignmentMode | null>(null);
+  const [backupSaving, setBackupSaving] = useState(false);
 
   const applyRoster = (data: StaffRoster) => {
     setRoster(data);
@@ -158,6 +164,29 @@ export default function TableStaffAssignment() {
       toast.error(t('staffAssignmentSaveFailed'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const toggleBackup = async (enabled: boolean) => {
+    if (backupSaving) return;
+    setBackupSaving(true);
+    try {
+      const { data } = await api.put<AssignmentSettings>('/tables/owner-assignment', {
+        backup_enabled: enabled,
+      });
+      const refreshed = await api.get<StaffRoster>('/tables/staff-roster');
+      setRoster(refreshed.data);
+      // Only the value the backend stored counts; an older backend ignores the field.
+      if (data.backup_enabled !== enabled || refreshed.data.backup_enabled !== enabled) {
+        toast.error(t('staffBackupNotSaved'));
+        return;
+      }
+      setSaved((current) => (current ? { ...current, backup_enabled: enabled } : data));
+      toast.success(enabled ? t('staffBackupEnabledToast') : t('staffBackupDisabledToast'));
+    } catch {
+      toast.error(t('staffAssignmentSaveFailed'));
+    } finally {
+      setBackupSaving(false);
     }
   };
 
@@ -303,7 +332,7 @@ export default function TableStaffAssignment() {
                   aria-checked={isPresent}
                   data-testid={`staff-roster-member-${member.id}`}
                   onClick={() => togglePresent(member.id)}
-                  className="flex w-full items-center gap-2 pe-8 text-start"
+                  className={`flex w-full items-center gap-2 text-start ${automatic ? 'pe-8' : 'pe-16'}`}
                 >
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-card text-muted-foreground">
                     <User size={16} />
@@ -326,15 +355,29 @@ export default function TableStaffAssignment() {
                     </span>
                   </span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setAddingFor({ id: member.id, name: member.name })}
-                  data-testid={`staff-roster-add-${member.id}`}
-                  aria-label={t('staffTablesAddFor', { name: member.name })}
-                  className="absolute end-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
-                >
-                  <Plus size={14} />
-                </button>
+                <div className="absolute end-2 top-2 flex gap-1">
+                  {!automatic && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingFor({ id: member.id, name: member.name })}
+                      data-testid={`staff-roster-edit-${member.id}`}
+                      aria-label={t('staffTablesEditFor', { name: member.name })}
+                      title={t('staffTablesEdit')}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setAddingFor({ id: member.id, name: member.name })}
+                    data-testid={`staff-roster-add-${member.id}`}
+                    aria-label={t('staffTablesAddFor', { name: member.name })}
+                    className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
                 {(member.tables.length > 0 || member.backup_tables.length > 0) && (
                   <div className="mt-2 space-y-1 border-t border-border/60 pt-2 text-xs">
                     {member.tables.length > 0 && (
@@ -391,6 +434,23 @@ export default function TableStaffAssignment() {
             {t('staffRosterTablesInvalid', { max: roster.table_count_default })}
           </p>
         )}
+
+        <div
+          className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border p-3"
+          data-testid="staff-backup-setting"
+        >
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground">{t('staffBackupToggle')}</p>
+            <p className="text-xs text-muted-foreground">{t('staffBackupToggleHint')}</p>
+          </div>
+          <Toggle
+            value={roster.backup_enabled !== false}
+            onChange={(enabled) => void toggleBackup(enabled)}
+            label={t('staffBackupToggle')}
+            disabled={backupSaving || saving}
+            dataTestId="staff-backup-toggle"
+          />
+        </div>
 
         <div className="mt-4 rounded-xl bg-muted/50 p-4" data-testid="staff-roster-summary">
           <div className="mb-3 flex items-center gap-2">
@@ -548,10 +608,23 @@ export default function TableStaffAssignment() {
           </div>
         </div>
       )}
+      {editingFor && (
+        <StaffTablesEditDialog<StaffRoster>
+          member={editingFor}
+          tables={roster.tables}
+          backupEnabled={roster.backup_enabled !== false}
+          onClose={() => setEditingFor(null)}
+          onSaved={(data) => {
+            setRoster(data);
+            setEditingFor(null);
+          }}
+        />
+      )}
       {addingFor && (
         <StaffTablesDialog<StaffRoster>
           member={addingFor}
           tables={roster.tables}
+          backupEnabled={roster.backup_enabled !== false}
           onClose={() => setAddingFor(null)}
           onSaved={(data) => {
             setRoster(data);

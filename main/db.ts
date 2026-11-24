@@ -6072,7 +6072,12 @@ export function annotateKdsItems<T extends { items?: any[] }>(
   if (itemIds.length === 0) return orders;
   const details = new Map<
     string,
-    { categoryId: string | null; setPrice: number | null; confirmedByName: string | null }
+    {
+      categoryId: string | null;
+      setPrice: number | null;
+      priceApproved: boolean;
+      confirmedByName: string | null;
+    }
   >();
   for (let start = 0; start < itemIds.length; start += 500) {
     const chunk = itemIds.slice(start, start + 500);
@@ -6082,6 +6087,14 @@ export function annotateKdsItems<T extends { items?: any[] }>(
                 CASE WHEN oi.weight_pending = 0
                        AND (oi.weight IS NOT NULL OR oi.pending_price_mode = 'kitchen_price')
                      THEN oi.unit_price END AS set_price,
+                CASE WHEN oi.weight_pending = 0 AND oi.pending_price_mode = 'kitchen_price'
+                     THEN (
+                       SELECT a.action = 'item_kitchen_price_approved'
+                       FROM order_audit_log a
+                       WHERE a.order_id = oi.order_id AND a.order_item_id = oi.id
+                         AND a.action IN ('item_kitchen_priced', 'item_kitchen_price_approved')
+                       ORDER BY a.id DESC LIMIT 1
+                     ) END AS price_approved,
                 confirmer.name AS confirmed_by_name
          FROM order_items oi
          LEFT JOIN products p ON p.id = oi.product_id
@@ -6092,12 +6105,14 @@ export function annotateKdsItems<T extends { items?: any[] }>(
       id: number;
       category_id: string | null;
       set_price: number | null;
+      price_approved: number | null;
       confirmed_by_name: string | null;
     }[];
     for (const row of rows) {
       details.set(String(row.id), {
         categoryId: row.category_id ? String(row.category_id) : null,
         setPrice: row.set_price == null ? null : Number(row.set_price),
+        priceApproved: row.price_approved === 1,
         confirmedByName: row.confirmed_by_name ?? null,
       });
     }
@@ -6128,6 +6143,7 @@ export function annotateKdsItems<T extends { items?: any[] }>(
         ...item,
         station_category_id: detail?.categoryId ?? null,
         kitchen_set_price: detail?.setPrice ?? null,
+        kitchen_price_approved: detail?.priceApproved ?? false,
         currency,
         served_confirmed_by_name: detail?.confirmedByName ?? null,
         store_timezone: storeTimezone,

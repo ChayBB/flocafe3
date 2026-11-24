@@ -33,7 +33,7 @@ export function scannedVariantNeedsCustomizer(
     const requiredMin = group.is_required
       ? Math.max(1, group.min_selection || 1)
       : group.min_selection || 0;
-    return requiredMin > 0;
+    return requiredMin > 0 && (group.addons?.length ?? 0) > 0;
   });
   return needsRequiredSelection || isVariantSoldOut(variant);
 }
@@ -66,7 +66,9 @@ export function priceUnitOf(product: {
   if (product.price_unit) return product.price_unit;
   const groups = product.addon_groups || [];
   if (groups.some((group) => group.kitchen_price)) return null;
-  if (groups.some((group) => group.name?.trim() === WEIGHT_PRICED_GROUP_NAME || group.price_pending))
+  if (
+    groups.some((group) => group.name?.trim() === WEIGHT_PRICED_GROUP_NAME || group.price_pending)
+  )
     return 'kg';
   return product.sale_unit && product.sale_unit !== 'each' ? product.sale_unit : null;
 }

@@ -1,3 +1,5 @@
+import { tablePriceItems } from '../lib/weight-pending';
+import { isStaffBillPrintLocked } from '../services/receipt';
 import { Router, Request, Response } from 'express';
 import {
   attachEffectiveAddons,
@@ -31,10 +33,14 @@ import { storeTimezone } from '../services/attendance';
 import { getHttpRequestSignal } from '../shutdown';
 import { TERMINAL_ITEM_STATUSES } from '../../shared/order-item-status';
 import { cloudTableQrActive, storedCloudTableQr } from '../services/qr-cloud/table-qr';
+import { rememberDeletedPosTable } from '../services/qr-cloud/inbox';
 import {
   isValidShuffleDays,
+  isTableBackupEnabled,
   readTableOwnerAssignmentSettings,
   assignStaffTables,
+  editStaffTables,
+  validateStaffTablesEdit,
   readTableStaffRoster,
   saveTableStaffRoster,
   validateStaffTables,
@@ -170,12 +176,15 @@ function tableShape(
         ...shownOrder,
         kitchen_counts: kitchenCounts(db, shownOrder.id),
         out_of_stock_items: outOfStockItems(db, shownOrder.id),
+        bill_print_locked: isStaffBillPrintLocked(db, shownOrder.id),
       }
     : shownOrder;
   return {
     ...table,
+    ...(table.backup_user_id && !isTableBackupEnabled(db) && { backup_user_id: null }),
     name: table.number,
     owner_name: owner?.name ?? null,
+    ...(currentOrder && { table_price_items: tablePriceItems(db, table.id) }),
     ...(includeReservationCustomer
       ? reservationCustomerShape(db, table)
       : {
@@ -280,7 +289,7 @@ router.get('/', requirePermission('tables.view'), (req: Request, res: Response) 
     const tables = rows.map((t: any) =>
       tableShape(db, t, activeOrdersByTableId.get(t.id) || null, includeReservationCustomer),
     );
-    res.json({ tables });
+    res.json({ tables, backup_enabled: isTableBackupEnabled(db) });
   } catch (error: any) {
     res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
@@ -745,11 +754,21 @@ router.put(
           error: `shuffle_days must be a whole number from ${SHUFFLE_DAYS_MIN} to ${SHUFFLE_DAYS_MAX}`,
         });
       }
+      const backupEnabled = req.body?.backup_enabled ?? current.backup_enabled;
+      if (typeof backupEnabled !== 'boolean') {
+        return res
+          .status(400)
+          .json({ code: 'BACKUP_ENABLED_INVALID', error: 'backup_enabled must be true or false' });
+      }
       const actorUserId = (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
       res.json(
         updateTableOwnerAssignmentSettings(
           db,
-          { mode: mode as TableOwnerAssignmentMode, shuffle_days: shuffleDays },
+          {
+            mode: mode as TableOwnerAssignmentMode,
+            shuffle_days: shuffleDays,
+            backup_enabled: backupEnabled,
+          },
           actorUserId,
         ),
       );
@@ -783,6 +802,28 @@ router.put('/staff-roster', requirePermission('tables.manage'), (req: Request, r
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+router.put(
+  '/staff-tables/edit',
+  requirePermission('tables.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const db = getDatabase();
+      const input = validateStaffTablesEdit(db, req.body);
+      if (!input.ok) return res.status(400).json({ code: input.code, error: input.error });
+      const actorUserId = (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
+      const changes = editStaffTables(db, input, actorUserId);
+      res.json({
+        ...readTableStaffRoster(db),
+        store_timezone: storeTimezone(db),
+        changes: changes.length,
+      });
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 router.put('/staff-tables', requirePermission('tables.manage'), (req: Request, res: Response) => {
   try {
@@ -914,7 +955,9 @@ router.get('/:id', requirePermission('tables.view'), (req: Request, res: Respons
     const includeReservationCustomer = hasPermission(userId, 'customers.view');
 
     // Normalize: frontend expects `name`, schema column is `number`
-    res.json({ table: tableShape(db, table as any, activeOrder, includeReservationCustomer) });
+    res.json({
+      table: tableShape(db, table as any, activeOrder, includeReservationCustomer),
+    });
   } catch (error: any) {
     res.locals.postHogError = error;
     console.error('[API] Internal error:', error);
@@ -1296,7 +1339,9 @@ router.post(
 router.delete('/:id', requirePermission('tables.manage'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
-    const table = db.prepare('SELECT id FROM tables WHERE id = ?').get(req.params.id);
+    const table = db.prepare('SELECT id, number FROM tables WHERE id = ?').get(req.params.id) as
+      | { id: string; number: string }
+      | undefined;
     if (!table) {
       return res.status(404).json({ code: 'TABLE_NOT_FOUND', error: 'Table not found' });
     }
@@ -1308,6 +1353,11 @@ router.delete('/:id', requirePermission('tables.manage'), (req: Request, res: Re
       });
     }
     db.prepare('DELETE FROM tables WHERE id = ?').run(req.params.id);
+    try {
+      rememberDeletedPosTable(table.id, table.number);
+    } catch (error) {
+      console.warn('[Tables] Could not queue the deleted table for Cloud QR:', error);
+    }
     res.json({ deleted: req.params.id });
   } catch (error: unknown) {
     res.locals.postHogError = error;

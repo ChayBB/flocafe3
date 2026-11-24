@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import { E2E_PASSWORD, getE2eToken, setLanguage } from './helpers/test-auth';
 import { E2E_BASE_URL } from './helpers/urls';
 
@@ -143,7 +144,8 @@ test('OrderFlow keeps one table sticker panel across connector status refreshes'
     expect(route.request().postDataJSON()).toEqual({ action: 'open', table_id: 'fixture-qr' });
     return route.fulfill({
       json: {
-        data_url: 'data:image/png;base64,iVBORw0KGgo=',
+        data_url:
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
         expires_at: '2030-01-01T00:00:00Z',
       },
     });
@@ -157,7 +159,31 @@ test('OrderFlow keeps one table sticker panel across connector status refreshes'
   await expect(panel).toHaveCount(1);
   await expect(page.getByLabel('POS table', { exact: true })).toHaveValue('fixture-qr');
   await page.getByRole('button', { name: 'Create and show Cloud QR' }).click();
-  await expect(page.getByRole('link', { name: 'Download table sticker' })).toBeVisible();
+  const preview = page.getByRole('img', { name: 'Table QR-TEST · Scan to order' });
+  await expect(preview).toBeVisible();
+  const previewUrl = (await preview.getAttribute('src'))!;
+  const textBands = await preview.evaluate(async (image: HTMLImageElement) => {
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(image, 0, 0);
+    const hasInk = (y: number, height: number) =>
+      ctx
+        .getImageData(0, y, canvas.width, height)
+        .data.some((value, index) => index % 4 === 0 && value < 128);
+    return [hasInk(0, 72), hasInk(73, canvas.height - 73)];
+  });
+  expect(textBands).toEqual([true, true]);
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('link', { name: 'Download table sticker' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('cloud-qr-QR-TEST.png');
+  expect(await download.failure()).toBeNull();
+  expect(await readFile(await download.path())).toEqual(
+    Buffer.from(previewUrl.split(',')[1], 'base64'),
+  );
 });
 
 test('Cloud Inbox requires a table and explicit staff confirmation', async ({ page }) => {

@@ -312,6 +312,15 @@ export async function acceptCloudOrder(
       throw new CloudOrderError(result.error);
     }
     const transient = result.kind === 'failed' && (result.status >= 500 || result.status === 429);
+    console.warn('[QR Cloud] POS refused Cloud order', {
+      eventId,
+      table: tableId,
+      status: result.status,
+      error:
+        result.kind === 'failed' ? result.error : result.kind === 'held' ? result.body.error : null,
+      code:
+        result.kind === 'failed' ? result.code : result.kind === 'held' ? result.body.code : null,
+    });
     throw new CloudOrderError(
       transient ? 'pos_retry_required' : 'pos_order_failed',
       transient ? 503 : 409,

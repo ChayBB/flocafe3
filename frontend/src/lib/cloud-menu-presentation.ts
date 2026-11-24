@@ -9,6 +9,8 @@ export interface CloudMenuItem {
   image?: string;
   addon_groups?: {
     name: string;
+    kitchen_price?: true;
+    description?: string;
     min: number;
     max: number | null;
     multiple: boolean;
@@ -76,7 +78,8 @@ export function presentCloudMenu(items: CloudMenuItem[], snapshot?: PosMenuPrese
       return {
         id: groupId,
         name: group.name,
-        description: null,
+        description: group.description ?? null,
+        kitchen_price: group.kitchen_price ?? false,
         is_required: group.min > 0,
         min_selection: group.min,
         max_selection: group.max ?? 0,

@@ -64,6 +64,23 @@ test('a Cloud QR guest sees the POS bill, asks for it and can no longer order', 
               price_satang: 12000,
               category: 'Noodles',
             },
+            {
+              id: '9b1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
+              name: 'ตามใจฉัน',
+              price_satang: 0,
+              category: 'Noodles',
+              addon_groups: [
+                {
+                  name: 'เมนูตามใจฉัน',
+                  description: 'สั่งได้ตามใจ ทำให้หรอยๆ แค่รอครัวระบุราคา',
+                  kitchen_price: true,
+                  min: 0,
+                  max: 1,
+                  multiple: false,
+                  options: [],
+                },
+              ],
+            },
           ],
         });
       case '/api/v1/table-session/orders':
@@ -133,6 +150,20 @@ test('a Cloud QR guest sees the POS bill, asks for it and can no longer order', 
   });
 
   await page.goto(`${origin}/#table=${TABLE}`);
+  await page.getByRole('heading', { name: 'ตามใจฉัน', exact: true }).click();
+  const request = page.getByTestId('kitchen-request-input');
+  await expect(request).toHaveAttribute('placeholder', 'สั่งได้ตามใจ ทำให้หรอยๆ แค่รอครัวระบุราคา');
+  await request.fill('ข้าวผัดปู');
+  await page.getByPlaceholder(/ไม่ใส่หัวหอม/).fill('เผ็ดน้อย');
+  await expect(page.getByText('รอครัวระบุราคา', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'เพิ่มลงตะกร้า' }).click();
+  await expect(request).toBeHidden();
+  // Every tap on a kitchen-priced dish asks again; it never adds silently.
+  await page.getByRole('heading', { name: 'ตามใจฉัน', exact: true }).click();
+  await expect(request).toBeVisible();
+  await expect(request).toHaveValue('');
+  await page.getByRole('button', { name: 'ปิด', exact: true }).click();
+  await expect(request).toBeHidden();
   await page.getByTestId('server-app-history-button').click();
   const history = page.getByTestId('server-app-guest-history');
   await expect(history).toBeVisible();

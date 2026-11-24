@@ -6,6 +6,7 @@ import QRCode from 'qrcode';
 import toast, { Toaster } from 'react-hot-toast';
 import ProductGrid from '@/components/pos/ProductGrid';
 import { blockLongPressMenu } from '@/lib/block-long-press-menu';
+import { reopenPage } from '@/lib/reopen-page';
 import AddonModal from '@/components/pos/AddonModal';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
@@ -72,6 +73,7 @@ const plainAmount = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 })
 const assetUrl = (file: string) => new URL(file, import.meta.url).href;
 const menuImageFile = /^(?:menu-images|\/api\/v1\/menu-images)\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/;
 const brandingFile = /^branding\/[a-f0-9]{64}\.(webp|png|jpeg|gif)$/;
+const cloudBrandingName = /^[a-f0-9]{64}\.(webp|png|jpeg|gif)$/;
 const LANGUAGE_KEY = 'flocafe-guest-language';
 const DARK_KEY = 'flocafe-guest-dark';
 
@@ -164,9 +166,12 @@ async function session() {
   return { token: table_token as string, cache };
 }
 
-async function readMenu(
-  response: Response,
-): Promise<{ items: CloudMenuItem[]; revision?: string; scrollPercent: number }> {
+async function readMenu(response: Response): Promise<{
+  items: CloudMenuItem[];
+  revision?: string;
+  scrollPercent: number;
+  branding?: Branding;
+}> {
   if (!response.ok) throw new Error('โหลดเมนูไม่สำเร็จ กรุณาลองอีกครั้ง');
   const data = await response.json();
   if (
@@ -193,7 +198,19 @@ async function readMenu(
       data.scroll_percent <= 100
         ? (data.scroll_percent as number)
         : DEFAULT_SCROLL_PERCENT,
+    branding: cloudBranding(data.branding),
   };
+}
+
+/** Branding the POS pushed to the Cloud; undefined when it never has, so the baked files apply. */
+function cloudBranding(value: unknown): Branding | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const pick = (name: unknown) =>
+    typeof name === 'string' && cloudBrandingName.test(name)
+      ? `/api/v1/menu-images/branding/${name}`
+      : undefined;
+  const { logo, cover } = value as { logo?: unknown; cover?: unknown };
+  return { logo: pick(logo), cover: pick(cover) };
 }
 
 function readSentOrders(data: unknown): SentOrder[] | null {
@@ -257,7 +274,9 @@ function Ordering({
   const [menu, setMenu] = useState<CloudMenuItem[]>([]);
   const [scrollPercent, setScrollPercent] = useState(DEFAULT_SCROLL_PERCENT);
   const [snapshot, setSnapshot] = useState<PosMenuPresentation>();
-  const [branding, setBranding] = useState<Branding>({});
+  const [bakedBranding, setBakedBranding] = useState<Branding>({});
+  const [liveBranding, setLiveBranding] = useState<Branding>();
+  const branding = liveBranding ?? bakedBranding;
   const [tableName, setTableName] = useState('');
   const [qrOpen, setQrOpen] = useState(false);
   const [dark, setDark] = useState(() => readStored(DARK_KEY) === '1');
@@ -318,6 +337,7 @@ function Ordering({
         context.current = null;
         setMenu(data.items);
         setScrollPercent(data.scrollPercent);
+        if (data.branding) setLiveBranding(data.branding);
         setReady(true);
         setExpired(true);
         setCanReload(true);
@@ -360,6 +380,7 @@ function Ordering({
       context.current.revision = data.revision;
       setMenu(data.items);
       setScrollPercent(data.scrollPercent);
+      if (data.branding) setLiveBranding(data.branding);
       setReady(true);
       setCanReload(false);
       setExpired(false);
@@ -442,22 +463,26 @@ function Ordering({
       .then((data) => {
         const pick = (file: unknown) =>
           typeof file === 'string' && brandingFile.test(file) ? assetUrl(file) : undefined;
-        if (data) setBranding({ logo: pick(data.logo), cover: pick(data.cover) });
+        if (data) setBakedBranding({ logo: pick(data.logo), cover: pick(data.cover) });
       })
       .catch(() => {});
-    const refresh = () => location.reload();
-    window.addEventListener('hashchange', refresh);
-    return () => window.removeEventListener('hashchange', refresh);
+    window.addEventListener('hashchange', reopenPage);
+    return () => window.removeEventListener('hashchange', reopenPage);
   }, [load]);
 
   const lines = pending?.body.items ?? cart;
   const count = lines.reduce((total, line) => total + line.quantity, 0);
   const weighed = (line: Line) => presentation.itemById.get(line.menu_item_id)?.price_unit != null;
   const hasWeighed = lines.some(weighed);
+  const awaitsKitchenPrice = (line: Line) =>
+    presentation.itemById
+      .get(line.menu_item_id)
+      ?.addon_groups?.some((group) => group.kitchen_price) ?? false;
+  const hasKitchenPrice = lines.some(awaitsKitchenPrice);
   const total = lines.reduce((sum, line) => {
     const item = presentation.itemById.get(line.menu_item_id);
     if (!item) return NaN;
-    if (item.price_unit) return sum;
+    if (item.price_unit || awaitsKitchenPrice(line)) return sum;
     const options = item.addon_groups?.flatMap((group) => group.options) ?? [];
     return (
       sum +
@@ -906,6 +931,11 @@ function Ordering({
                                     · คิดตามน้ำหนักจริง
                                   </p>
                                 )}
+                                {awaitsKitchenPrice(line) && (
+                                  <p className="mt-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                                    {tPos('awaitingKitchenPrice')}
+                                  </p>
+                                )}
                               </div>
                               <button
                                 type="button"
@@ -1034,6 +1064,11 @@ function Ordering({
                   {hasWeighed && (
                     <p className="mt-1 text-end text-xs text-muted-foreground">
                       ยังไม่รวมเมนูตามน้ำหนัก ร้านจะแจ้งราคาหลังชั่ง
+                    </p>
+                  )}
+                  {hasKitchenPrice && (
+                    <p className="mt-1 text-end text-xs text-muted-foreground">
+                      {t('cloudKitchenPriceExcluded')}
                     </p>
                   )}
                   <button

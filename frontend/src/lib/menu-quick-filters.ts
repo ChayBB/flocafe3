@@ -37,11 +37,13 @@ export interface MenuQuickFilter {
   match: (product: Product) => boolean;
   /** Orders the filtered list; lower comes first. */
   rank?: (product: Product) => number;
+  /** Categories whose whole contents this filter already shows, so their own chips can step aside. */
+  covers?: string[];
 }
 
 /**
- * The menu's shortcut lists: food and drinks with their staples first and then what sells most,
- * the best-selling food without the rice sides, the "เมนูตามใจฉัน" picks, and promotions.
+ * The menu's shortcut lists: food with its staples first and then what sells most, every drink
+ * with ice and beer first and then the best sellers, the best-selling food without the rice sides, the "เมนูตามใจฉัน" picks, and promotions.
  * `rankedIds` lists product ids from the most ordered down; null when sales are unknown.
  */
 export function buildMenuQuickFilters({
@@ -58,15 +60,20 @@ export function buildMenuQuickFilters({
   labels: MenuQuickFilterLabels;
 }): MenuQuickFilter[] {
   const byId = new Map(categories.map((category) => [String(category.id), category]));
-  const inGroup = (product: Product, pattern: RegExp) => {
-    const category = byId.get(String(product.category_id ?? ''));
-    if (!category) return false;
-    if (pattern.test(category.name)) return true;
-    const parent = byId.get(String(category.parent_id ?? ''));
-    return Boolean(parent && pattern.test(parent.name));
-  };
+  const categoriesIn = (pattern: RegExp) =>
+    categories
+      .filter((category) => {
+        if (pattern.test(category.name)) return true;
+        const parent = byId.get(String(category.parent_id ?? ''));
+        return Boolean(parent && pattern.test(parent.name));
+      })
+      .map((category) => String(category.id));
+  const drinkCategories = categoriesIn(DRINK_GROUP);
+  const recommendedCategories = categoriesIn(RECOMMENDED_GROUP);
+  const inCategories = (product: Product, ids: string[]) =>
+    ids.includes(String(product.category_id ?? ''));
   const isDrink = (product: Product) =>
-    isDrinkStaple(product.name) || inGroup(product, DRINK_GROUP);
+    isDrinkStaple(product.name) || inCategories(product, drinkCategories);
   const rank = new Map((rankedIds ?? []).map((id, index) => [String(id), index]));
   const sold = (product: Product) => rank.get(String(product.id));
   const bySales = (product: Product) => sold(product) ?? Number.MAX_SAFE_INTEGER;
@@ -94,9 +101,9 @@ export function buildMenuQuickFilters({
       key: 'drinks',
       label: labels.drinks,
       emptyText: labels.drinksEmpty,
-      match: (product) =>
-        isDrink(product) && (isDrinkStaple(product.name) || sold(product) !== undefined),
+      match: isDrink,
       rank: staplesFirst(isDrinkStaple),
+      covers: drinkCategories,
     },
     ...(rankedIds
       ? [
@@ -113,7 +120,9 @@ export function buildMenuQuickFilters({
       key: 'recommended',
       label: labels.recommended,
       emptyText: labels.recommendedEmpty,
-      match: (product) => hasTag(product, 'recommended') || inGroup(product, RECOMMENDED_GROUP),
+      match: (product) =>
+        hasTag(product, 'recommended') || inCategories(product, recommendedCategories),
+      covers: recommendedCategories,
     },
     {
       key: 'promotion',

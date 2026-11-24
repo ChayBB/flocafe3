@@ -402,6 +402,8 @@ export interface QuickFilter {
   emptyText: string;
   /** Orders the filtered list; lower comes first. */
   rank?: (product: Product) => number;
+  /** Category ids this filter already shows in full; their chips leave the row. */
+  covers?: string[];
 }
 
 export default function ProductGrid({
@@ -497,6 +499,17 @@ export default function ProductGrid({
     );
     return sortCategories(children, categorySort);
   }, [categories, activeRootId, categorySort]);
+
+  // A category a quick filter already shows in full, or one named like it, would be a second chip for it.
+  const coveredCategories = new Set(quickFilters.flatMap((filter) => filter.covers ?? []));
+  const quickLabels = new Set(quickFilters.map((filter) => filter.label.trim().toLowerCase()));
+  const rowCategories = (
+    scrollSpy ? sortCategories(categories, categorySort) : sortedCategories
+  ).filter(
+    (category) =>
+      !coveredCategories.has(String(category.id)) &&
+      !quickLabels.has(category.name.trim().toLowerCase()),
+  );
 
   const filterCategoryId = selectedCategory ? activeSubcategoryId || String(activeRootId) : null;
 
@@ -936,7 +949,7 @@ export default function ProductGrid({
         <CategoryRow
           className={`pb-1 ${flat ? 'min-w-0 flex-1 ms-2' : ''}`}
           collapse={collapseCategories}
-          categories={scrollSpy ? sortCategories(categories, categorySort) : sortedCategories}
+          categories={rowCategories}
           selectedCategory={quickFilter ? null : scrollSpy ? selectedCategory : activeRootId}
           setSelectedCategory={chooseCategory}
           allLabel={t('allCategories')}

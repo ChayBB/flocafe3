@@ -26,6 +26,7 @@ import {
   FormEvent,
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -39,6 +40,7 @@ import {
   HEADER_WHITE_ACTION,
   ServerAppHeader,
 } from '@/components/server-app/ServerAppHeader';
+import { StaffProfile, type StaffFontSize } from '@/components/server-app/StaffProfile';
 import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/GuestOrderHistory';
 import type { GuestBillRequestFailure } from '@/components/server-app/GuestBill';
 import { useReloadOnNewBuild } from '@/hooks/useReloadOnNewBuild';
@@ -97,6 +99,14 @@ type Table = {
   status?: string;
   owner_user_id?: string | null;
   backup_user_id?: string | null;
+  table_price_items?: {
+    id: number;
+    product_name: string;
+    pending_price_mode: 'weight' | 'kitchen_price' | null;
+    weight: number | null;
+    unit_price: number;
+    price_entry_id: number | null;
+  }[];
   activeOrder?: Order | null;
   current_order?: Order | null;
 };
@@ -123,6 +133,7 @@ type Order = {
   /** Menu lines still waiting or cooking, ready to serve, and served. */
   kitchen_counts?: { waiting: number; ready: number; served: number };
   bill_requested_at?: string | null;
+  bill_print_locked?: boolean;
   bill_requested_by?: string | null;
   bill_payment_received_at?: string | null;
   /** The cashier tried to print the bill before every item was confirmed served. */
@@ -352,6 +363,7 @@ export default function ServerStandalonePage() {
   const [disabled, setDisabled] = useState(false);
   const [tablePickerOpen, setTablePickerOpen] = useState(true);
   const [showBackupTables, setShowBackupTables] = useState(false);
+  const [backupEnabled, setBackupEnabled] = useState(true);
   const [orderedItemsOpen, setOrderedItemsOpen] = useState(false);
   const [summaryHiddenTable, setSummaryHiddenTable] = useState<string | null>(null);
   const [ticketMenuOpen, setTicketMenuOpen] = useState(false);
@@ -413,12 +425,42 @@ export default function ServerStandalonePage() {
   const [guestClosed, setGuestClosed] = useState(false);
   const [guestExpired, setGuestExpired] = useState(false);
   const [tableQrOpen, setTableQrOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileFontSize, setProfileFontSize] = useState<StaffFontSize>(() => {
+    if (typeof window === 'undefined') return 'normal';
+    const value = localStorage.getItem('flocafe:server-app-font-size');
+    return value === 'small' || value === 'large' ? value : 'normal';
+  });
   const [showLogin, setShowLogin] = useState(false);
   const guestAttemptRef = useRef<{ signature: string; key: string } | null>(null);
   const [guestDeliveryStatus, setGuestDeliveryStatus] = useState<
     { kind: 'queued' | 'review' | 'failed' } | { kind: 'received'; orderNumber: string } | null
   >(null);
   const [regional, setRegional] = useState<ServerAppInfo | null>(null);
+  const guestPriceAlerts = user
+    ? []
+    : (guestOrder?.items ?? []).flatMap((item) => {
+        const saved = item.saved_price;
+        if (!saved) return [];
+        const price = money(saved.unit_price, regional);
+        const message =
+          saved.weight === null
+            ? t('guestKitchenPriceSaved', { item: item.product_name, price })
+            : t('guestWeightPriceSaved', { item: item.product_name, weight: saved.weight, price });
+        return [{ id: saved.entry_id, message }];
+      });
+  const guestPriceKeys = guestPriceAlerts.map(({ id }) => id).join(',');
+  const seenGuestPrices = useRef(new Set<number>());
+  const showGuestPriceAlerts = useEffectEvent(() => {
+    for (const alert of guestPriceAlerts) {
+      if (seenGuestPrices.current.has(alert.id)) continue;
+      seenGuestPrices.current.add(alert.id);
+      toast.success(alert.message, { id: `guest-price-${alert.id}`, duration: 6000 });
+    }
+  });
+  useEffect(() => {
+    if (guestPriceKeys) showGuestPriceAlerts();
+  }, [guestPriceKeys]);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -448,6 +490,7 @@ export default function ServerStandalonePage() {
   // Best sellers of the last 30 days; staff only, so a guest at a QR table sees no popular filter.
   const [popularIds, setPopularIds] = useState<string[] | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
+  const [tablesLoaded, setTablesLoaded] = useState(false);
   const staffTables = ownedOrAllTables(tables, user?.id, staffAreaOnly);
   // Tables this staff member backs up also raise their alerts, marked as backup; orders stay open to all.
   const backupTables = user
@@ -455,7 +498,7 @@ export default function ServerStandalonePage() {
     : [];
   const backupTableIds = new Set(backupTables.map((table) => table.id));
   const alertTables = backupTables.length > 0 ? [...staffTables, ...backupTables] : staffTables;
-  const backupMode = Boolean(user) && showBackupTables;
+  const backupMode = Boolean(user) && backupEnabled && showBackupTables;
   const pickerTables = backupMode ? backupTables : staffTables;
   // Tables whose bill the cashier could not print yet: every item must be confirmed served first.
   const serveConfirmTables = user
@@ -492,8 +535,70 @@ export default function ServerStandalonePage() {
         `${table.id}|bill:${(table.activeOrder || table.current_order)?.bill_requested_at}`,
     )
     .join(',');
+  const tablePriceAlerts = (user ? alertTables : []).flatMap((table) => {
+    return (table.table_price_items ?? []).map((item) => {
+      const tableName = table.name || table.number || '';
+      const priced = item.price_entry_id !== null;
+      const kitchenPrice = item.pending_price_mode === 'kitchen_price';
+      const price = money(item.unit_price, regional);
+      const message = priced
+        ? kitchenPrice
+          ? t('savedKitchenPriceAlert', { table: tableName, item: item.product_name, price })
+          : t('savedWeightAlert', {
+              table: tableName,
+              item: item.product_name,
+              weight: item.weight ?? 0,
+              price,
+            })
+        : t(kitchenPrice ? 'pendingKitchenPriceAlert' : 'pendingWeightAlert', {
+            table: tableName,
+            item: item.product_name,
+          });
+      return {
+        table,
+        item,
+        priced,
+        message,
+        key: `${table.id}|price:${item.id}:${item.price_entry_id ?? 'pending'}`,
+      };
+    });
+  });
+  const savedPriceTableIds = new Set(
+    tablePriceAlerts
+      .filter(({ priced, item }) => priced && item.pending_price_mode === 'kitchen_price')
+      .map(({ table }) => table.id),
+  );
+  const savedPriceKeys = tables
+    .flatMap((table) =>
+      (table.table_price_items ?? []).flatMap((item) =>
+        item.price_entry_id === null ? [] : [`${table.id}|price:${item.id}:${item.price_entry_id}`],
+      ),
+    )
+    .join(',');
+  const [priceFlashKeys, setPriceFlashKeys] = useState<Set<string>>(() => new Set());
+  const seenPriceAlerts = useRef<{ userId: string; keys: Set<string> } | null>(null);
+  useEffect(() => {
+    if (!user?.id || !tablesLoaded) return;
+    const keys = savedPriceKeys ? savedPriceKeys.split(',') : [];
+    const previous = seenPriceAlerts.current;
+    const known = previous?.userId === user.id ? previous.keys : null;
+    const fresh = known ? keys.filter((key) => !known.has(key)) : [];
+    seenPriceAlerts.current = { userId: user.id, keys: new Set([...(known ?? []), ...keys]) };
+    setPriceFlashKeys(new Set(fresh));
+    if (fresh.length === 0) return;
+    const timer = window.setTimeout(() => setPriceFlashKeys(new Set()), 3000);
+    return () => window.clearTimeout(timer);
+  }, [savedPriceKeys, tablesLoaded, user?.id]);
   const serveConfirmRungRef = useRef<Set<string>>(new Set());
-  const staffAlertKeys = [serveConfirmKeys, outOfStockKeys, guestBillKeys]
+  const staffAlertKeys = [
+    serveConfirmKeys,
+    outOfStockKeys,
+    guestBillKeys,
+    tablePriceAlerts
+      .filter((alert) => priceFlashKeys.has(alert.key))
+      .map((alert) => alert.key)
+      .join(','),
+  ]
     .filter(Boolean)
     .join(',');
   useEffect(() => {
@@ -510,8 +615,17 @@ export default function ServerStandalonePage() {
       window.removeEventListener('keydown', unlockKdsAlertSound);
     };
   }, []);
-  const [tablesLoaded, setTablesLoaded] = useState(false);
   const [selectedTableId, setSelectedTableId] = useState<string>('');
+  const currentTablePrices = tables.find(
+    (table) => table.id === selectedTableId,
+  )?.table_price_items;
+  const kitchenPricesToApprove = new Map(
+    (currentTablePrices ?? []).flatMap((item) =>
+      item.pending_price_mode === 'kitchen_price' && item.price_entry_id !== null
+        ? [[item.id, item.price_entry_id] as const]
+        : [],
+    ),
+  );
   const [orderLoadedTableId, setOrderLoadedTableId] = useState<string>('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -524,6 +638,16 @@ export default function ServerStandalonePage() {
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [moveTableModalOpen, setMoveTableModalOpen] = useState(false);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
+  const billPrintInFlight = useRef(new Set<number>());
+  const [lockedBillPrints, setLockedBillPrints] = useState<Set<number>>(() => new Set());
+  const billPrintLocked = Boolean(
+    currentOrder &&
+    (lockedBillPrints.has(currentOrder.id) ||
+      tables.some((table) => {
+        const order = table.activeOrder || table.current_order;
+        return order?.id === currentOrder.id && order.bill_print_locked;
+      })),
+  );
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [, setCustomerMatch] = useState<{
@@ -632,6 +756,7 @@ export default function ServerStandalonePage() {
     setProducts(productsRes.data.products || []);
     const loadedTables = tablesRes.data.tables || [];
     setTables(loadedTables);
+    setBackupEnabled(tablesRes.data.backup_enabled !== false);
     setTablesLoaded(true);
     const linkedTable = linkedTableAppliedRef.current ? undefined : pickLinkedTable(loadedTables);
     linkedTableAppliedRef.current = true;
@@ -665,7 +790,7 @@ export default function ServerStandalonePage() {
     const orderLoaded = Boolean(tableId) && orderLoadedTableIdRef.current === tableId;
     const [tablesRes, orderRes] = await Promise.all([
       api.get('/api/tables', { params: { active: 'true' } }),
-      orderLoaded ? fetchTableOrder(tableId) : Promise.resolve(null),
+      orderLoaded ? fetchTableOrder(tableId).catch(() => null) : Promise.resolve(null),
     ]);
     if (sendInFlightRef.current) return;
     const keepIfSame =
@@ -673,6 +798,7 @@ export default function ServerStandalonePage() {
       (prev: T) =>
         JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
     setTables(keepIfSame<Table[]>(tablesRes.data.tables || []));
+    setBackupEnabled(tablesRes.data.backup_enabled !== false);
     if (orderRes && loadSeq === orderLoadSeqRef.current && selectedTableIdRef.current === tableId) {
       setCurrentOrder(keepIfSame<Order | null>(orderRes.data.orders?.[0] || null));
     }
@@ -1042,6 +1168,7 @@ export default function ServerStandalonePage() {
         setProducts(productsRes.data.products || []);
         const loadedTables = tablesRes.data.tables || [];
         setTables(loadedTables);
+        setBackupEnabled(tablesRes.data.backup_enabled !== false);
         setTablesLoaded(true);
         const linkedTable = linkedTableAppliedRef.current
           ? undefined
@@ -1374,39 +1501,82 @@ export default function ServerStandalonePage() {
 
   /** Prints the table's bill and records the request, so the POS times the wait for payment. */
   async function requestBill() {
-    if (!api || !currentOrder) return;
+    if (!api || !currentOrder || billPrintLocked) return;
+    const orderId = currentOrder.id;
     const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) return;
+    if (!token || billPrintInFlight.current.has(orderId)) return;
     const session = authSessionSeqRef.current;
     const isCurrent = () =>
       authSessionSeqRef.current === session && localStorage.getItem(TOKEN_KEY) === token;
+    billPrintInFlight.current.add(orderId);
+    setLockedBillPrints((current) => new Set(current).add(orderId));
+    let keepLocked = false;
     try {
       const { data } = await api.post(
-        `/api/orders/${currentOrder.id}/bill-request`,
+        `/api/orders/${orderId}/bill-request`,
         {},
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!isCurrent()) return;
-      // The table stops taking orders as soon as its bill is out.
-      if (data?.order)
+      if (data?.order) {
         setCurrentOrder((order) =>
           order && order.id === data.order.id
             ? { ...order, ...data.order, items: order.items }
             : order,
         );
+      }
+
+      const printed = await printOrderSlip(orderId, token, isCurrent);
+      if (printed === 'cancelled' || !isCurrent()) return;
+      keepLocked =
+        typeof printed === 'object' || printed === 'already-printed' || printed === 'failed-locked';
+      if (typeof printed === 'object') {
+        toast.success(
+          printed.invoiceNumber
+            ? t('invoicePrinted', { number: printed.invoiceNumber })
+            : t('billRequested'),
+        );
+      } else if (printed === 'already-printed') toast(t('billAlreadyPrinted'));
+      else if (printed === 'not-allowed') toast.success(t('billRequestNotified'));
+      else toast.error(t('billRequestCashierPrintFailed'));
     } catch (error: unknown) {
       if (!isCurrent()) return;
       const code = (error as { response?: { data?: { code?: string } } })?.response?.data?.code;
       if (code === 'weight_pending') toast.error(t('billBlockedPricePending'));
       else if (code === 'served_unconfirmed') toast.error(t('billBlockedNotServed'));
       else toastApiError(error, t('billRequestFailed'), apiErrorT);
-      return;
+    } finally {
+      billPrintInFlight.current.delete(orderId);
+      if (!keepLocked) {
+        setLockedBillPrints((current) => {
+          const next = new Set(current);
+          next.delete(orderId);
+          return next;
+        });
+      }
     }
-    const printed = await printOrderSlip(currentOrder.id, token, isCurrent);
-    if (printed === 'cancelled' || !isCurrent()) return;
-    if (printed === 'printed') toast.success(t('billRequested'));
-    else if (printed === 'not-allowed') toast.success(t('billRequestNotified'));
-    else toast.error(t('billRequestCashierPrintFailed'));
+  }
+
+  async function approveKitchenPrice(item: OrderedItem) {
+    const entryId = kitchenPricesToApprove.get(item.id);
+    if (!api || !currentOrder || entryId === undefined) return;
+    const orderId = item.order_id ?? currentOrder.id;
+    try {
+      await api.patch(`/api/orders/${orderId}/items/${item.id}/approve-kitchen-price`, {
+        price_entry_id: entryId,
+      });
+      setTables((current) =>
+        current.map((table) => ({
+          ...table,
+          table_price_items: table.table_price_items?.filter(
+            (price) => price.price_entry_id !== entryId,
+          ),
+        })),
+      );
+    } catch (error) {
+      toastApiError(error, t('approveKitchenPriceFailed'), apiErrorT);
+      await refreshLive().catch(() => {});
+    }
   }
 
   /** Packs a sent item to go, cancels one still waiting, or confirms a served one reached the table. */
@@ -1497,7 +1667,9 @@ export default function ServerStandalonePage() {
     selectTable(table.id);
     if (!isWide) setTablePickerOpen(false);
     const order = table.activeOrder || table.current_order;
-    if (order?.serve_confirm_requested_at) setOrderedItemsOpen(true);
+    if (order?.serve_confirm_requested_at || savedPriceTableIds.has(table.id)) {
+      setOrderedItemsOpen(true);
+    }
     if (reopenCartAfterTableRef.current) {
       reopenCartAfterTableRef.current = false;
       if (!isWide) setMobileCartOpen(true);
@@ -1559,6 +1731,7 @@ export default function ServerStandalonePage() {
       }
       activeUserIdRef.current = res.data.user.id;
       setUser(res.data.user);
+      setProfileOpen(!suspended || suspended.ownerId !== res.data.user.id);
       setShowLogin(false);
     } catch (error: unknown) {
       toastApiError(error, t('signInFailed'), apiErrorT);
@@ -1601,6 +1774,7 @@ export default function ServerStandalonePage() {
   }, [user]);
 
   async function logout() {
+    setProfileOpen(false);
     authSessionSeqRef.current += 1;
     try {
       await api?.post('/api/auth/logout');
@@ -1787,18 +1961,28 @@ export default function ServerStandalonePage() {
     orderId: number,
     token: string,
     isCurrent: () => boolean,
-  ): Promise<'printed' | 'not-allowed' | 'unavailable' | 'failed' | 'cancelled'> {
+  ): Promise<
+    | { invoiceNumber?: string }
+    | 'not-allowed'
+    | 'unavailable'
+    | 'failed'
+    | 'cancelled'
+    | 'already-printed'
+    | 'failed-locked'
+  > {
     if (!api || !isCurrent()) return 'cancelled';
     try {
-      await api.post(
+      const { data } = await api.post<{ bill_number?: string }>(
         '/api/printers/print-bill',
         { orderId },
         { headers: { Authorization: `Bearer ${token}` } },
       );
-      return isCurrent() ? 'printed' : 'cancelled';
+      return isCurrent() ? { invoiceNumber: data?.bill_number } : 'cancelled';
     } catch (printError: unknown) {
       if (!isCurrent()) return 'cancelled';
       const response = axios.isAxiosError(printError) ? printError.response : undefined;
+      if (response?.data?.code === 'BILL_ALREADY_PRINTED') return 'already-printed';
+      if (response?.data?.staff_print_locked === true) return 'failed-locked';
       if (response?.status === 400) return 'unavailable';
       if (response?.status === 403 && response.data?.code === 'BILL_PRINTING_DISABLED') {
         return 'not-allowed';
@@ -2153,6 +2337,15 @@ export default function ServerStandalonePage() {
     if (customerFacing) return holdDarkClass(false);
     return staffDark === null ? undefined : holdDarkClass(staffDark);
   }, [customerFacing, staffDark]);
+  useEffect(() => {
+    if (!user || profileFontSize === 'normal') return;
+    const root = document.documentElement;
+    const previous = root.style.fontSize;
+    root.style.fontSize = profileFontSize === 'small' ? '90%' : '112.5%';
+    return () => {
+      root.style.fontSize = previous;
+    };
+  }, [user, profileFontSize]);
   const waitingForGuest =
     !user && (guestTableId === undefined || (!!guestTableId && !guestChecked));
 
@@ -2507,6 +2700,8 @@ export default function ServerStandalonePage() {
             onTakeaway={(item) => changeSentItem(item.id, 'takeaway')}
             onCancel={(item) => changeSentItem(item.id, 'cancel')}
             onConfirmServed={(item) => changeSentItem(item.id, 'confirm-served')}
+            kitchenPricesToApprove={kitchenPricesToApprove}
+            onApproveKitchenPrice={approveKitchenPrice}
           />
         </div>
       )}
@@ -2549,6 +2744,46 @@ export default function ServerStandalonePage() {
     </>
   );
 
+  if (user && profileOpen) {
+    return (
+      <StaffProfile
+        key={user.id}
+        api={api}
+        user={user}
+        tables={tables.filter(
+          (table) => table.owner_user_id === user.id || table.backup_user_id === user.id,
+        )}
+        coverUrl={
+          regional?.store_cover_version
+            ? `/api/server-app/branding/cover?v=${regional.store_cover_version}`
+            : '/images/server-app-cover-1920x1080.jpg'
+        }
+        language={language}
+        onLanguage={chooseLanguage}
+        dark={staffSeesDark}
+        onDark={toggleStaffDark}
+        fontSize={profileFontSize}
+        onFontSize={(size) => {
+          localStorage.setItem('flocafe:server-app-font-size', size);
+          setProfileFontSize(size);
+        }}
+        formatMoney={(amount) => money(amount, regional)}
+        onClose={() => setProfileOpen(false)}
+        onOrders={() => {
+          setProfileOpen(false);
+          if (activeTable) setOrderedItemsOpen(true);
+          else setTablePickerOpen(true);
+        }}
+        onTable={(id) => {
+          setProfileOpen(false);
+          if (id) selectTableFromPicker(id);
+          else setTablePickerOpen(true);
+        }}
+        onLogout={() => void logout()}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <ServerAppHeader
@@ -2578,6 +2813,7 @@ export default function ServerStandalonePage() {
         onStaffLogin={() => setShowLogin(true)}
         staffLoginLabel={tAuth('signIn')}
         staffName={user?.name}
+        onStaffProfile={user ? () => setProfileOpen(true) : undefined}
         tablesExpanded={showTablePicker}
         onShowTables={
           user
@@ -2600,7 +2836,7 @@ export default function ServerStandalonePage() {
             : undefined
         }
         onHoldTables={
-          user
+          user && backupEnabled
             ? () => {
                 setShowBackupTables((backup) => !backup);
                 setTablePickerOpen(true);
@@ -2692,7 +2928,7 @@ export default function ServerStandalonePage() {
         <main
           className={`mx-auto grid max-w-6xl min-w-0 gap-3 px-4 py-2 md:p-3 ${showTablePicker ? 'md:grid-cols-[180px_1fr] lg:grid-cols-[220px_1fr_340px]' : 'lg:grid-cols-[1fr_340px]'}`}
         >
-          <GuestAlerts api={api} apiPrefix="/api" enabled={!!user} />
+          <GuestAlerts key={user?.id} api={api} apiPrefix="/api" enabled={!!user} />
 
           {tableQrOpen && api && user && selectedTableId && (
             <GuestTableQrDialog
@@ -2784,6 +3020,24 @@ export default function ServerStandalonePage() {
               >
                 {backupMode ? t('backupTablesHeading') : t('tables')}
               </h2>
+              {tablePriceAlerts
+                .filter((alert) => priceFlashKeys.has(alert.key))
+                .map(({ table, item, message }) => (
+                  <button
+                    key={`price-${item.id}`}
+                    type="button"
+                    data-testid="saved-price-alert"
+                    onClick={() => {
+                      selectTable(table.id);
+                      if (!isWide) setTablePickerOpen(false);
+                      setOrderedItemsOpen(true);
+                    }}
+                    className="mb-2 w-full rounded-lg bg-red-600 px-3 py-2 text-start text-sm font-semibold text-white"
+                  >
+                    {message}
+                    {table.backup_user_id === user?.id && ` · ${t('backupAlertTag')}`}
+                  </button>
+                ))}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
                 {backupMode && tablesLoaded && backupTables.length === 0 && (
                   <p className="text-sm text-muted-foreground">{t('noBackupTables')}</p>
@@ -2798,8 +3052,9 @@ export default function ServerStandalonePage() {
                   // ones light yellow, free ones white.
                   const outOfStock = (order?.out_of_stock_items ?? []).length > 0;
                   const guestBill = guestAskedForBill(order);
+                  const savedPrice = savedPriceTableIds.has(table.id);
                   const tone = order
-                    ? order.serve_confirm_requested_at || outOfStock || guestBill
+                    ? order.serve_confirm_requested_at || outOfStock || guestBill || savedPrice
                       ? 'confirm'
                       : awaitingPayment(order)
                         ? 'awaiting'
@@ -2838,7 +3093,9 @@ export default function ServerStandalonePage() {
                                 ? t('outOfStockNeeded')
                                 : guestBill
                                   ? t('guestBillNeeded')
-                                  : t('serveConfirmNeeded')}
+                                  : order?.serve_confirm_requested_at
+                                    ? t('serveConfirmNeeded')
+                                    : t('savedPriceNeeded')}
                             </span>
                           ) : tone === 'awaiting' ? (
                             t('tableAwaitingPayment')
@@ -2849,6 +3106,12 @@ export default function ServerStandalonePage() {
                           ) : (
                             tTables('statusAvailable')
                           )}
+                          {savedPrice &&
+                            (outOfStock || guestBill || order?.serve_confirm_requested_at) && (
+                              <span className="block font-semibold text-red-700">
+                                {t('savedPriceNeeded')}
+                              </span>
+                            )}
                           {order?.kitchen_counts && (
                             <Ltr
                               as="span"
@@ -2899,6 +3162,17 @@ export default function ServerStandalonePage() {
                 <Clock size={17} className="shrink-0 text-amber-600" />
                 {guestBillLocked ? t('guestBillLockedNotice') : t('tableAwaitingPaymentLocked')}
               </div>
+            )}
+            {guestPriceAlerts.length > 0 && (
+              <ul
+                role="status"
+                data-testid="guest-price-alerts"
+                className="mb-3 space-y-1 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900"
+              >
+                {guestPriceAlerts.map(({ id, message }) => (
+                  <li key={id}>{message}</li>
+                ))}
+              </ul>
             )}
             {!user && guestDeliveryStatus && (
               <p role="status" className="mb-3 rounded-lg bg-muted px-3 py-2 text-sm">
@@ -2994,11 +3268,14 @@ export default function ServerStandalonePage() {
           onTakeaway={(item) => changeSentItem(item.id, 'takeaway')}
           onCancel={(item) => changeSentItem(item.id, 'cancel')}
           onConfirmServed={(item) => changeSentItem(item.id, 'confirm-served')}
+          kitchenPricesToApprove={kitchenPricesToApprove}
+          onApproveKitchenPrice={approveKitchenPrice}
           onConfirmServedMany={confirmServedMany}
           serveConfirmRequested={Boolean(currentOrder?.serve_confirm_requested_at)}
           total={currentOrder?.total}
           formatPrice={(amount) => money(amount, regional)}
           imageOf={productImageOf}
+          billPrintLocked={billPrintLocked}
           onPrintBill={requestBill}
           onMoveTable={canMoveTable ? () => setTransferMode('move') : undefined}
           onMergeTable={() => setTransferMode('merge')}

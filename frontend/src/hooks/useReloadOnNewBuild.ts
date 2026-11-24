@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { reopenPage } from '@/lib/reopen-page';
 
 const BUILD_CHECK_MS = 60_000;
 
@@ -16,7 +17,7 @@ export function useReloadOnNewBuild(infoPath: string, canReload: boolean): void 
 
   useEffect(() => {
     canReloadRef.current = canReload;
-    if (canReload && pendingRef.current) window.location.reload();
+    if (canReload && pendingRef.current) reopenPage();
   }, [canReload]);
 
   useEffect(() => {
@@ -33,7 +34,7 @@ export function useReloadOnNewBuild(infoPath: string, canReload: boolean): void 
         }
         if (build === firstBuildRef.current) return;
         pendingRef.current = true;
-        if (canReloadRef.current) window.location.reload();
+        if (canReloadRef.current) reopenPage();
       } catch {}
     };
     void check();

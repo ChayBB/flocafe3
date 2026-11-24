@@ -6,6 +6,7 @@ import { KdsWorkspace } from '@/components/kds/KdsWorkspace';
 import { useKdsConnection } from '@/hooks/useKdsConnection';
 import { useServerKdsInfo } from '@/hooks/useServerKdsInfo';
 import { useSyncServerLanguage } from '@/lib/i18n';
+import { reopenPage } from '@/lib/reopen-page';
 import { useTranslations } from 'use-intl';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -49,7 +50,7 @@ function createStandaloneApi() {
       const currentToken = localStorage.getItem('token');
       if (error.response?.status === 401 && currentToken && sentAuth === `Bearer ${currentToken}`) {
         localStorage.removeItem('token');
-        window.location.reload();
+        reopenPage();
       }
       return Promise.reject(error);
     },

@@ -153,7 +153,7 @@ for (const screenSize of SCREENS) {
         return body.order.items.length;
       })
       .toBe(5);
-    await expect(page.locator('header')).toContainText('Table —');
+    await expect(page.getByTestId('server-app-table-button-name')).toHaveCount(0);
 
     // Choosing the table again shows all five; "Exit" leaves the list like the back arrow, keeping the
     // table but hiding the kitchen chips and the ordered-items button.

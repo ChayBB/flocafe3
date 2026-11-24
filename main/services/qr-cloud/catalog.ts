@@ -54,7 +54,8 @@ export function buildCloudCatalog() {
     image_url: string | null;
   }[];
   const groupQuery = db.prepare(`
-    SELECT id, name, is_required, min_selection, max_selection, allow_multiple_quantities
+    SELECT id, name, description, kitchen_price, is_required, min_selection,
+           max_selection, allow_multiple_quantities
     FROM addon_groups WHERE is_active = 1 AND id IN (
       SELECT addon_group_id FROM addon_group_product WHERE product_id = ?
       UNION SELECT addon_group_id FROM category_addon_groups WHERE category_id = ?
@@ -66,29 +67,39 @@ export function buildCloudCatalog() {
   `);
   const images = new Map<string, Buffer>();
   const items = rows.flatMap((row) => {
-    const addonGroups =
-      row.price === 0
-        ? []
-        : (
-            groupQuery.all(row.pos_product_id, row.category_id) as {
-              id: string;
-              name: string;
-              is_required: number;
-              min_selection: number | null;
-              max_selection: number | null;
-              allow_multiple_quantities: number;
-            }[]
-          ).map((group) => ({
-            name: group.name,
-            min: group.is_required
-              ? Math.max(1, group.min_selection || 1)
-              : group.min_selection || 0,
-            max: group.max_selection,
-            multiple: Boolean(group.allow_multiple_quantities),
-            options: optionQuery.all(group.id),
-          }));
-    if (addonGroups.some((group) => group.min > 0 && group.options.length === 0)) return [];
-    const groups = addonGroups.filter((group) => group.options.length > 0);
+    const addonGroups = (
+      groupQuery.all(row.pos_product_id, row.category_id) as {
+        id: string;
+        name: string;
+        description: string | null;
+        kitchen_price: number;
+        is_required: number;
+        min_selection: number | null;
+        max_selection: number | null;
+        allow_multiple_quantities: number;
+      }[]
+    )
+      .filter((group) => row.price > 0 || group.kitchen_price)
+      .map((group) => {
+        const options = row.price === 0 ? [] : optionQuery.all(group.id);
+        return {
+          name: group.name,
+          min:
+            options.length === 0
+              ? 0
+              : group.is_required
+                ? Math.max(1, group.min_selection || 1)
+                : group.min_selection || 0,
+          max: group.max_selection,
+          multiple: Boolean(group.allow_multiple_quantities),
+          options,
+          ...(group.kitchen_price && {
+            kitchen_price: true as const,
+            ...(group.description && { description: group.description.slice(0, 2000) }),
+          }),
+        };
+      });
+    const groups = addonGroups.filter((group) => group.kitchen_price || group.options.length > 0);
     const image = catalogImageOf(row.image_url);
     if (image) images.set(image.name, image.bytes);
     return [

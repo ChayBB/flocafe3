@@ -1336,6 +1336,68 @@ test('bill on 80 mm paper keeps a 4.5 mm margin each side, padding images and in
   assert.equal(narrow.columns, resolvePrinterContext({ paper_width: '58mm' }).columns);
 });
 
+test('bill rules run edge to edge through the 80 mm side margin', async () => {
+  const { resolveBillPrinterContext } = await import('../main/printers/thermal');
+  const { buildEscPos } = await import('../main/printers/formatting-helpers');
+  const { capabilities, columns } = resolveBillPrinterContext({ paper_width: '80mm' });
+  const bytes = buildEscPos(['{INIT}', '-'.repeat(columns), 'Total'], false, {
+    capabilities,
+    columns,
+  });
+  const fullRule = Buffer.from('-'.repeat(48));
+  const ruleAt = bytes.indexOf(fullRule);
+  assert.ok(ruleAt > 0, 'the rule prints 48 cells across the 576-dot head');
+  assert.equal(bytes.indexOf(Buffer.from('-'.repeat(49))), -1);
+  assert.notEqual(bytes[ruleAt - 1], 0x20, 'the rule is not indented by the side margin');
+  assert.ok(bytes.includes(Buffer.from([0x1b, 0x21, 0x00, 0x20, 0x20, 0x20])), 'text keeps it');
+  const short = buildEscPos(['{INIT}', '-'.repeat(10)], false, { capabilities, columns });
+  assert.ok(short.includes(Buffer.from('   ')), 'a short dash run is text, not a rule');
+});
+
+test('a raster text scale enlarges the font and the row height', async () => {
+  const { isRasterRenderRequest } = await import('../shared/print/raster');
+  const fonts: string[] = [];
+  const createCanvas = (): RasterCanvas => {
+    const context = {
+      font: '',
+      textBaseline: 'top',
+      direction: 'ltr',
+      textAlign: 'left',
+      fillStyle: '#000',
+      measureText: (text: string) => ({ width: text.length * 12 }),
+      setTransform: () => undefined,
+      fillRect: () => undefined,
+      fillText: () => fonts.push(context.font),
+      getImageData: (_x: number, _y: number, width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+      }),
+    };
+    return { width: 1, height: 1, getContext: () => context };
+  };
+  const base = {
+    version: 1 as const,
+    requestId: 'scale',
+    text: '>> รอระบุน้ำหนัก',
+    widthDots: 576,
+    maxBandHeight: 200,
+    direction: 'ltr' as const,
+    style: 'normal' as const,
+    financial: false,
+    maxLines: 4,
+  };
+  const heightOf = (result: ReturnType<typeof paintRasterRequest>) =>
+    result.ok ? result.unit.bands.reduce((sum, band) => sum + band.heightDots, 0) : -1;
+  const normal = paintRasterRequest(base, createCanvas);
+  const scaled = paintRasterRequest({ ...base, textScale: 1.3 }, createCanvas);
+  assert.equal(heightOf(normal), 32);
+  assert.equal(heightOf(scaled), 42);
+  assert.ok(fonts[0].includes(' 24px '), fonts[0]);
+  assert.ok(fonts.at(-1)!.includes(' 31px '), fonts.at(-1));
+  assert.equal(isRasterRenderRequest({ ...base, textScale: 1.3 }), true);
+  assert.equal(isRasterRenderRequest({ ...base, textScale: 0.5 }), false);
+  assert.equal(isRasterRenderRequest({ ...base, textScale: 3 }), false);
+});
+
 test('bill number and date share one row, the date on the right', async () => {
   const { splitRowLines } = await import('../main/printers/formatting-helpers');
   assert.deepEqual(splitRowLines('Bill # INV-1', 'Date 11 Nov 2026, 10:35', 42), [

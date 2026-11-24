@@ -54,7 +54,10 @@ export function pendingPriceModeForProduct(
 }
 
 /** The note a pending line carries for the kitchen, by how its price is set. */
-export function withPendingPriceNote(note: string | null | undefined, mode: PendingPriceMode): string {
+export function withPendingPriceNote(
+  note: string | null | undefined,
+  mode: PendingPriceMode,
+): string {
   if (mode === 'weight') return withWeightPendingNote(note);
   const current = (note ?? '').trim();
   if (current.includes(KITCHEN_PRICE_NOTE)) return current;
@@ -80,6 +83,40 @@ export function withWeightPendingNote(note: string | null | undefined): string {
 /** Drops the waiting markers once the kitchen has priced the line; the KDS shows the price instead. */
 export function withoutPendingPriceNotes(note: string | null | undefined): string | null {
   return stripPendingPriceNotes(note)?.trim() || null;
+}
+
+export function tablePriceItems(db: Db, tableId: string) {
+  return db
+    .prepare(
+      `SELECT item.id, item.product_name, item.pending_price_mode,
+              item.weight, item.unit_price, entry.id AS price_entry_id
+       FROM order_items item
+       LEFT JOIN order_audit_log entry ON item.weight_pending = 0 AND entry.id = (
+         SELECT id FROM order_audit_log
+         WHERE order_id = item.order_id AND order_item_id = item.id
+           AND action IN ('item_weighed', 'item_kitchen_priced')
+         ORDER BY id DESC LIMIT 1
+       )
+       WHERE item.order_id IN (
+         SELECT id FROM orders WHERE table_id = ? AND status NOT IN ('completed', 'cancelled')
+       )
+         AND (item.weight_pending = 1 OR entry.id IS NOT NULL)
+         AND NOT EXISTS (
+           SELECT 1 FROM order_audit_log approval
+           WHERE approval.order_id = item.order_id AND approval.order_item_id = item.id
+             AND approval.action = 'item_kitchen_price_approved' AND approval.id > entry.id
+         )
+         AND item.status NOT IN (${TERMINAL_ITEM_STATUSES.map(() => '?').join(',')})
+       ORDER BY item.id`,
+    )
+    .all(tableId, ...TERMINAL_ITEM_STATUSES) as {
+    id: number;
+    product_name: string;
+    pending_price_mode: PendingPriceMode | null;
+    weight: number | null;
+    unit_price: number;
+    price_entry_id: number | null;
+  }[];
 }
 
 export function orderHasWeightPending(db: Db, orderId: unknown): boolean {

@@ -22,8 +22,10 @@ import {
   isServerBillPrintingEnabled,
   parseItemJson,
   getSettingValue,
+  withTxn,
 } from '../db';
-import { getOrderWithItems } from './bills';
+import { claimStaffBillPrint, isStaffBillPrintLocked } from '../services/receipt';
+import { createOrSyncBillForOrder, getOrderWithItems } from './bills';
 import { loadProductRelationsBatch } from './products';
 import { randomUUID } from 'node:crypto';
 import {
@@ -111,6 +113,8 @@ import {
 import { clockNow } from '../lib/clock';
 
 const router = Router();
+
+const BILL_PRINT_CLOSED_ORDER_STATUSES = new Set(['cancelled', 'voided', 'refunded']);
 
 // Allows standard OS printer queue characters while rejecting control characters.
 const PRINTER_NAME_REGEX = /^[^\x00-\x1f\x7f]{1,128}$/;
@@ -1146,6 +1150,7 @@ router.post(
         code: 'BILL_PRINTING_DISABLED',
       });
     }
+    let staffPrintLocked = false;
     try {
       const { billId, orderId, useUnicode = false, isReprint = false, preview = false } = req.body;
       // Renderer's global "Arabic/Persian shaping" setting (#437). Only an
@@ -1164,6 +1169,26 @@ router.post(
       }
 
       const db = getDatabase();
+      const staffPrintOnce =
+        preview !== true && (req.body.staffPrintOnce === true || authUser?.role === 'server');
+      const staffOrderId = staffPrintOnce
+        ? Number(
+            orderId ??
+              (
+                db.prepare('SELECT order_id FROM bills WHERE id = ?').get(billId) as
+                  | { order_id: number }
+                  | undefined
+              )?.order_id,
+          )
+        : null;
+      if (staffOrderId !== null) {
+        if (!Number.isSafeInteger(staffOrderId) || staffOrderId <= 0) {
+          return res.status(400).json({ error: 'A valid order reference is required' });
+        }
+        if (isStaffBillPrintLocked(db, staffOrderId)) {
+          return res.status(409).json({ code: 'BILL_ALREADY_PRINTED' });
+        }
+      }
       if (billId ? billHasWeightPending(db, billId) : orderHasWeightPending(db, orderId)) {
         return sendWeightPendingError(res);
       }
@@ -1208,7 +1233,8 @@ router.post(
           .json({ error: 'No default printer configured. Add a printer in Settings.' });
       }
 
-      // If only orderId is given and no bill exists yet, synthesize an unpaid running bill from the order.
+      // A printed bill carries its real bill number, so printing an order without one opens its
+      // unpaid bill; payment then settles that same bill. A preview only synthesizes one.
       let bill: any;
       if (billId) {
         bill = db.prepare('SELECT * FROM bills WHERE id = ?').get(billId);
@@ -1218,6 +1244,16 @@ router.post(
         }
       } else {
         bill = db.prepare('SELECT b.* FROM bills b WHERE b.order_id = ?').get(orderId);
+        if (!bill && preview !== true) {
+          const status = (
+            db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as
+              | { status?: string }
+              | undefined
+          )?.status;
+          if (status && !BILL_PRINT_CLOSED_ORDER_STATUSES.has(status)) {
+            bill = withTxn(() => createOrSyncBillForOrder(db, Number(orderId)));
+          }
+        }
       }
 
       let order: any;
@@ -1387,6 +1423,14 @@ router.post(
         });
       }
 
+      if (staffOrderId !== null) {
+        if (!bill.id) return res.status(409).json({ error: 'No invoice to print for this order' });
+        if (!claimStaffBillPrint(db, staffOrderId, bill.id, authUser.userId)) {
+          return res.status(409).json({ code: 'BILL_ALREADY_PRINTED' });
+        }
+        staffPrintLocked = true;
+      }
+
       // Use existing printReceipt function with template support
       console.log('[Print Bill] Calling printReceipt...');
       const result = await printReceiptDetailed(
@@ -1411,7 +1455,19 @@ router.post(
       });
 
       if (result.ok) {
-        res.json({ success: true, warnings: result.warnings || [] });
+        if (orderId && bill.id) {
+          const printedAt = now();
+          db.prepare('UPDATE bills SET printed_at = ?, updated_at = ? WHERE id = ?').run(
+            printedAt,
+            printedAt,
+            bill.id,
+          );
+        }
+        res.json({
+          success: true,
+          ...(bill.id && { bill_number: bill.bill_number }),
+          warnings: result.warnings || [],
+        });
       } else {
         const rawConnectionType = (printer as { connection_type?: unknown } | null | undefined)
           ?.connection_type;
@@ -1422,6 +1478,7 @@ router.post(
             ? rawConnectionType
             : 'unknown';
         res.status(502).json({
+          ...(staffPrintLocked && { staff_print_locked: true }),
           error: result.detail || 'Print failed. Check printer connection and settings.',
           detail: result.detail,
           failure_class: result.failureClass,
@@ -1436,7 +1493,10 @@ router.post(
       res.locals.postHogError = error;
       console.error('[Print Bill] Error:', error);
       console.error('[API] Internal error:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      res.status(500).json({
+        error: 'Internal server error',
+        ...(staffPrintLocked && { staff_print_locked: true }),
+      });
     }
   }),
 );

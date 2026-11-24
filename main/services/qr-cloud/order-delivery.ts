@@ -22,6 +22,7 @@ import { acceptCloudOrder, CloudOrderError } from './order-acceptance';
 import { readApprovedCa } from './tls';
 import { syncOwnerMenuChanges } from './owner-menu';
 import { syncOwnerReports } from './owner-report';
+import { syncStoreBranding } from './branding';
 
 const STATUS_SYNC_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -140,6 +141,7 @@ export async function processCloudOrderDelivery(config: QrCloudConfig, signal: A
   await syncTableStates(config, signal).catch(() => undefined);
   await syncOwnerMenuChanges(config, signal).catch(() => undefined);
   await syncOwnerReports(config, signal).catch(() => undefined);
+  await syncStoreBranding(config, signal).catch(() => undefined);
 }
 
 // Cloud bill requests the POS could not take (nothing to bill), reported back on the next sync.
@@ -212,30 +214,58 @@ async function syncTableStates(config: QrCloudConfig, signal: AbortSignal) {
       "SELECT table_id, order_number FROM orders WHERE type = 'dine_in' AND status IN ('pending', 'preparing', 'ready', 'served') AND bill_payment_received_at IS NULL",
     )
     .all() as { table_id: string; order_number: string }[];
-  for (let offset = 0; offset < tables.length; offset += 250) {
+  // Deleted tables are sent as closed, so the Cloud stops serving their old QR sessions.
+  const inbox = openInbox();
+  const live = new Set(tables.map((table) => table.id));
+  const deleted = (
+    inbox
+      .prepare('SELECT pos_table_id, name, deleted_at FROM deleted_pos_tables ORDER BY deleted_at')
+      .all() as { pos_table_id: string; name: string; deleted_at: string }[]
+  ).filter((table) => !live.has(table.pos_table_id));
+  const states = tables
+    .map((table) => ({
+      pos_table_id: table.id,
+      name: table.number,
+      active: Boolean(table.is_active),
+      awaiting_payment: tableAwaitingBillPayment(pos, table.id),
+      active_order_numbers: activeOrders
+        .filter((order) => order.table_id === table.id)
+        .map((order) => order.order_number),
+      bill: activeOrders.some((order) => order.table_id === table.id)
+        ? cloudTableBill(pos, table.id)
+        : null,
+    }))
+    .concat(
+      deleted.map((table) => ({
+        pos_table_id: table.pos_table_id,
+        name: table.name.slice(0, 80) || '-',
+        active: false,
+        awaiting_payment: false,
+        active_order_numbers: [],
+        bill: null,
+      })),
+    );
+  const forget = inbox.prepare(
+    'DELETE FROM deleted_pos_tables WHERE pos_table_id = ? AND deleted_at = ?',
+  );
+  for (let offset = 0; offset < states.length; offset += 250) {
     if (signal.aborted || readConfig().cloudUrl !== config.cloudUrl) return;
-    const batch = tables.slice(offset, offset + 250);
-    const rejected = batch.map((table) => table.id).filter((id) => rejectedBillRequests.has(id));
+    const batch = states.slice(offset, offset + 250);
+    const ids = new Set(batch.map((table) => table.pos_table_id));
+    const rejected = [...ids].filter((id) => live.has(id) && rejectedBillRequests.has(id));
     const response = (await syncConnectorTableStates(
       { config, token: readConnectorSetting(), caPem: readApprovedCa()?.pem, signal },
-      batch.map((table) => ({
-        pos_table_id: table.id,
-        name: table.number,
-        active: Boolean(table.is_active),
-        awaiting_payment: tableAwaitingBillPayment(pos, table.id),
-        active_order_numbers: activeOrders
-          .filter((order) => order.table_id === table.id)
-          .map((order) => order.order_number),
-        bill: activeOrders.some((order) => order.table_id === table.id)
-          ? cloudTableBill(pos, table.id)
-          : null,
-      })),
+      batch,
       rejected,
     )) as { bill_requests?: { pos_table_id?: unknown }[] } | null;
     for (const id of rejected) rejectedBillRequests.delete(id);
+    inbox.transaction(() => {
+      for (const table of deleted)
+        if (ids.has(table.pos_table_id)) forget.run(table.pos_table_id, table.deleted_at);
+    })();
     for (const request of response?.bill_requests ?? []) {
       const tableId = request?.pos_table_id;
-      if (typeof tableId !== 'string' || !batch.some((table) => table.id === tableId)) continue;
+      if (typeof tableId !== 'string' || !ids.has(tableId) || !live.has(tableId)) continue;
       if (!applyCloudBillRequest(pos, tableId)) rejectedBillRequests.add(tableId);
     }
   }

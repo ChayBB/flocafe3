@@ -1030,14 +1030,30 @@ export default function TablesPage() {
                     const showFooter =
                       canViewTableOrder || canMoveThisTable || canMarkAvailable || canReserveTable;
 
+                    const selected = selectedTableIds.has(table.id);
+
                     return (
                       <div
                         key={table.id}
                         data-testid={`table-card-${table.id}`}
-                        className={`bg-card rounded-xl border border-border flex flex-col justify-between hover:shadow-md transition-shadow ${
+                        className={`relative rounded-xl border flex flex-col justify-between hover:shadow-md transition ${
+                          selected
+                            ? 'border-brand bg-brand/10 ring-1 ring-brand'
+                            : 'border-border bg-card'
+                        } ${
                           hasOrders ? 'border-s-4 border-s-brand' : ''
                         } ${!table.is_active ? 'opacity-60' : ''}`}
                       >
+                        {canManageTables && (
+                          <button
+                            type="button"
+                            data-testid={`select-table-${table.id}`}
+                            aria-pressed={selected}
+                            aria-label={tTables('selectTableAria', { name: table.name })}
+                            onClick={() => toggleTableSelected(table.id)}
+                            className="absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+                          />
+                        )}
                         {/* Zone 1: Header */}
                         <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
                           <div className="flex items-center gap-2 min-w-0 flex-wrap">
@@ -1058,44 +1074,31 @@ export default function TablesPage() {
                               {tTables(TABLE_STATUS_LABEL_KEYS[table.status])}
                             </span>
                             {canManageTables && (
-                              <div className="flex flex-col items-end gap-1.5">
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => openEdit(table)}
-                                    className="text-xs text-muted-foreground hover:text-foreground font-medium inline-flex items-center gap-1"
-                                  >
-                                    <Pencil size={12} /> {tTables('editTable')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleActive(table)}
-                                    className={`text-xs font-medium inline-flex items-center gap-1 ${
-                                      !table.is_active
-                                        ? 'text-green-600 hover:text-green-700'
-                                        : 'text-red-500 hover:text-red-700'
-                                    }`}
-                                  >
-                                    {!table.is_active ? (
-                                      <>
-                                        <RotateCcw size={12} /> {tTables('reactivate')}
-                                      </>
-                                    ) : (
-                                      tTables('deactivate')
-                                    )}
-                                  </button>
-                                </div>
-                                <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
-                                  <input
-                                    type="checkbox"
-                                    data-testid={`select-table-${table.id}`}
-                                    checked={selectedTableIds.has(table.id)}
-                                    onChange={() => toggleTableSelected(table.id)}
-                                    aria-label={tTables('selectTableAria', { name: table.name })}
-                                    className="w-4 h-4 rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
-                                  />
-                                  {tTables('selectTable')}
-                                </label>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => openEdit(table)}
+                                  className="relative text-xs text-muted-foreground hover:text-foreground font-medium inline-flex items-center gap-1"
+                                >
+                                  <Pencil size={12} /> {tTables('editTable')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleActive(table)}
+                                  className={`relative text-xs font-medium inline-flex items-center gap-1 ${
+                                    !table.is_active
+                                      ? 'text-green-600 hover:text-green-700'
+                                      : 'text-red-500 hover:text-red-700'
+                                  }`}
+                                >
+                                  {!table.is_active ? (
+                                    <>
+                                      <RotateCcw size={12} /> {tTables('reactivate')}
+                                    </>
+                                  ) : (
+                                    tTables('deactivate')
+                                  )}
+                                </button>
                               </div>
                             )}
                           </div>
@@ -1241,7 +1244,7 @@ export default function TablesPage() {
                                     `/orders?table=${encodeURIComponent(String(table.id))}`,
                                   )
                                 }
-                                className="text-xs text-brand hover:text-brand-hover font-medium inline-flex items-center gap-1"
+                                className="relative text-xs text-brand hover:text-brand-hover font-medium inline-flex items-center gap-1"
                               >
                                 <Eye size={12} /> {tTables('viewOrder')}
                               </button>
@@ -1250,7 +1253,7 @@ export default function TablesPage() {
                               <button
                                 type="button"
                                 onClick={() => setMovingTable(table)}
-                                className="text-xs text-brand hover:text-brand-hover font-medium inline-flex items-center gap-1"
+                                className="relative text-xs text-brand hover:text-brand-hover font-medium inline-flex items-center gap-1"
                               >
                                 <ArrowRightLeft size={12} /> {tTables('moveTable')}
                               </button>
@@ -1259,7 +1262,7 @@ export default function TablesPage() {
                               <button
                                 type="button"
                                 onClick={() => updateStatus(table.id, 'available')}
-                                className="text-xs text-brand hover:text-brand-hover font-medium"
+                                className="relative text-xs text-brand hover:text-brand-hover font-medium"
                               >
                                 {tTables('markAvailable')}
                               </button>
@@ -1268,7 +1271,7 @@ export default function TablesPage() {
                               <button
                                 type="button"
                                 onClick={() => setReservingTable(table)}
-                                className="text-xs text-yellow-600 dark:text-yellow-400 hover:text-yellow-700 font-medium"
+                                className="relative text-xs text-yellow-600 dark:text-yellow-400 hover:text-yellow-700 font-medium"
                               >
                                 {tTables('reserve')}
                               </button>

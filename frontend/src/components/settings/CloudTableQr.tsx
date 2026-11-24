@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/hooks/use-confirm';
@@ -20,6 +20,84 @@ type BatchResult = {
   closed?: boolean;
 } & Partial<TableQr>;
 const ALL_TABLES = '__all_cloud_qr_tables__';
+
+async function renderSticker(dataUrl: string, heading: string, caption: string) {
+  const image = new Image();
+  image.src = dataUrl;
+  await image.decode();
+
+  const padding = 24;
+  const headingHeight = 72;
+  const captionHeight = 48;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(image.naturalWidth, 360) + padding * 2;
+  canvas.height = headingHeight + image.naturalHeight + captionHeight + padding;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas is unavailable');
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 48px sans-serif';
+  ctx.fillText(heading, canvas.width / 2, headingHeight / 2, canvas.width - padding * 2);
+  ctx.drawImage(image, Math.floor((canvas.width - image.naturalWidth) / 2), headingHeight);
+  ctx.font = '700 28px sans-serif';
+  ctx.fillText(
+    caption,
+    canvas.width / 2,
+    headingHeight + image.naturalHeight + captionHeight / 2,
+    canvas.width - padding * 2,
+  );
+  return canvas.toDataURL('image/png');
+}
+
+function CloudTableSticker({
+  dataUrl,
+  tableNumber,
+  width,
+}: {
+  dataUrl: string;
+  tableNumber: string;
+  width: number;
+}) {
+  const t = useTranslations('settings');
+  const common = useTranslations('common');
+  const tableText = useTranslations('tables');
+  const heading = tableText('tableQrTable', { name: tableNumber });
+  const caption = tableText('guestQrScan');
+  const [stickerUrl, setStickerUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void renderSticker(dataUrl, heading, caption).then(
+      (url) => {
+        if (!cancelled) setStickerUrl(url);
+      },
+      () => {
+        if (!cancelled) setFailed(true);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [dataUrl, heading, caption]);
+
+  if (failed) return <p role="alert">{common('downloadFailed')}</p>;
+  if (!stickerUrl) return <p role="status">{t('qcInboxLoading')}</p>;
+
+  return (
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={stickerUrl} width={width} alt={`${heading} · ${caption}`} />
+      <a href={stickerUrl} download={`cloud-qr-${tableNumber}.png`} className="underline">
+        {t('qcTableQrDownload')}
+      </a>
+    </>
+  );
+}
 
 export function CloudTableQr() {
   const t = useTranslations('settings');
@@ -214,15 +292,11 @@ export function CloudTableQr() {
               {table.data_url && table.expires_at && (
                 <>
                   <p>{t('qcTableQrReady', { table: table.number })}</p>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={table.data_url} width={160} height={160} alt={t('qcTableQrTitle')} />
-                  <a
-                    href={table.data_url}
-                    download={`cloud-qr-${table.number}.png`}
-                    className="underline"
-                  >
-                    {t('qcTableQrDownload')}
-                  </a>
+                  <CloudTableSticker
+                    dataUrl={table.data_url}
+                    tableNumber={table.number}
+                    width={160}
+                  />
                 </>
               )}
             </li>
@@ -232,11 +306,7 @@ export function CloudTableQr() {
       {qr && tableName && (
         <div className="space-y-2">
           <p role="status">{t('qcTableQrReady', { table: tableName })}</p>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={qr.data_url} width={260} height={260} alt={t('qcTableQrTitle')} />
-          <a href={qr.data_url} download={`cloud-qr-${tableName}.png`} className="underline">
-            {t('qcTableQrDownload')}
-          </a>
+          <CloudTableSticker dataUrl={qr.data_url} tableNumber={tableName} width={260} />
         </div>
       )}
       {ConfirmDialog}

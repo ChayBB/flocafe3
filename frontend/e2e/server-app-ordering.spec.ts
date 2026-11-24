@@ -102,9 +102,15 @@ test.describe('Server App tableside ordering', () => {
       const circles = page.getByTestId('server-app-header-circles');
       const circleBox = (await circles.boundingBox())!;
       const headerBox = (await page.getByTestId('server-app-header').boundingBox())!;
-      const logoBox = (await page.getByTestId('server-app-header-logo-frame').boundingBox())!;
-      expect(logoBox.y - headerBox.y).toBe(41);
-      expect(circleBox.width).toBe(130);
+      // The header settles after the viewport change, so wait for the logo to reach its place.
+      await expect
+        .poll(
+          async () =>
+            (await page.getByTestId('server-app-header-logo-frame').boundingBox())!.y -
+            (await page.getByTestId('server-app-header').boundingBox())!.y,
+        )
+        .toBe(41);
+      expect(circleBox.width).toBe(176);
       expect(circleBox.y - headerBox.y).toBe(7);
       expect(headerBox.x + headerBox.width - circleBox.x - circleBox.width).toBe(12);
       const staffName = page.getByTestId('server-app-staff-name');
@@ -120,13 +126,16 @@ test.describe('Server App tableside ordering', () => {
       expect(flagBox.height).toBeCloseTo(21.6, 1);
       await expect(circles.getByTestId('server-app-header-empty-circle')).toHaveCount(0);
       const gridCircle = circles.getByTestId('server-app-header-grid-circle');
-      expect((await gridCircle.boundingBox())!.x - circleBox.x).toBe(92);
+      expect((await gridCircle.boundingBox())!.x - circleBox.x).toBe(138);
       await expect(gridCircle.locator('svg')).toBeVisible();
       expect((await gridCircle.locator('svg').boundingBox())!.width).toBe(18);
       const theme = circles.getByTestId('server-app-theme-button');
       const themeBox = (await theme.boundingBox())!;
       expect((await theme.locator('svg').boundingBox())!.width).toBeCloseTo(19.8, 1);
-      expect(themeBox.x - circleBox.x).toBe(46);
+      expect(themeBox.x - circleBox.x).toBe(92);
+      expect((await circles.getByTestId('server-app-open-profile').boundingBox())!.x).toBe(
+        circleBox.x,
+      );
       const pressed = await theme.getAttribute('aria-pressed');
       await theme.click();
       await expect(theme).toHaveAttribute('aria-pressed', pressed === 'true' ? 'false' : 'true');
@@ -440,7 +449,7 @@ test.describe('Server App tableside ordering', () => {
       const historyButton = header.getByTestId('server-app-history-button');
       await expect(tableButton).toBeVisible();
       await expect(logoutButton).toBeVisible();
-      await expect(header.getByRole('button')).toHaveCount(7);
+      await expect(header.getByRole('button')).toHaveCount(8);
       await expect(header.getByRole('img', { name: 'Flo' })).toHaveCount(0);
 
       for (const button of [tableButton, logoutButton, languageButton, historyButton]) {
@@ -458,7 +467,7 @@ test.describe('Server App tableside ordering', () => {
 
     // The tablet header retains the selector and fits beside language, theme, history and session.
     await page.setViewportSize({ width: 768, height: 1024 });
-    await expect(page.locator('header').getByRole('button')).toHaveCount(7);
+    await expect(page.locator('header').getByRole('button')).toHaveCount(8);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth),
     ).toBeFalsy();
@@ -633,7 +642,7 @@ test.describe('Server App tableside ordering', () => {
     await expect(page.getByText('Order sent').first()).toBeVisible();
     await expect(page.getByText('Tap menu items to add them here.').first()).toBeVisible();
     // Sending clears the table; picking it again shows what was sent.
-    await expect(page.getByTestId('server-app-header-table')).toContainText('Table —');
+    await expect(page.getByTestId('server-app-table-button-name')).toHaveCount(0);
     await pickTable(page, tableAName);
     await expect(sentCoffee(page, 1).first()).toBeVisible();
     releaseKotPrint();
@@ -642,7 +651,7 @@ test.describe('Server App tableside ordering', () => {
     await search.fill('E2E Coffee');
     await search.press('Enter');
     await page.getByRole('button', { name: 'Add to order' }).first().click();
-    await expect(page.getByTestId('server-app-header-table')).toContainText('Table —');
+    await expect(page.getByTestId('server-app-table-button-name')).toHaveCount(0);
     await pickTable(page, tableAName);
     await expect(sentCoffee(page.locator('main'), 1)).toHaveCount(2);
     await expect.poll(() => kotPrintPayloads.length).toBe(2);

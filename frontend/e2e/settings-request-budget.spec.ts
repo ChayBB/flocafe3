@@ -441,6 +441,32 @@ test('Cloud registration refresh does not continue after leaving Mobile Access',
   expect(apiPaths.filter((path) => path === '/api/mobile/devices')).toHaveLength(0);
 });
 
+test('KDS settings offer a second tablet card with the same link', async ({ page }) => {
+  await startMockedSettingsSession(page);
+  const url = 'http://192.168.1.216:3002';
+  const qr =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  await page.route('**/api/kds-info', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mdns_url: 'http://flo.local:3002',
+        ip_url: url,
+        qr_url: url,
+        qr_data_url: qr,
+        ips_data: [{ ip: '192.168.1.216', url, qr_data: qr }],
+      }),
+    }),
+  );
+
+  await page.goto(`${BASE}/settings?tab=kds`);
+  const tablet = page.getByTestId('kds-tablet-card');
+  await expect(tablet).toContainText('For a tablet');
+  await expect(tablet.getByRole('link', { name: url })).toBeVisible();
+  await expect(page.getByRole('link', { name: url })).toHaveCount(2);
+});
+
 test('Failed KDS and Data hydration retries when revisiting the tab', async ({ page }) => {
   await startMockedSettingsSession(page);
   let kdsInfoAttempts = 0;

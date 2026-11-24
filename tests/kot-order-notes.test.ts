@@ -503,6 +503,58 @@ async function runAsyncTests() {
     'normal',
     'item comment raster request uses normal style and never inherits double-height from item description',
   );
+  assert.equal(commentRasterReq.textScale, undefined, 'an ordinary comment keeps the base size');
+
+  const weighedItems = [
+    {
+      product_name: 'Grilled fish',
+      quantity: 1,
+      status: 'pending',
+      special_instructions: 'รอระบุน้ำหนัก | no chili',
+    },
+  ];
+  const weighedGroups: import('../shared/print/raster').RasterSemanticLineGroup[] = [];
+  const weighedLines = renderKotDocumentToLines(
+    renderKotViaDocument(baseOrder, weighedItems, 'Kitchen', { ...opts, capabilities: rasterCaps })
+      .document,
+    {
+      columns: opts.columns,
+      language: 'en',
+      arabicShaping: false,
+      capabilities: rasterCaps,
+      rasterGroups: weighedGroups,
+    },
+  );
+  const weighedRequests: import('../shared/print/raster').RasterRenderRequest[] = [];
+  const weighedResult = await renderUnsupportedRasterLines(
+    {
+      render: async (request) => {
+        weighedRequests.push(request);
+        return {
+          version: 1,
+          requestId: request.requestId,
+          ok: true,
+          unit: {
+            unitId: request.requestId,
+            financial: false,
+            complete: true,
+            bands: [{ widthDots: 384, heightDots: 2, pixels: new Uint8Array(384 * 2) }],
+          },
+        };
+      },
+    },
+    weighedLines,
+    rasterCaps,
+    'kot-weight-pending',
+    weighedGroups,
+  );
+  assert.equal(weighedResult.failures.length, 0, 'weight-pending KOT row rasterizes');
+  const markerReq = weighedRequests.find((r) => r.text.trim() === '>> รอระบุน้ำหนัก');
+  assert.ok(markerReq, 'the waiting-for-weight marker prints on its own row');
+  assert.equal(markerReq.textScale, 1.3, 'the waiting-for-weight marker prints 30% larger');
+  const restReq = weighedRequests.find((r) => r.text.includes('>> no chili'));
+  assert.ok(restReq, 'the rest of the note follows on its own row');
+  assert.equal(restReq.textScale, undefined, 'the rest of the note keeps the base size');
 
   // Verify frontend buildKotBytes wraps long item descriptions and comments on distinct lines
   const feLongItemBytes = frontend.kotEncoder.buildKotBytes(longItemOrder as any, opts);

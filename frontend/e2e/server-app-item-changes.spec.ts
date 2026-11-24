@@ -86,13 +86,17 @@ test('the item menu offers takeaway until served and cancel only while waiting; 
   await expect(rows.first().locator('img')).toHaveCount(0);
 
   const menuOf = (index: number) => rows.nth(index).getByTestId('server-app-item-menu');
-  // Waiting: takeaway and cancel.
+  // Waiting: takeaway and cancel; any live dish can be confirmed at the table.
   await menuOf(0).click();
-  await expect(page.getByRole('menuitem')).toHaveText(['Change to takeaway', 'Cancel item']);
+  await expect(page.getByRole('menuitem')).toHaveText([
+    'Change to takeaway',
+    'Confirm served',
+    'Cancel item',
+  ]);
   await menuOf(0).click();
-  // In progress: takeaway only.
+  // In progress: takeaway, no cancel.
   await menuOf(1).click();
-  await expect(page.getByRole('menuitem')).toHaveText(['Change to takeaway']);
+  await expect(page.getByRole('menuitem')).toHaveText(['Change to takeaway', 'Confirm served']);
   await page.getByRole('menuitem', { name: 'Change to takeaway' }).click();
   await expect(page.getByText('Changed to takeaway').first()).toBeVisible();
   await expect(rows.nth(1).getByTestId('server-app-takeaway-tag')).toHaveText('Takeaway');
@@ -246,7 +250,7 @@ test('the item menu on the last ticket row opens fully in view, above the ticket
   await last.scrollIntoViewIfNeeded();
   await last.getByTestId('server-app-item-menu').click();
   const items = page.getByRole('menuitem');
-  await expect(items).toHaveText(['Change to takeaway', 'Cancel item']);
+  await expect(items).toHaveText(['Change to takeaway', 'Confirm served', 'Cancel item']);
   // Each choice is the topmost element at its centre, so nothing covers it.
   for (const item of await items.all()) {
     const box = (await item.boundingBox())!;

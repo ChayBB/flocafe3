@@ -784,6 +784,18 @@ without names, phone numbers, or user IDs. The delivery loop sends today and yes
 previous 62 days, a week every 30 seconds. The Cloud keeps the latest copy of each day per branch, and
 an older Cloud that returns 404 is retried hourly.
 
+**Store branding.** `syncStoreBranding()` in `main/services/qr-cloud/branding.ts` pushes the
+Settings `store_logo` and `store_cover` to `POST /api/v1/connectors/branding` (`catalog.write`),
+naming each image by its SHA-256 and extension. Saving either image through
+`PUT /api/settings/branding` starts a push at once, and every delivery-loop pass pushes again when the
+pair differs from the one the Cloud last accepted. A failed push waits a minute, and a Cloud that
+returns 404 waits an hour. The Cloud answers with the images it lacks and the bytes it holds of each.
+The POS then sends 135,000-byte parts until both arrive, so every request stays under the proxy body
+limit. The Cloud checks each finished image against its name and file signature (1.5 MiB cap), then
+records the pair on the branch. `GET /api/v1/menu` returns it as `branding` (`null` until the first
+push), and the customer page loads the images from `/api/v1/menu-images/branding/<name>`. Until a
+branch has pushed, the page uses the `branding.json` files baked into its build.
+
 **Branch modules.** A portal administrator turns three Cloud modules on or off per branch:
 `qr_ordering`, `menu_editing`, and `reports` (`branch_modules`; a branch without a row has every
 module on). With QR ordering off, new table sessions and new guest orders return 403

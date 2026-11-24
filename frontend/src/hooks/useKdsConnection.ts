@@ -138,6 +138,7 @@ export interface KdsOrderItem {
   unit_price?: number | null;
   /** Price the kitchen set for a weighed or kitchen-priced line. */
   kitchen_set_price?: number | null;
+  kitchen_price_approved?: boolean;
   currency?: string;
   /** A change service staff made after sending: 'takeaway' or 'cancelled'. */
   service_change?: string | null;

@@ -2,7 +2,7 @@
 
 import { useRef, type ReactNode } from 'react';
 import { Prompt } from 'next/font/google';
-import { ChefHat, History, Moon, Sun, UtensilsCrossed } from 'lucide-react';
+import { ChefHat, History, Moon, Sun, UtensilsCrossed, UserRound } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import type { Language } from '@/lib/i18n/languages';
 import { LanguageFlag } from './LanguageFlag';
@@ -38,6 +38,7 @@ export function ServerAppHeader({
   onStaffLogin,
   staffLoginLabel,
   staffName,
+  onStaffProfile,
   tablesExpanded,
   onShowTables,
   onHoldTables,
@@ -60,6 +61,7 @@ export function ServerAppHeader({
   onStaffLogin: () => void;
   staffLoginLabel: string;
   staffName?: string;
+  onStaffProfile?: () => void;
   tablesExpanded?: boolean;
   onShowTables?: () => void;
   /** Holding Select Table switches between the staff member's own and backup tables. */
@@ -74,6 +76,7 @@ export function ServerAppHeader({
   staffButton: ReactNode;
 }) {
   const t = useTranslations('serverApp');
+  const profile = useTranslations('staffProfile');
   const holdTimer = useRef<number | null>(null);
   const held = useRef(false);
   const releaseHold = () => {
@@ -118,6 +121,18 @@ export function ServerAppHeader({
               </button>
             )}
             <div data-testid="server-app-header-circles" className="flex items-center gap-2">
+              {onStaffProfile && (
+                <button
+                  type="button"
+                  onClick={onStaffProfile}
+                  className={ICON_BUTTON}
+                  aria-label={profile('profile')}
+                  title={profile('profile')}
+                  data-testid="server-app-open-profile"
+                >
+                  <UserRound size={17} aria-hidden="true" />
+                </button>
+              )}
               <button
                 type="button"
                 data-testid="server-app-language-button"

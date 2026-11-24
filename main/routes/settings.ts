@@ -114,6 +114,7 @@ import {
 } from '../lib/print-language-settings';
 import { isThemeMode, isThemeVariant, THEME_VARIANT_KEYS } from '../title-bar-theme';
 import { STORE_IMAGE_KEYS, storeImageError } from '../lib/store-branding';
+import { pushStoreBrandingSoon } from '../services/qr-cloud/branding';
 import {
   ChargeValidationError,
   CUSTOM_CHARGES_SETTING_KEY,
@@ -871,6 +872,8 @@ router.put('/branding', requirePermission('settings.manage'), (req: Request, res
       updates[key] = value;
     }
     if (Object.keys(updates).length > 0) upsertSettings(getDatabase(), updates);
+    if (STORE_IMAGE_KEYS.logo in updates || STORE_IMAGE_KEYS.cover in updates)
+      pushStoreBrandingSoon();
     res.json(brandingBody(getAllSettings(getDatabase())));
   } catch (error: any) {
     console.error('[API] Internal error:', error);

@@ -12,6 +12,7 @@ import { kitchenStatuses, recordKitchenStatus } from './connector-kitchen-status
 import { connectorAuthorizer, issueConnectorToken, revokeInstallation } from './connector-auth';
 import { publishCatalog } from './catalog-sync';
 import { MENU_IMAGE_NAME, menuImages, postgresMenuImageStore } from './menu-images';
+import { postgresBrandingStore, storeBranding } from './store-branding';
 import { AddonGroups, AddonSelection, resolveCatalogAddons, type AddonGroup } from './catalog-addons';
 import { enterTenant, inTenant } from './tenant-scope';
 import { attemptLimiter, createPairingCode, redeemPairingCode } from './pairing';
@@ -52,6 +53,7 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
 .use(connectorReports({ sql, authorize: (request) => authorizeConnector(request, 'catalog.write') }))
 .use(posTableQr({ sql, authorize: (request) => authorizeConnector(request, 'tables.write'), publicOrigin: process.env.QR_ORDERING_PUBLIC_ORIGIN }))
 .use(menuImages({ store: postgresMenuImageStore(sql), authorize: (request) => authorizeConnector(request, 'catalog.write') }))
+.use(storeBranding({ store: postgresBrandingStore(sql), authorize: (request) => authorizeConnector(request, 'catalog.write') }))
 .use(menuPreview({
   secret: adminSecret,
   isAdmin,
@@ -208,9 +210,9 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
          ))`;
   if(!scope)return secret ? err(401,'invalid session') : err(404,'table not found');
   await enterTenant(tx,{tenantId:scope.tenant_id,branchId:scope.branch_id});
-  const [branch]=await tx`SELECT menu_revision,guest_scroll_percent FROM branches WHERE tenant_id=${scope.tenant_id} AND id=${scope.branch_id} FOR SHARE`;
+  const [branch]=await tx`SELECT menu_revision,guest_scroll_percent,store_logo,store_cover,branding_updated_at FROM branches WHERE tenant_id=${scope.tenant_id} AND id=${scope.branch_id} FOR SHARE`;
   const items=await tx`SELECT id,name,price_satang,price_unit,category,addon_groups,image FROM menu_items WHERE tenant_id=${scope.tenant_id} AND branch_id=${scope.branch_id} AND available=true ORDER BY category,name,id`;
-  return Response.json({items,menu_revision:branch?.menu_revision??null,scroll_percent:branch?.guest_scroll_percent??null},{headers:{'Cache-Control':'no-store'}});
+  return Response.json({items,menu_revision:branch?.menu_revision??null,scroll_percent:branch?.guest_scroll_percent??null,branding:branch?.branding_updated_at?{logo:branch.store_logo,cover:branch.store_cover}:null},{headers:{'Cache-Control':'no-store'}});
  });
 })
 .post('/api/v1/orders',async({request,body})=>{
@@ -254,7 +256,8 @@ const app=new Elysia({ websocket: connectorWebSocketOptions })
     if(product.price_unit&&item.quantity!==1)return err(400,'weighed items are ordered one at a time');
     const addons=resolveCatalogAddons(product.addon_groups,item.addons??[]);
     if(!addons)return err(400,'invalid menu options');
-    const combination=JSON.stringify([product.id,addons.map(({id,quantity})=>[id,quantity])]);
+    const kitchenPrice=product.addon_groups.some(group=>'kitchen_price' in group&&group.kitchen_price);
+    const combination=JSON.stringify([product.id,addons.map(({id,quantity})=>[id,quantity]),kitchenPrice?item.note?.trim()??'':'']);
     if(combinations.has(combination))return err(400,'duplicate item ids; consolidate quantities');
     combinations.add(combination);
     const addonsPrice=addons.reduce((sum,addon)=>sum+addon.price_satang*addon.quantity,0);

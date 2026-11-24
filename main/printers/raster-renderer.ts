@@ -551,6 +551,7 @@ function requestForRasterLine(
   financial: boolean,
   sourceText?: string,
   layout?: RasterTextLayout,
+  textScale?: number,
 ): RasterRenderRequest | null {
   const metadataLine = controlMetadataLine(line, sourceText);
   if (
@@ -588,6 +589,7 @@ function requestForRasterLine(
             ? 'bold'
             : 'normal',
     ...(styles.length > 0 ? { styles } : {}),
+    ...(textScale !== undefined && textScale !== 1 ? { textScale } : {}),
     financial,
     maxLines: 256,
     ...(capabilities.raster.font ? { bundledFont: capabilities.raster.font } : {}),
@@ -740,6 +742,10 @@ export async function renderUnsupportedRasterLines(
           sourceText !== undefined
             ? range.sourceLayouts?.[physicalSourceLine.sourceIndex!]
             : undefined;
+        const textScale =
+          sourceText !== undefined
+            ? range.sourceTextScales?.[physicalSourceLine.sourceIndex!]
+            : undefined;
         const request = requestForRasterLine(
           physicalSourceLine.controlLine,
           physicalSourceLine.lineIndex,
@@ -748,6 +754,7 @@ export async function renderUnsupportedRasterLines(
           layoutFinancial,
           sourceText,
           layout,
+          textScale,
         );
         if (!request) continue;
         let result: Awaited<ReturnType<typeof renderRasterSemanticUnit>>;

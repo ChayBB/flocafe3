@@ -12,7 +12,7 @@ import * as path from 'node:path';
  * `poll_log`) so existing rows import with their Cloud event ids intact and deduplicate.
  */
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS inbox_events (
@@ -78,6 +78,11 @@ CREATE TABLE IF NOT EXISTS table_qr_links (
   url TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   PRIMARY KEY (cloud_url, pos_table_id)
+);
+CREATE TABLE IF NOT EXISTS deleted_pos_tables (
+  pos_table_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS poll_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,6 +188,15 @@ export function openInbox(): Database.Database {
   db = opened;
   dbPathInUse = target;
   return db;
+}
+
+/** A deleted POS table is reported to the Cloud as closed until the Cloud has taken it. */
+export function rememberDeletedPosTable(posTableId: string, name: string): void {
+  openInbox()
+    .prepare(
+      'INSERT INTO deleted_pos_tables (pos_table_id, name) VALUES (?, ?) ON CONFLICT(pos_table_id) DO NOTHING',
+    )
+    .run(posTableId, name);
 }
 
 export function closeInbox(): void {

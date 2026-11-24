@@ -44,6 +44,7 @@ export function orderedItemName(item: OrderedItem): string {
 
 export interface OrderedItem {
   id: number;
+  order_id?: number;
   product_id?: string | number;
   product_name: string;
   quantity: number;
@@ -147,6 +148,8 @@ export function OrderedItemList({
   onTakeaway,
   onCancel,
   onConfirmServed,
+  kitchenPricesToApprove,
+  onApproveKitchenPrice,
   formatPrice,
   imageOf,
 }: {
@@ -160,13 +163,18 @@ export function OrderedItemList({
   onTakeaway: (item: OrderedItem) => Promise<void>;
   onCancel: (item: OrderedItem) => Promise<void>;
   onConfirmServed: (item: OrderedItem) => Promise<void>;
+  kitchenPricesToApprove?: ReadonlyMap<number, number>;
+  onApproveKitchenPrice?: (item: OrderedItem) => Promise<void>;
 }) {
   const t = useTranslations('serverApp');
   const { confirm, ConfirmDialog } = useConfirm();
   const [menuFor, setMenuFor] = useState<number | null>(null);
   const [changing, setChanging] = useState<number | null>(null);
 
-  const run = async (item: OrderedItem, change: 'takeaway' | 'cancel' | 'confirmServed') => {
+  const run = async (
+    item: OrderedItem,
+    change: 'takeaway' | 'cancel' | 'confirmServed' | 'approveKitchenPrice',
+  ) => {
     setMenuFor(null);
     if (change === 'cancel') {
       const ok = await confirm(t('cancelItemConfirm', { name: orderedItemName(item) }), {
@@ -182,7 +190,9 @@ export function OrderedItemList({
         ? onCancel(item)
         : change === 'confirmServed'
           ? onConfirmServed(item)
-          : onTakeaway(item));
+          : change === 'approveKitchenPrice'
+            ? onApproveKitchenPrice?.(item)
+            : onTakeaway(item));
     } finally {
       setChanging(null);
     }
@@ -196,7 +206,11 @@ export function OrderedItemList({
         )}
         {items.map((item) => {
           const options = itemChangeOptions(item);
-          const hasOptions = options.takeaway || options.cancel || options.confirmServed;
+          const approvePrice = Boolean(
+            onApproveKitchenPrice && kitchenPricesToApprove?.has(item.id),
+          );
+          const hasOptions =
+            approvePrice || options.takeaway || options.cancel || options.confirmServed;
           const cancelled = isCancelledItem(item.status);
           const price =
             formatPrice && !cancelled && !item.weight_pending && item.total != null
@@ -275,8 +289,18 @@ export function OrderedItemList({
                   collisionPadding={8}
                   className="min-w-48 rounded-lg border-border bg-card p-0 shadow-lg"
                 >
-                  {options.takeaway && (
+                  {approvePrice && (
                     <DropdownMenuItem
+                      onSelect={() => void run(item, 'approveKitchenPrice')}
+                      className="min-h-11 rounded-none px-3 text-sm text-emerald-700 dark:text-emerald-300"
+                    >
+                      <CheckCheck size={16} />
+                      {t('approveKitchenPrice')}
+                    </DropdownMenuItem>
+                  )}
+                  {(approvePrice || options.takeaway) && (
+                    <DropdownMenuItem
+                      disabled={!options.takeaway}
                       onSelect={() => void run(item, 'takeaway')}
                       className="min-h-11 rounded-none px-3 text-sm"
                     >
@@ -284,7 +308,7 @@ export function OrderedItemList({
                       {t('changeToTakeaway')}
                     </DropdownMenuItem>
                   )}
-                  {options.confirmServed && (
+                  {!approvePrice && options.confirmServed && (
                     <DropdownMenuItem
                       onSelect={() => void run(item, 'confirmServed')}
                       className="min-h-11 rounded-none px-3 text-sm text-emerald-700 dark:text-emerald-300"
@@ -293,8 +317,9 @@ export function OrderedItemList({
                       {t('confirmServed')}
                     </DropdownMenuItem>
                   )}
-                  {options.cancel && (
+                  {(approvePrice || options.cancel) && (
                     <DropdownMenuItem
+                      disabled={!options.cancel}
                       onSelect={() => void run(item, 'cancel')}
                       className="min-h-11 rounded-none px-3 text-sm text-red-600 focus:text-red-600"
                     >
@@ -462,8 +487,11 @@ export function OrderedItemsScreen({
   onTakeaway,
   onCancel,
   onConfirmServed,
+  kitchenPricesToApprove,
+  onApproveKitchenPrice,
   onConfirmServedMany,
   onPrintBill,
+  billPrintLocked,
   onMoveTable,
   onMergeTable,
   serveConfirmRequested = false,
@@ -481,10 +509,13 @@ export function OrderedItemsScreen({
   onTakeaway: (item: OrderedItem) => Promise<void>;
   onCancel: (item: OrderedItem) => Promise<void>;
   onConfirmServed: (item: OrderedItem) => Promise<void>;
+  kitchenPricesToApprove?: ReadonlyMap<number, number>;
+  onApproveKitchenPrice?: (item: OrderedItem) => Promise<void>;
   /** Confirms several dishes reached the table in one go; resolves false when it failed. */
   onConfirmServedMany: (items: OrderedItem[]) => Promise<boolean>;
   /** Prints the table's bill and tells the POS the table is waiting to pay. */
   onPrintBill: () => Promise<void>;
+  billPrintLocked: boolean;
   onMoveTable?: () => void;
   onMergeTable?: () => void;
   /** The cashier is waiting to print this table's bill. */
@@ -497,7 +528,6 @@ export function OrderedItemsScreen({
   const t = useTranslations('serverApp');
   const tCommon = useTranslations('common');
   const [filter, setFilter] = useState<KitchenStage | 'all'>('all');
-  const [printing, setPrinting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmingMany, setConfirmingMany] = useState(false);
   const [confirmingOne, setConfirmingOne] = useState(false);
@@ -579,19 +609,14 @@ export function OrderedItemsScreen({
                 data-ready={billReady}
                 aria-label={t('printBill')}
                 title={t('printBill')}
-                disabled={printing}
+                disabled={billPrintLocked}
                 onClick={async () => {
                   // A dish still waiting for its price cannot be billed yet.
                   if (!billReady) {
                     toast.error(t('printBillAwaitingPrice', { count: awaitingPrice }));
                     return;
                   }
-                  setPrinting(true);
-                  try {
-                    await onPrintBill();
-                  } finally {
-                    setPrinting(false);
-                  }
+                  await onPrintBill();
                 }}
                 className={`${iconButton} disabled:opacity-50 ${billReady ? 'text-foreground' : 'opacity-40'}`}
               >
@@ -668,6 +693,8 @@ export function OrderedItemsScreen({
             emptyText={t('noOrderedItems')}
             formatPrice={formatPrice}
             imageOf={imageOf}
+            kitchenPricesToApprove={kitchenPricesToApprove}
+            onApproveKitchenPrice={onApproveKitchenPrice}
             onTakeaway={onTakeaway}
             onCancel={onCancel}
             onConfirmServed={async (item) => {

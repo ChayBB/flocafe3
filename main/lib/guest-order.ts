@@ -206,6 +206,7 @@ export interface GuestTableOrder {
     status: string;
     total: number;
     created_at: string | null;
+    saved_price?: { entry_id: number; unit_price: number; weight: number | null };
     /** The staff member who added the dish; null for a guest or when it is not known. */
     ordered_by: string | null;
     ordered_by_guest: boolean;
@@ -323,13 +324,22 @@ export function guestTableOrder(
   const rows = db
     .prepare(
       `SELECT oi.id, oi.product_id, oi.product_name, oi.quantity, oi.status, oi.total,
-              oi.created_at, oi.tax_type
+              oi.created_at, oi.tax_type, oi.unit_price, oi.weight,
+              CASE WHEN oi.weight_pending = 0 AND oi.status <> 'cancelled' THEN (
+                SELECT id FROM order_audit_log
+                WHERE order_id = oi.order_id AND order_item_id = oi.id
+                  AND action IN ('item_weighed', 'item_kitchen_priced')
+                ORDER BY id DESC LIMIT 1
+              ) END AS price_entry_id
          FROM order_items oi
         WHERE oi.order_id = ? AND oi.status NOT IN ('voided', 'void_adjustment', 'refunded')
         ORDER BY oi.id`,
     )
     .all(order.id) as (Omit<GuestTableOrder['items'][number], 'ordered_by' | 'ordered_by_guest'> & {
     tax_type: string | null;
+    unit_price: number;
+    weight: number | null;
+    price_entry_id: number | null;
   })[];
   const actors = itemActors(db, order);
   const actorIds = [...new Set([...actors.byItem.values(), actors.fallback])].filter(
@@ -346,10 +356,13 @@ export function guestTableOrder(
         ).map((user) => [user.id, user.name])
       : [],
   );
-  const items = rows.map(({ tax_type: _taxType, ...item }) => {
+  const items = rows.map(({ tax_type: _taxType, unit_price, weight, price_entry_id, ...item }) => {
     const actor = actors.byItem.get(item.id) ?? actors.fallback;
     return {
       ...item,
+      ...(price_entry_id !== null && {
+        saved_price: { entry_id: price_entry_id, unit_price, weight },
+      }),
       ordered_by: actor && actor !== GUEST_USER_ID ? (names.get(actor) ?? null) : null,
       ordered_by_guest: actor === GUEST_USER_ID,
     };

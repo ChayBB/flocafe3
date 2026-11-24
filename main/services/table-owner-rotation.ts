@@ -16,11 +16,13 @@ const CHECK_INTERVAL_MS = 60_000;
 const MODE_KEY = 'table_owner_assignment_mode';
 const SHUFFLE_DAYS_KEY = 'table_owner_shuffle_days';
 const LAST_RUN_KEY = 'table_owner_assignment_last_run';
+const BACKUP_ENABLED_KEY = 'table_backup_enabled';
 
 export interface TableOwnerAssignmentSettings {
   mode: TableOwnerAssignmentMode;
   shuffle_days: number;
   last_run: string | null;
+  backup_enabled: boolean;
 }
 
 export interface TableOwnerAssignmentRun {
@@ -61,6 +63,7 @@ export interface TableStaffRoster {
   table_count: number;
   table_count_default: number;
   table_count_custom: boolean;
+  backup_enabled: boolean;
 }
 
 function readSetting(db: Db, key: string): string | null {
@@ -90,6 +93,11 @@ export function isValidShuffleDays(value: unknown): value is number {
   );
 }
 
+/** Backup tables are on unless the store turned them off; saved backups stay in place while off. */
+export function isTableBackupEnabled(db: Db): boolean {
+  return readSetting(db, BACKUP_ENABLED_KEY) !== '0';
+}
+
 export function readTableOwnerAssignmentSettings(db: Db): TableOwnerAssignmentSettings {
   const mode = readSetting(db, MODE_KEY);
   const days = Number(readSetting(db, SHUFFLE_DAYS_KEY));
@@ -97,6 +105,7 @@ export function readTableOwnerAssignmentSettings(db: Db): TableOwnerAssignmentSe
     mode: isMode(mode) ? mode : 'manual',
     shuffle_days: isValidShuffleDays(days) ? days : DEFAULT_SHUFFLE_DAYS,
     last_run: readSetting(db, LAST_RUN_KEY),
+    backup_enabled: isTableBackupEnabled(db),
   };
 }
 
@@ -183,13 +192,15 @@ export function readTableStaffRoster(
   const staff = assignableStaff(db);
   const names = new Map(staff.map((member) => [member.id, member.name]));
   const shortTable = (table: ActiveTable) => ({ id: table.id, name: String(table.number) });
+  const backupEnabled = isTableBackupEnabled(db);
+  const backupOf = (table: ActiveTable) => (backupEnabled ? table.backup_user_id : null);
   return {
     business_date: businessDate,
     staff: staff.map((member) => ({
       ...member,
       present: saved.get(member.id) ?? true,
       tables: tables.filter((table) => table.owner_user_id === member.id).map(shortTable),
-      backup_tables: tables.filter((table) => table.backup_user_id === member.id).map(shortTable),
+      backup_tables: tables.filter((table) => backupOf(table) === member.id).map(shortTable),
     })),
     tables: tables.map((table) => ({
       id: table.id,
@@ -197,11 +208,12 @@ export function readTableStaffRoster(
       floor: table.floor,
       owner_user_id: table.owner_user_id,
       owner_name: table.owner_user_id ? (names.get(table.owner_user_id) ?? null) : null,
-      backup_user_id: table.backup_user_id,
+      backup_user_id: backupOf(table),
     })),
     table_count: day ? Math.min(day.table_count, defaultCount) : defaultCount,
     table_count_default: defaultCount,
     table_count_custom: Boolean(day),
+    backup_enabled: backupEnabled,
   };
 }
 
@@ -300,10 +312,12 @@ function plannedOwners(
   const plan = new Map<string, { owner: string | null; backup: string | null }>(
     tables.map((table) => [table.id, { owner: null, backup: null }]),
   );
+  const backupEnabled = roster.backup_enabled;
   let cursor = 0;
   order.forEach((userId, index) => {
     const size = base + (index >= order.length - extra ? 1 : 0);
-    const backup = order.length > 1 ? order[(index - 1 + order.length) % order.length] : null;
+    const backup =
+      backupEnabled && order.length > 1 ? order[(index - 1 + order.length) % order.length] : null;
     for (const table of served.slice(cursor, cursor + size)) {
       plan.set(table.id, { owner: userId, backup });
     }
@@ -392,6 +406,9 @@ export function validateStaffTables(db: Db, body: unknown): StaffTablesValidatio
   if (input.kind !== 'owner' && input.kind !== 'backup') {
     return { ok: false, code: 'STAFF_TABLES_KIND_INVALID', error: 'kind must be owner or backup' };
   }
+  if (input.kind === 'backup' && !isTableBackupEnabled(db)) {
+    return { ok: false, code: 'TABLE_BACKUP_DISABLED', error: 'Backup tables are turned off' };
+  }
   if (
     typeof input.user_id !== 'string' ||
     !assignableStaff(db).some((member) => member.id === input.user_id)
@@ -459,14 +476,100 @@ export function assignStaffTables(
   )();
 }
 
-/** Switching to an automatic mode runs today's assignment at once and counts it as today's run. */
+export type StaffTablesEditValidation =
+  | { ok: true; userId: string; ownIds: Set<string>; backupIds: Set<string> }
+  | { ok: false; code: string; error: string };
+
+export function validateStaffTablesEdit(db: Db, body: unknown): StaffTablesEditValidation {
+  const input = (body ?? {}) as {
+    user_id?: unknown;
+    own_table_ids?: unknown;
+    backup_table_ids?: unknown;
+  };
+  if (
+    typeof input.user_id !== 'string' ||
+    !assignableStaff(db).some((member) => member.id === input.user_id)
+  ) {
+    return {
+      ok: false,
+      code: 'ROSTER_STAFF_UNKNOWN',
+      error: 'Staff member was not found or is inactive',
+    };
+  }
+  const isIdList = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every((id) => typeof id === 'string');
+  if (!isIdList(input.own_table_ids) || !isIdList(input.backup_table_ids)) {
+    return {
+      ok: false,
+      code: 'STAFF_TABLES_INVALID',
+      error: 'own_table_ids and backup_table_ids must be lists of table ids',
+    };
+  }
+  const ownIds = new Set(input.own_table_ids);
+  const backupIds = new Set(input.backup_table_ids);
+  if (backupIds.size > 0 && !isTableBackupEnabled(db)) {
+    return { ok: false, code: 'TABLE_BACKUP_DISABLED', error: 'Backup tables are turned off' };
+  }
+  const active = new Set(activeTablesInOrder(db).map((table) => table.id));
+  if ([...ownIds, ...backupIds].some((id) => !active.has(id))) {
+    return { ok: false, code: 'TABLE_NOT_FOUND', error: 'Table not found or inactive' };
+  }
+  if ([...backupIds].some((id) => ownIds.has(id))) {
+    return {
+      ok: false,
+      code: 'BACKUP_IS_OWNER',
+      error: 'A staff member cannot back up a table they already look after',
+    };
+  }
+  return { ok: true, userId: input.user_id, ownIds, backupIds };
+}
+
+/** Sets exactly which tables one person looks after and backs up; tables they drop are left unassigned. */
+export function editStaffTables(
+  db: Db,
+  input: { userId: string; ownIds: Set<string>; backupIds: Set<string> },
+  actorUserId: string,
+): TableAssignmentChange[] {
+  const businessDate = currentBusinessDate(db);
+  const backupEnabled = isTableBackupEnabled(db);
+  return db.transaction(() =>
+    activeTablesInOrder(db).flatMap((table) => {
+      const owner = input.ownIds.has(table.id)
+        ? input.userId
+        : table.owner_user_id === input.userId
+          ? null
+          : table.owner_user_id;
+      const backup = input.backupIds.has(table.id)
+        ? input.userId
+        : (backupEnabled && table.backup_user_id === input.userId) || owner === table.backup_user_id
+          ? null
+          : table.backup_user_id;
+      return setTableStaff(
+        db,
+        table,
+        { owner, backup },
+        {
+          action: 'manual_edit',
+          actorUserId,
+          businessDate,
+        },
+      );
+    }),
+  )();
+}
+
+/**
+ * Switching to an automatic mode runs today's assignment at once and counts it as today's run.
+ * Turning backup tables on or off in an automatic mode reruns today's plan so backups follow at once.
+ */
 export function updateTableOwnerAssignmentSettings(
   db: Db,
-  input: { mode: TableOwnerAssignmentMode; shuffle_days: number },
+  input: { mode: TableOwnerAssignmentMode; shuffle_days: number; backup_enabled?: boolean },
   actorUserId: string,
 ): TableOwnerAssignmentSettings & { changes: number } {
   const before = readTableOwnerAssignmentSettings(db);
   const businessDate = currentBusinessDate(db);
+  const backupEnabled = input.backup_enabled ?? before.backup_enabled;
   const changes = db.transaction(() => {
     writeSetting(db, MODE_KEY, input.mode);
     writeSetting(db, SHUFFLE_DAYS_KEY, String(input.shuffle_days));
@@ -479,7 +582,16 @@ export function updateTableOwnerAssignmentSettings(
         details: { from: before.mode, to: input.mode, shuffle_days: input.shuffle_days },
       });
     }
-    if (input.mode === before.mode) return [];
+    if (backupEnabled !== before.backup_enabled) {
+      writeSetting(db, BACKUP_ENABLED_KEY, backupEnabled ? '1' : '0');
+      recordAudit(db, {
+        action: 'backup_toggled',
+        actorUserId,
+        businessDate,
+        details: { enabled: backupEnabled },
+      });
+    }
+    if (input.mode === before.mode && backupEnabled === before.backup_enabled) return [];
     return applyAssignment(db, businessDate, readTableOwnerAssignmentSettings(db), {
       action: input.mode,
       actorUserId,

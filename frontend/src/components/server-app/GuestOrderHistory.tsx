@@ -18,6 +18,7 @@ export interface GuestOrderItem {
   total: number;
   ordered_by: string | null;
   ordered_by_guest: boolean;
+  saved_price?: { entry_id: number; unit_price: number; weight: number | null };
 }
 
 export interface GuestOrder {

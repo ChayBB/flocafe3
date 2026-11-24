@@ -1,4 +1,4 @@
-/** Menu shortcut lists: food and drinks lead with their staples, best sellers skip the rice sides. */
+/** Menu shortcut lists: food and drinks lead with their staples, Drinks lists every drink, best sellers skip the rice sides. */
 import assert from 'node:assert/strict';
 import { buildMenuQuickFilters } from '../frontend/src/lib/menu-quick-filters';
 import type { Product } from '../frontend/src/lib/types';
@@ -23,6 +23,8 @@ const products = [
   product('pepsi', 'เป๊ปซี่', 'soft'),
   product('shaved', 'น้ำแข็งไส', 'food'),
   product('tea', 'ชาเย็น', 'drinks'),
+  product('water', 'น้ำเปล่า', 'drinks'),
+  product('soda', 'โซดา', 'soft'),
   product('special', 'ปลาทอดน้ำปลา', 'pick'),
   product('tagged', 'ไข่เจียว', 'food', ['recommended']),
 ];
@@ -58,7 +60,15 @@ assert.deepEqual(
   ['อาหาร', 'เครื่องดื่ม', 'เมนูยอดนิยม', 'เมนูตามใจฉัน', 'โปรโมชั่น'],
 );
 assert.deepEqual(list('food'), ['rice', 'congee', 'fried', 'kp', 'shrimp', 'shaved']);
-assert.deepEqual(list('drinks'), ['ice', 'beer', 'pepsi', 'tea']);
+assert.deepEqual(
+  list('drinks'),
+  ['ice', 'beer', 'pepsi', 'tea', 'water', 'soda'],
+  'Drinks lists every drink, unsold ones after the best sellers',
+);
+const covers = (key: string) => filters.find((f) => f.key === key)!.covers ?? [];
+assert.deepEqual(covers('drinks'), ['drinks', 'soft'], 'the drinks category and its children');
+assert.deepEqual(covers('recommended'), ['pick']);
+assert.deepEqual(covers('food'), []);
 assert.deepEqual(list('popular'), ['fried', 'kp', 'shrimp', 'shaved']);
 assert.deepEqual(list('recommended'), ['special', 'tagged']);
 const unsold = buildMenuQuickFilters({
@@ -73,4 +83,6 @@ assert.equal(
   false,
   'without sales the best-seller list is left out',
 );
-console.log('Menu quick filters: staples first, then best sellers; popular food skips rice sides.');
+console.log(
+  'Menu quick filters: staples first, then best sellers; every drink; popular food skips rice sides.',
+);

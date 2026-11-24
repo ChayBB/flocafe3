@@ -3,7 +3,7 @@
 import { PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDraggable, type DragEndEvent } from '@dnd-kit/react';
 import { KdsScrollArea } from './KdsScrollArea';
-import { Clock } from 'lucide-react';
+import { Check, Clock, MessageSquare, MoreVertical, Tag, Utensils } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { ElapsedTime, ticketStartedAt } from '@/components/kds/ElapsedTime';
@@ -31,10 +31,11 @@ import {
   type KdsOrderItem,
 } from '@/hooks/useKdsConnection';
 import { ORDER_TYPE_LABEL_KEYS, type OrderType } from '@/lib/order-types';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Ltr } from '@/components/layout/Ltr';
 import { kdsItemLine } from '@/lib/item-options-note';
+import { parseDbTimestamp } from '@/lib/utils';
 
 export interface KdsKanbanBoardProps {
   orders: KdsOrder[];
@@ -294,7 +295,24 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
 }: KanbanOrderCardProps) {
   const t = useTranslations('kds');
   const tOrders = useTranslations('orders');
+  const locale = useLocale();
   const config = STATUS_CONFIG[status];
+  const special =
+    items.length === 1 &&
+    items[0].status !== 'cancelled' &&
+    !items[0].out_of_stock_at &&
+    items[0].pending_price_mode === 'kitchen_price';
+  const waiting = special && Boolean(items[0].weight_pending);
+  const ticketTime = ticketStartedAt(items, order.created_at);
+  const started = parseDbTimestamp(ticketTime);
+  const clockTime =
+    special && Number.isFinite(started.getTime())
+      ? new Intl.DateTimeFormat(locale, {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: items[0].store_timezone,
+        }).format(started)
+      : null;
   // An out-of-stock dish waits where it is for the guest's cancellation, so moves leave it behind.
   const dragItems = items
     .filter((i) => i.status !== 'cancelled' && !i.out_of_stock_at)
@@ -323,139 +341,255 @@ const KanbanOrderCard = memo(function KanbanOrderCard({
         isDragging ? 'opacity-40' : ''
       } ${busy ? 'pointer-events-none opacity-60' : ''}`}
     >
-      <div className="rounded-xl border border-border bg-card p-3 flex flex-col">
-        <div className="flex justify-between items-center mb-2 gap-2">
-          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-            <Ltr as="span" className="font-bold text-sm shrink-0">
-              #{order.order_number}
-            </Ltr>
-            <Badge
-              variant="outline"
-              className={
-                ORDER_TYPE_BADGE_STYLES[order.type] || 'bg-muted text-foreground border-border'
-              }
-            >
-              {ORDER_TYPE_LABEL_KEYS[order.type as OrderType]
-                ? tOrders(ORDER_TYPE_LABEL_KEYS[order.type as OrderType])
-                : order.type}
-            </Badge>
-            {order.table?.name && (
-              <Badge variant="secondary" className="bg-[#03b881] font-semibold text-white">
-                {t('tableLabel', { name: order.table.name })}
-              </Badge>
-            )}
-            {order.moved_from_table && (
-              <Badge variant="outline">
-                {t('movedFromTable', { name: order.moved_from_table })}
-              </Badge>
-            )}
-            <span
-              data-testid="kds-card-clock"
-              className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0"
-            >
-              <Clock size={12} />
-              <Ltr>
-                <ElapsedTime dateStr={ticketStartedAt(items, order.created_at)} />
-              </Ltr>
-            </span>
-          </div>
-          {/* With several dishes done together, one tap moves the whole card on. */}
-          {dragItems.length > 1 && (
-            <KdsStatusToggle
-              status={status}
-              skipped={inactive}
-              disabled={busy}
-              labelKey="advanceAllTo"
-              testId="kds-card-toggle"
-              onAdvance={(nextStatus) => void advanceAll(nextStatus)}
-            />
-          )}
-        </div>
-
-        {order.special_instructions && (
-          <p className="mb-2 px-2 py-1 bg-(--kds-note-bg) border border-(--kds-note-line) rounded text-sm text-(--kds-note-text) font-medium break-words">
-            📝 {order.special_instructions}
-          </p>
-        )}
-
-        <div className="divide-y divide-border">
-          {items.map((item) => (
+      <div
+        data-kitchen-price-card={special ? (waiting ? 'waiting' : 'priced') : undefined}
+        className={`rounded-xl border p-3 ${
+          special
+            ? `@container border-s-8 ${
+                waiting
+                  ? 'border-amber-400 bg-amber-50 dark:bg-amber-950/35'
+                  : 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/35'
+              }`
+            : 'flex flex-col border-border bg-card'
+        }`}
+      >
+        <div
+          className={
+            special
+              ? 'flex flex-col gap-2 @lg:grid @lg:grid-cols-[minmax(7rem,auto)_1fr] @lg:items-start'
+              : ''
+          }
+        >
+          <div
+            className={`flex justify-between items-center gap-2 ${special ? '@lg:border-e @lg:border-border @lg:pe-3' : 'mb-2'}`}
+          >
             <div
-              key={item.id}
-              data-testid="kds-item-row"
-              data-served-confirmed={item.served_confirmed_at ? 'true' : undefined}
-              data-out-of-stock={item.out_of_stock_at ? 'true' : undefined}
-              className={`flex items-center gap-1 pe-1 ${noticeRowClass(item)}`}
+              className={`flex min-w-0 gap-1.5 ${special ? 'flex-col items-start' : 'flex-wrap items-center'}`}
             >
-              {/* Only the toggle changes status; tapping the row does nothing. */}
-              <div className="flex-1 min-w-0 px-2 py-1.5">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  {(OUT_OF_STOCK_STAGES.includes(status) || isKdsPricedLater(item)) &&
-                  item.status !== 'cancelled' ? (
+              <Ltr as="span" className="shrink-0 text-sm font-bold">
+                #{order.order_number}
+              </Ltr>
+              {(!special || !order.table?.name) && (
+                <Badge
+                  variant="outline"
+                  className={
+                    ORDER_TYPE_BADGE_STYLES[order.type] || 'bg-muted text-foreground border-border'
+                  }
+                >
+                  {ORDER_TYPE_LABEL_KEYS[order.type as OrderType]
+                    ? tOrders(ORDER_TYPE_LABEL_KEYS[order.type as OrderType])
+                    : order.type}
+                </Badge>
+              )}
+              {order.table?.name &&
+                (special ? (
+                  <span className="flex items-center gap-1.5 text-sm font-medium">
+                    <Utensils size={14} /> {t('tableLabel', { name: order.table.name })}
+                  </span>
+                ) : (
+                  <Badge variant="secondary" className="bg-[#03b881] font-semibold text-white">
+                    {t('tableLabel', { name: order.table.name })}
+                  </Badge>
+                ))}
+              {order.moved_from_table && (
+                <Badge variant="outline">
+                  {t('movedFromTable', { name: order.moved_from_table })}
+                </Badge>
+              )}
+              <span
+                data-testid="kds-card-clock"
+                className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0"
+              >
+                <Clock size={12} />
+                <Ltr>
+                  {clockTime && <>{clockTime} · </>}
+                  <ElapsedTime dateStr={ticketTime} />
+                </Ltr>
+              </span>
+            </div>
+            {/* With several dishes done together, one tap moves the whole card on. */}
+            {dragItems.length > 1 && (
+              <KdsStatusToggle
+                status={status}
+                skipped={inactive}
+                disabled={busy}
+                labelKey="advanceAllTo"
+                testId="kds-card-toggle"
+                onAdvance={(nextStatus) => void advanceAll(nextStatus)}
+              />
+            )}
+          </div>
+
+          {order.special_instructions && (
+            <p
+              className={`mb-2 px-2 py-1 bg-(--kds-note-bg) border border-(--kds-note-line) rounded text-sm text-(--kds-note-text) font-medium break-words ${special ? '@lg:col-span-2' : ''}`}
+            >
+              📝 {order.special_instructions}
+            </p>
+          )}
+
+          <div
+            className={`divide-y divide-border ${special ? '@lg:col-start-2 @lg:row-start-1' : ''}`}
+          >
+            {items.map((item) => {
+              const line = kdsItemLine(item);
+              const instructions = line.instructions
+                ?.split(' | ')
+                .filter((note) => note !== 'เมนูพิเศษครัวระบุราคา')
+                .join(' | ');
+              return item.pending_price_mode === 'kitchen_price' &&
+                item.status !== 'cancelled' &&
+                !item.out_of_stock_at ? (
+                <div key={item.id} data-testid="kds-item-row" className="min-w-0 py-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="shrink-0 text-base font-bold">{item.quantity}×</span>
+                    <span className="min-w-0 flex-1 break-words text-lg font-medium">
+                      {line.name}
+                    </span>
+                    {item.weight_pending ? (
+                      <button
+                        type="button"
+                        data-testid="kds-price-waiting"
+                        aria-haspopup="dialog"
+                        onClick={() => onQuantityTap(order, item)}
+                        className="flex min-h-9 shrink-0 items-center gap-1 rounded-full bg-amber-400 px-2.5 py-1 text-sm font-bold text-amber-950 hover:bg-amber-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-600"
+                      >
+                        <Tag size={15} /> {t('waitingKitchenPriceBadge')}
+                      </button>
+                    ) : (
+                      <KdsSetPrice
+                        item={item}
+                        className="shrink-0 tabular-nums dark:text-emerald-400!"
+                      />
+                    )}
                     <button
                       type="button"
                       data-testid="kds-out-of-stock-button"
-                      data-price-entry={isKdsPricedLater(item) ? 'true' : undefined}
-                      aria-label={
-                        isKdsPricedLater(item)
-                          ? t('priceEntryButton', { item: kdsItemLine(item).name })
-                          : t('outOfStockButton', { item: kdsItemLine(item).name })
-                      }
-                      title={
-                        isKdsPricedLater(item)
-                          ? t('priceEntryButton', { item: kdsItemLine(item).name })
-                          : t('outOfStockButton', { item: kdsItemLine(item).name })
-                      }
+                      data-price-entry="true"
+                      aria-label={t('priceEntryButton', { item: line.name })}
+                      aria-haspopup="dialog"
                       onClick={() => onQuantityTap(order, item)}
-                      className={`-my-1 min-h-9 min-w-9 shrink-0 rounded-lg border px-1 text-base font-bold ${
-                        item.out_of_stock_at
-                          ? 'border-red-600 bg-red-600 text-white'
-                          : item.weight_pending
-                            ? 'border-amber-500 bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200'
-                            : `border-border bg-muted/60 ${config.text}`
-                      }`}
+                      className="flex size-9 shrink-0 items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
                     >
-                      {item.quantity}×
+                      <MoreVertical size={20} />
                     </button>
-                  ) : (
-                    <span className={`text-base font-bold w-6 shrink-0 ${config.text}`}>
-                      {item.quantity}×
-                    </span>
-                  )}
-                  <span
-                    className={`text-lg font-medium flex-1 min-w-32 truncate ${item.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-foreground'}`}
-                  >
-                    {kdsItemLine(item).name}
-                  </span>
-                  <KdsServiceNotice item={item} />
-                  {item.out_of_stock_at && OUT_OF_STOCK_STAGES.includes(status) && (
-                    <span
-                      data-testid="kds-out-of-stock-badge"
-                      className="shrink-0 rounded-md bg-red-600 px-2 py-0.5 text-sm font-semibold text-white"
-                    >
-                      {t('outOfStockBadge')}
-                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                    {item.kitchen_price_approved && (
+                      <span
+                        data-testid="kds-price-approved"
+                        className="flex items-center gap-1.5 rounded-lg bg-emerald-100 px-2 py-1 text-sm font-semibold text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100"
+                      >
+                        <Check size={15} /> {t('kitchenPriceApproved')}
+                      </span>
+                    )}
+                    {!item.kitchen_price_approved && (
+                      <span
+                        data-testid="kds-price-approval-hint"
+                        className="flex items-center gap-1.5 rounded-lg bg-amber-200 px-2 py-1 text-sm font-semibold text-amber-950"
+                      >
+                        <MessageSquare size={15} /> {t('waitingKitchenPriceHint')}
+                      </span>
+                    )}
+                    <KdsServiceNotice item={item} />
+                    <KdsStatusToggle
+                      status={status}
+                      skipped={inactive}
+                      disabled={updating === item.id}
+                      onAdvance={(nextStatus) => {
+                        void updateItemStatus(item.id, nextStatus, {
+                          expectedStatus: statusOf(item),
+                        });
+                      }}
+                    />
+                  </div>
+                  {instructions && (
+                    <p className="mt-1 break-words text-sm text-(--kds-instruction)">
+                      {instructions}
+                    </p>
                   )}
                 </div>
-                <KdsSetPrice item={item} className="ms-[26px] mt-0.5" />
-                {kdsItemLine(item).instructions && (
-                  <p className="ms-[26px] text-sm text-(--kds-instruction) italic mt-0.5 font-medium break-words">
-                    {`"${kdsItemLine(item).instructions}"`}
-                  </p>
-                )}
-              </div>
-              {item.status !== 'cancelled' && !item.out_of_stock_at && (
-                <KdsStatusToggle
-                  status={status}
-                  skipped={inactive}
-                  disabled={updating === item.id}
-                  onAdvance={(nextStatus) => {
-                    void updateItemStatus(item.id, nextStatus, { expectedStatus: statusOf(item) });
-                  }}
-                />
-              )}
-            </div>
-          ))}
+              ) : (
+                <div
+                  key={item.id}
+                  data-testid="kds-item-row"
+                  data-served-confirmed={item.served_confirmed_at ? 'true' : undefined}
+                  data-out-of-stock={item.out_of_stock_at ? 'true' : undefined}
+                  className={`flex items-center gap-1 pe-1 ${noticeRowClass(item)}`}
+                >
+                  {/* Only the toggle changes status; tapping the row does nothing. */}
+                  <div className="flex-1 min-w-0 px-2 py-1.5">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      {(OUT_OF_STOCK_STAGES.includes(status) || isKdsPricedLater(item)) &&
+                      item.status !== 'cancelled' ? (
+                        <button
+                          type="button"
+                          data-testid="kds-out-of-stock-button"
+                          data-price-entry={isKdsPricedLater(item) ? 'true' : undefined}
+                          aria-label={
+                            isKdsPricedLater(item)
+                              ? t('priceEntryButton', { item: kdsItemLine(item).name })
+                              : t('outOfStockButton', { item: kdsItemLine(item).name })
+                          }
+                          title={
+                            isKdsPricedLater(item)
+                              ? t('priceEntryButton', { item: kdsItemLine(item).name })
+                              : t('outOfStockButton', { item: kdsItemLine(item).name })
+                          }
+                          onClick={() => onQuantityTap(order, item)}
+                          className={`-my-1 min-h-9 min-w-9 shrink-0 rounded-lg border px-1 text-base font-bold ${
+                            item.out_of_stock_at
+                              ? 'border-red-600 bg-red-600 text-white'
+                              : item.weight_pending
+                                ? 'border-amber-500 bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200'
+                                : `border-border bg-muted/60 ${config.text}`
+                          }`}
+                        >
+                          {item.quantity}×
+                        </button>
+                      ) : (
+                        <span className={`text-base font-bold w-6 shrink-0 ${config.text}`}>
+                          {item.quantity}×
+                        </span>
+                      )}
+                      <span
+                        className={`text-lg font-medium flex-1 min-w-32 truncate ${item.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-foreground'}`}
+                      >
+                        {line.name}
+                      </span>
+                      <KdsServiceNotice item={item} />
+                      {item.out_of_stock_at && OUT_OF_STOCK_STAGES.includes(status) && (
+                        <span
+                          data-testid="kds-out-of-stock-badge"
+                          className="shrink-0 rounded-md bg-red-600 px-2 py-0.5 text-sm font-semibold text-white"
+                        >
+                          {t('outOfStockBadge')}
+                        </span>
+                      )}
+                    </div>
+                    <KdsSetPrice item={item} className="ms-[26px] mt-0.5" />
+                    {kdsItemLine(item).instructions && (
+                      <p className="ms-[26px] text-sm text-(--kds-instruction) italic mt-0.5 font-medium break-words">
+                        {`"${kdsItemLine(item).instructions}"`}
+                      </p>
+                    )}
+                  </div>
+                  {item.status !== 'cancelled' && !item.out_of_stock_at && (
+                    <KdsStatusToggle
+                      status={status}
+                      skipped={inactive}
+                      disabled={updating === item.id}
+                      onAdvance={(nextStatus) => {
+                        void updateItemStatus(item.id, nextStatus, {
+                          expectedStatus: statusOf(item),
+                        });
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

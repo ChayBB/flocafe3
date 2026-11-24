@@ -223,6 +223,20 @@ test.describe('Server App guest from a table QR', () => {
     ).json();
     expect(again.orders).toHaveLength(1);
 
+    const priceAlert = page.getByTestId('guest-price-alerts');
+    await expect(priceAlert).toHaveCount(0);
+    await page.route('**/api/guest/order?*', async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      if (payload.order?.items?.[0]) {
+        payload.order.items[0].saved_price = { entry_id: 1, unit_price: 125, weight: null };
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    await expect(priceAlert).toContainText(/The kitchen set E2E Coffee at .*125.* per portion/, {
+      timeout: 12_000,
+    });
+
     // The header lists what this table has ordered.
     await page.getByTestId('server-app-history-button').click();
     await expect(
@@ -343,6 +357,13 @@ test.describe('Server App guest from a table QR', () => {
     await comeBack();
     await expect.poll(marked, { timeout: 10000 }).toBe(false);
     await expect(page.locator('header').getByTestId('server-app-guest-name')).toBeVisible();
+    // iOS Safari offers to reduce privacy protections after a reload, so the page reopens instead.
+    expect(
+      await page.evaluate(
+        () => (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).type,
+      ),
+    ).not.toBe('reload');
+    expect(new URL(page.url()).search).toContain(table.query);
 
     // With items waiting to be sent it holds off.
     const search = page.getByTestId('pos-product-grid').getByPlaceholder('Search menu');
@@ -371,6 +392,9 @@ test.describe('Server App guest from a table QR', () => {
 
     await page.getByTestId('server-app-login-button').click();
     await page.getByPlaceholder('Staff code').fill('4242');
+    const profile = page.getByTestId('server-app-staff-profile');
+    await expect(profile).toBeVisible();
+    await profile.getByRole('button', { name: 'Back', exact: true }).click();
     await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
     await expect(html).toHaveClass(/(^|\s)dark(\s|$)/);
   });
@@ -437,6 +461,20 @@ test.describe('Server App guest from a table QR', () => {
     await expect(page.locator('header')).toHaveCount(0);
     expect(await page.evaluate(() => localStorage.getItem('flocafe:server-app-token'))).toBeNull();
     await page.getByPlaceholder('Staff code').fill('4242');
+
+    const profile = page.getByTestId('server-app-staff-profile');
+    await expect(profile.getByRole('heading', { name: 'Staff profile' })).toBeVisible();
+    await expect(profile).toContainText('E2E server');
+    await expect(profile).toContainText('Clocked in');
+    await profile.getByRole('button', { name: /Preferences/ }).click();
+    await profile.getByRole('button', { name: 'Large', exact: true }).click();
+    await expect(profile.getByRole('button', { name: 'Large', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await profile.getByRole('button', { name: 'Normal', exact: true }).click();
+    await profile.getByRole('button', { name: 'Back', exact: true }).click();
+    await profile.getByRole('button', { name: 'Back', exact: true }).click();
 
     const header = page.locator('header');
     await expect(header).toContainText('E2E server');

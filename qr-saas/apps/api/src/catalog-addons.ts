@@ -5,17 +5,26 @@ export const AddonSelection = t.Object({
   quantity: t.Integer({ minimum: 1, maximum: 10 }),
 });
 
-export const AddonGroups = t.Array(t.Object({
+const groupFields = {
   name: t.String({ minLength: 1, maxLength: 200 }),
   min: t.Integer({ minimum: 0, maximum: 200 }),
   max: t.Union([t.Null(), t.Integer({ minimum: 0, maximum: 10000 })]),
   multiple: t.Boolean(),
-  options: t.Array(t.Object({
+};
+const option = t.Object({
     id: t.String({ minLength: 1, maxLength: 128 }),
     name: t.String({ minLength: 1, maxLength: 200 }),
     price_satang: t.Integer({ minimum: 0, maximum: 100000000 }),
-  }), { minItems: 1, maxItems: 100 }),
-}), { maxItems: 20 });
+});
+export const AddonGroups = t.Array(t.Union([
+  t.Object({
+    ...groupFields,
+    kitchen_price: t.Literal(true),
+    description: t.Optional(t.String({ maxLength: 2000 })),
+    options: t.Array(option, { maxItems: 100 }),
+  }),
+  t.Object({ ...groupFields, options: t.Array(option, { minItems: 1, maxItems: 100 }) }),
+]), { maxItems: 20 });
 
 export type AddonGroup = typeof AddonGroups.static[number];
 type Selection = typeof AddonSelection.static;

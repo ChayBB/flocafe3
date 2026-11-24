@@ -50,10 +50,11 @@ export function paintRasterRequest(
     const styles = Array.isArray(request.styles) ? request.styles : [request.style];
     const scaleX = styles.includes('double-width') ? 2 : 1;
     const scaleY = styles.includes('double-height') ? 2 : 1;
-    const logicalLineHeight = 32;
+    const textScale = typeof request.textScale === 'number' ? request.textScale : 1;
+    const logicalLineHeight = Math.round(32 * textScale);
     const lineHeight = logicalLineHeight * scaleY;
-    const fontSize = styles.includes('font-b') ? 17 : 24;
-    const topPad = 3;
+    const fontSize = Math.round((styles.includes('font-b') ? 17 : 24) * textScale);
+    const topPad = Math.round(3 * textScale);
     const weight = styles.includes('bold') ? '700' : '400';
     const fontFallback =
       '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Bengali", "Nirmala UI", "Vrinda", "Bangla Sangam MN", "Noto Sans Devanagari", "Kohinoor Devanagari", "Devanagari Sangam MN", "Noto Sans Gurmukhi", "Raavi", "Kohinoor Gurmukhi", "Gurmukhi Sangam MN", "Noto Sans Telugu", "Kohinoor Telugu", "Telugu Sangam MN", "Noto Sans Tamil", "Latha", "Tamil Sangam MN", "Noto Sans Thai", "Leelawadee UI", "Thonburi", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans TC", "Noto Sans", sans-serif';

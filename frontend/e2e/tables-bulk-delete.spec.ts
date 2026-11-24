@@ -58,7 +58,7 @@ test('selected tables are deleted together and a table with an open order is rep
     await expect(deleteButton).toBeDisabled();
     await expect(deleteButton).toHaveText('Delete tables');
 
-    for (const id of ids) await page.getByTestId(`select-table-${id}`).check();
+    for (const id of ids) await page.getByTestId(`select-table-${id}`).click();
     await expect(deleteButton).toBeEnabled();
     await expect(deleteButton).toHaveText('Delete tables (3)');
 
@@ -77,7 +77,10 @@ test('selected tables are deleted together and a table with an open order is rep
     await expect(page.getByTestId(`table-card-${ids[0]}`)).toHaveCount(0);
     await expect(page.getByTestId(`table-card-${ids[1]}`)).toHaveCount(0);
     await expect(page.getByTestId(`table-card-${ids[2]}`)).toBeVisible();
-    await expect(page.getByTestId(`select-table-${ids[2]}`)).toBeChecked();
+    await expect(page.getByTestId(`select-table-${ids[2]}`)).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await expect(deleteButton).toHaveText('Delete tables (1)');
 
     const list = await page.request.get(`${BASE}/api/tables`, {

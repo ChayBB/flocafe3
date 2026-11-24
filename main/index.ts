@@ -39,7 +39,14 @@ import {
   resolveUpdateChannel,
 } from './update-channel';
 import { computeTaxPackUpdates, fetchRemoteTaxPackCatalog } from './tax-packs/catalog';
-import { startServer, stopServer, getLocalIP, isServerRunning, getServerPort } from './server';
+import {
+  startServer,
+  stopServer,
+  getLocalIP,
+  getAllLocalIPs,
+  isServerRunning,
+  getServerPort,
+} from './server';
 import { cloudSync } from './services/cloud-sync';
 import { shutdownQrCloudConnector, startQrCloudConnector } from './services/qr-cloud/connector';
 import {
@@ -74,7 +81,11 @@ import { triggerScheduledOrderSweep } from './services/scheduled-orders';
 import log from 'electron-log/main';
 import { autoUpdater } from 'electron-updater';
 import { CancellationToken } from 'builder-util-runtime';
-import { isAllowedLocalWindowUrl, isSafeExternalUrl } from './security/url-allowlist';
+import {
+  isAllowedLocalWindowUrl,
+  isOwnLanAppUrl,
+  isSafeExternalUrl,
+} from './security/url-allowlist';
 import {
   AUTO_UPDATE_CHECK_SETTING_KEY,
   canAcceptUpdateCheckResult,
@@ -810,6 +821,49 @@ if (gotSingleInstanceLock) {
   });
 }
 
+function isOwnLanAppUrlNow(url: string): boolean {
+  return isOwnLanAppUrl(url, [getServerAppPort(), getKdsPort()], getAllLocalIPs());
+}
+
+function openExternalSafely(url: string): void {
+  if (!isSafeExternalUrl(url)) {
+    console.warn('[Flo] Blocked unsafe external URL scheme:', url);
+    return;
+  }
+  shell
+    .openExternal(url)
+    .catch((err) => console.warn('[Flo] Failed to open external URL:', err?.message || err));
+}
+
+/** The system browser opens behind a focused Flo on Windows, so Flo's own LAN apps open in a Flo window. */
+function openOwnLanAppWindow(url: string): void {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    title: 'Flo',
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      autoplayPolicy: 'no-user-gesture-required',
+    },
+  });
+  win.webContents.setWindowOpenHandler(({ url: target }) => {
+    openExternalSafely(target);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, target) => {
+    if (isOwnLanAppUrlNow(target)) return;
+    event.preventDefault();
+    openExternalSafely(target);
+  });
+  win
+    .loadURL(url)
+    .catch((err) => console.warn('[Flo] Failed to open LAN app window:', err?.message || err));
+  win.focus();
+}
+
 function createWindow(): void {
   if (isQuitting || isShutdownRequested()) return;
   if (!isRuntimeHealthy(runtimeState, getRuntimeServices(), isShutdownRequested())) {
@@ -899,6 +953,11 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     const localWindowResponse = localWindowOpenHandler({ url });
     if (localWindowResponse) return localWindowResponse;
+
+    if (isOwnLanAppUrlNow(url)) {
+      openOwnLanAppWindow(url);
+      return { action: 'deny' };
+    }
 
     if (isSafeExternalUrl(url)) {
       shell

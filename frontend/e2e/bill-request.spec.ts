@@ -106,10 +106,8 @@ test('printing a fully served table’s bill makes the POS time the wait for pay
   const printer = phone.getByTestId('server-app-print-bill');
   await expect(phone.getByTestId('server-app-ordered-item')).toHaveCount(2);
   await expect(printer).toBeVisible();
-  await expect(printer).toHaveAttribute('data-ready', 'false');
-  await printer.click();
-  await expect(phone.getByText('2 items are not confirmed at the table yet').first()).toBeVisible();
-  await expect(page.getByTestId('bill-request-alerts')).toHaveCount(0);
+  // Every dish is priced, so the bill can print before anything is confirmed at the table.
+  await expect(printer).toHaveAttribute('data-ready', 'true');
   for (const index of [0, 1]) {
     await phone
       .getByTestId('server-app-ordered-item')

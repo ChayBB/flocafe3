@@ -824,7 +824,19 @@ export function buildEscPos(
     }
 
     buf.push(0x1b, 0x61, center ? 0x01 : 0x00);
-    const indent = center ? 0 : Math.floor((capabilities.sideMarginDots ?? 0) / FONT_A_CELL_DOTS);
+    let indent = center ? 0 : Math.floor((capabilities.sideMarginDots ?? 0) / FONT_A_CELL_DOTS);
+    // A full-width rule spans the whole head, through the side margin, edge to edge.
+    if (
+      indent > 0 &&
+      fitColumns !== undefined &&
+      !lineDW &&
+      !lineFontB &&
+      line.length === fitColumns &&
+      /^-+$/.test(line)
+    ) {
+      line = '-'.repeat(fitColumns + 2 * indent);
+      indent = 0;
+    }
     if (indent > 0) buf.push(0x1b, 0x21, 0x00, ...Array<number>(indent).fill(0x20));
 
     let mode = 0;

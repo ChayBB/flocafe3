@@ -34,7 +34,11 @@ const { getJWTSecret } = require('../main/routes/auth');
 const { orderRoutes } = require('../main/routes/orders');
 const { WEIGHT_PENDING_NOTE, KITCHEN_PRICE_NOTE } = require('../main/lib/weight-pending');
 const { billRoutes } = require('../main/routes/bills');
+const { tableRoutes } = require('../main/routes/tables');
+const { kdsRoutes } = require('../main/routes/kds');
+const { guestAlertRoutes } = require('../main/routes/guest-alerts');
 const { annotateKdsItems } = require('../main/db');
+const { guestTableOrder } = require('../main/lib/guest-order');
 
 function seedUser(db: any, id: string, role: string) {
   const email = `${id}@test.local`;
@@ -83,7 +87,24 @@ async function main() {
   ).run();
 
   const cashierAuth = seedUser(db, 'cashier-weight', 'cashier');
-  const app = createApp({ '/api/orders': orderRoutes, '/api/bills': billRoutes });
+  const primaryAuth = seedUser(db, 'primary-weight', 'server');
+  const backupAuth = seedUser(db, 'backup-weight', 'server');
+  const kitchenAuth = seedUser(db, 'manager-weight', 'manager');
+  db.prepare(
+    `INSERT INTO tables (id, number, capacity, status, is_active, owner_user_id, backup_user_id)
+     VALUES ('weight-table', '99', 4, 'occupied', 1, 'primary-weight', 'backup-weight')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO user_permission_overrides (user_id, permission_id, effect, updated_by)
+     VALUES ('backup-weight', 'customers.view', 'deny', 'cashier-weight')`,
+  ).run();
+  const app = createApp({
+    '/api/orders': orderRoutes,
+    '/api/bills': billRoutes,
+    '/api/tables': tableRoutes,
+    '/api/kds': kdsRoutes,
+    '/api/guest-alerts': guestAlertRoutes,
+  });
   const { baseUrl, server } = await startServer(app);
 
   const itemsOf = (orderId: any) =>
@@ -255,6 +276,8 @@ async function main() {
     );
 
     // A "kitchen sets the price" group waits for a set price that is stored exactly as entered.
+    // Marked required, it still has no option to pick, so it never blocks the order.
+    db.prepare("UPDATE addon_groups SET is_required = 1 WHERE id = 'ag-chef'").run();
     const special = await api(baseUrl, '/api/orders', {
       method: 'POST',
       headers: cashierAuth,
@@ -339,6 +362,43 @@ async function main() {
     assertEqualOrThrow(orderRow(specialOrderId).total, 800, 'the new price recomputes the order');
     const pricedBack = await setPrice(359);
     assertEqualOrThrow(pricedBack.status, 200, 'pricing has no limit on how often');
+    db.prepare("UPDATE orders SET table_id = 'weight-table', type = 'dine_in' WHERE id = ?").run(
+      specialOrderId,
+    );
+    db.prepare("UPDATE orders SET table_id = 'weight-table', created_at = ? WHERE id = ?").run(
+      '2099-01-01 00:00:00',
+      orderId,
+    );
+    const kitchenUpdate = await api(baseUrl, `/api/kds/items/${pricedLine.id}/status`, {
+      method: 'PATCH',
+      headers: kitchenAuth,
+      body: { price: 375 },
+    });
+    assertEqualOrThrow(kitchenUpdate.status, 200, 'KDS can save the updated kitchen price');
+    const guestItem = guestTableOrder(db, 'weight-table')?.items.find(
+      (item: { id: number }) => item.id === pricedLine.id,
+    );
+    assertEqualOrThrow(guestItem?.saved_price?.unit_price, 375, 'the guest gets the new price');
+    assertOrThrow(guestItem?.saved_price?.entry_id > 0, 'the guest gets an update identifier');
+    for (const headers of [primaryAuth, backupAuth]) {
+      const response = await api(baseUrl, '/api/tables?active=true', { headers });
+      assertEqualOrThrow(response.status, 200, 'assigned server can load the table list');
+      const table = response.data.tables.find((row: { id: string }) => row.id === 'weight-table');
+      assertEqualOrThrow(table.activeOrder.id, orderId, 'the newer order is the main table order');
+      const entry = table.table_price_items.find(
+        (item: { id: number }) => item.id === pricedLine.id,
+      );
+      assertEqualOrThrow(entry.id, pricedLine.id, 'assigned server gets the priced line');
+      assertEqualOrThrow(entry.unit_price, 375, 'alert carries the latest kitchen price');
+      assertOrThrow(entry.price_entry_id > 0, 'alert includes a saved price event');
+      const incoming = await api(baseUrl, '/api/guest-alerts', { headers });
+      assertEqualOrThrow(incoming.status, 200, 'assigned server can poll staff alerts');
+      assertEqualOrThrow(
+        incoming.data.price_alerts,
+        undefined,
+        'the POS guest-alert feed does not carry kitchen price notifications',
+      );
+    }
     const plainPrice = await api(baseUrl, `/api/orders/${orderId}/items/${plain.id}/price`, {
       method: 'PATCH',
       headers: cashierAuth,

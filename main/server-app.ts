@@ -17,6 +17,7 @@ import {
   DatabaseAdmissionReservation,
   createDatabaseMaintenanceHandoff,
   databaseMaintenanceMiddleware,
+  dayBoundsInTimezone,
   getDatabase,
   getSettingValue,
   isServerAppEnabled,
@@ -24,6 +25,7 @@ import {
   isServerBillPrintingEnabled,
   recordAuthAudit,
   revokeDatabaseMaintenanceHandoff,
+  tenantBusinessDayStartTime,
 } from './db';
 import { getJWTSecret } from './security/jwt-secret';
 import { asyncHandler } from './middleware/async-handler';
@@ -77,7 +79,12 @@ import {
   resolveEffectivePermissions,
 } from './services/authorization';
 import { clockNow } from './lib/clock';
-import { recordClockIn, recordClockOut } from './services/attendance';
+import {
+  currentBusinessDate,
+  recordClockIn,
+  recordClockOut,
+  storeTimezone,
+} from './services/attendance';
 import { isTrustedGuestProxy, verifyGuestStickerCode, verifyGuestTableToken } from './lib/guest-qr';
 import { cloudTableQrActive, storedCloudTableQr } from './services/qr-cloud/table-qr';
 import {
@@ -725,6 +732,42 @@ export function startServerApp(): Promise<void> {
       asyncHandler(handlePasswordChange),
     );
 
+    app.get('/api/staff-profile', serverAppApiRateLimit, requireServerAppAuth, (req, res) => {
+      const { userId } = (req as Request & { user: ServerAppUser }).user;
+      const db = getDatabase();
+      const businessDate = currentBusinessDate(db);
+      const timezone = storeTimezone(db);
+      const [start, end] = dayBoundsInTimezone(
+        businessDate,
+        timezone,
+        tenantBusinessDayStartTime(db),
+      );
+      const attendance = db
+        .prepare(
+          `SELECT business_date, clock_in_at, clock_out_at FROM staff_attendance
+         WHERE user_id = ? ORDER BY business_date DESC LIMIT 14`,
+        )
+        .all(userId);
+      const summary = db
+        .prepare(
+          `WITH table_bills AS (
+           SELECT o.id, o.guest_count, b.paid_amount
+           FROM bills b JOIN orders o ON o.id = b.order_id
+           JOIN tables t ON t.id = o.table_id
+           WHERE t.is_active = 1 AND (t.owner_user_id = ? OR t.backup_user_id = ?)
+             AND b.paid_at >= ? AND b.paid_at < ?
+             AND b.payment_status IN ('paid', 'partially_refunded', 'refunded')
+         )
+         SELECT COALESCE(SUM(paid_amount), 0) AS sales,
+                COUNT(*) AS bills,
+                (SELECT COALESCE(SUM(guest_count), 0)
+                 FROM (SELECT DISTINCT id, guest_count FROM table_bills)) AS guests
+         FROM table_bills`,
+        )
+        .get(userId, userId, start, end);
+      res.json({ business_date: businessDate, timezone, attendance, summary });
+    });
+
     app.post(
       '/api/auth/pin/change',
       authRateLimit(),
@@ -1182,7 +1225,12 @@ export function startServerApp(): Promise<void> {
           `/orders/${encodeURIComponent(String(req.params.id))}/items/confirm-served`,
         ),
     );
-    for (const action of ['cancel', 'takeaway', 'confirm-served'] as const) {
+    for (const action of [
+      'cancel',
+      'takeaway',
+      'confirm-served',
+      'approve-kitchen-price',
+    ] as const) {
       app.patch(
         `/api/orders/:id/items/:itemId/${action}`,
         serverAppApiRateLimit,
@@ -1231,6 +1279,7 @@ export function startServerApp(): Promise<void> {
             code: 'BILL_PRINTING_DISABLED',
           });
         }
+        req.body = { orderId: req.body?.orderId, staffPrintOnce: true };
         return forwardToMainApi(req, res, '/printers/print-bill');
       },
     );

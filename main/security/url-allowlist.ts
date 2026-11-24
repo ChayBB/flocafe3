@@ -53,3 +53,19 @@ export function isSafeWhatsAppShareUrl(rawUrl: string): boolean {
     return false;
   }
 }
+
+/** Checks for Flo's own LAN-facing apps (Server App, KDS) served from this machine. */
+export function isOwnLanAppUrl(rawUrl: string, ports: number[], hosts: string[]): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' || parsed.username || parsed.password) return false;
+    const allowedOrigins = new Set(
+      ['localhost', '127.0.0.1', ...hosts].flatMap((host) =>
+        ports.map((port) => originFor(host, port)),
+      ),
+    );
+    return allowedOrigins.has(parsed.origin);
+  } catch {
+    return false;
+  }
+}

@@ -93,7 +93,7 @@ export default function GuestAlerts({ api, apiPrefix, enabled }: Props) {
 
   return (
     <div
-      className="fixed bottom-4 end-4 z-[55] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2"
+      className="fixed bottom-4 end-4 z-[55] flex max-h-[60dvh] w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto"
       data-testid="guest-alerts"
     >
       {alerts.map((alert) => (

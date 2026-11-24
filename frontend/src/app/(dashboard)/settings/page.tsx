@@ -5980,49 +5980,53 @@ export default function SettingsPage() {
                       {kdsInfo.ips_data && kdsInfo.ips_data.length > 0 ? (
                         <>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
-                            {kdsInfo.ips_data.map(
-                              (
-                                ipInfo: { ip: string; url: string; qr_data: string | null },
-                                idx: number,
-                              ) => (
+                            {[
+                              ...kdsInfo.ips_data.map((ipInfo) => ({ ipInfo, tablet: false })),
+                              {
+                                ipInfo:
+                                  kdsInfo.ips_data.find((entry) => entry.url === kdsInfo.ip_url) ??
+                                  kdsInfo.ips_data[0],
+                                tablet: true,
+                              },
+                            ].map(({ ipInfo, tablet }, idx) => {
+                              const cardLabel = tablet
+                                ? t('kdsTabletCard')
+                                : ipInfo.ip.startsWith('100.')
+                                  ? t('vpnMeshNetwork')
+                                  : t('localNetwork');
+                              const cardHint = tablet
+                                ? t('kdsTabletCardHint')
+                                : ipInfo.ip.startsWith('100.')
+                                  ? t('vpnMeshNetworkHint')
+                                  : t('localNetworkHint');
+                              return (
                                 <div
                                   key={idx}
+                                  data-testid={tablet ? 'kds-tablet-card' : undefined}
                                   className="flex flex-col items-center p-4 bg-muted border border-border rounded-lg"
                                 >
                                   <div className="w-full mb-3">
                                     <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                                      <span>
-                                        {ipInfo.ip.startsWith('100.')
-                                          ? t('vpnMeshNetwork')
-                                          : t('localNetwork')}
-                                      </span>
+                                      <span>{cardLabel}</span>
                                       <TooltipProvider>
                                         <Tooltip>
                                           <TooltipTrigger asChild>
                                             <button
                                               type="button"
-                                              aria-label={
-                                                ipInfo.ip.startsWith('100.')
-                                                  ? t('vpnMeshNetwork')
-                                                  : t('localNetwork')
-                                              }
+                                              aria-label={cardLabel}
                                               className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                                             >
                                               <Info size={14} aria-hidden="true" />
                                             </button>
                                           </TooltipTrigger>
                                           <TooltipContent className="max-w-xs text-center">
-                                            {ipInfo.ip.startsWith('100.')
-                                              ? t('vpnMeshNetworkHint')
-                                              : t('localNetworkHint')}
+                                            {cardHint}
                                           </TooltipContent>
                                         </Tooltip>
                                       </TooltipProvider>
                                     </div>
                                     <p className="mt-1 text-[11px] text-muted-foreground text-center">
-                                      {ipInfo.ip.startsWith('100.')
-                                        ? t('vpnMeshNetworkHint')
-                                        : t('localNetworkHint')}
+                                      {cardHint}
                                     </p>
                                   </div>
                                   {ipInfo.qr_data ? (
@@ -6046,8 +6050,8 @@ export default function SettingsPage() {
                                     {ipInfo.url}
                                   </Ltr>
                                 </div>
-                              ),
-                            )}
+                              );
+                            })}
                           </div>
                           <div className="bg-orange-50 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-800/40 rounded-lg p-4">
                             <div className="flex items-start gap-3">

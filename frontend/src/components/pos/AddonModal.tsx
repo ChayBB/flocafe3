@@ -239,7 +239,7 @@ export default function AddonModal({
     const requiredMin = Boolean(g.is_required)
       ? Math.max(1, g.min_selection || 1)
       : g.min_selection || 0;
-    if (count < requiredMin) return false;
+    if ((g.addons?.length ?? 0) > 0 && count < requiredMin) return false;
     if (g.max_selection && count > g.max_selection) return false;
     return true;
   });
@@ -534,7 +534,7 @@ export default function AddonModal({
                   const requiredMin = Boolean(group.is_required)
                     ? Math.max(1, group.min_selection || 1)
                     : group.min_selection || 0;
-                  if (requiredMin > 0 && count < requiredMin) {
+                  if (requiredMin > 0 && (group.addons?.length ?? 0) > 0 && count < requiredMin) {
                     return (
                       <p className="mt-1 text-xs text-red-500 dark:text-red-400">
                         {t('selectAtLeast', { count: requiredMin })}

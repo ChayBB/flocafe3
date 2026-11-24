@@ -367,6 +367,19 @@ export function connectorMenuImages(
   return requestConnectorJson(options, '/api/v1/connectors/menu-images', JSON.stringify(body));
 }
 
+export interface ConnectorBrandingBody {
+  logo: string | null;
+  cover: string | null;
+  part?: { name: string; offset: number; total: number; data: string };
+}
+
+export function connectorBranding(
+  options: FetchEventsOptions,
+  body: ConnectorBrandingBody,
+): Promise<unknown> {
+  return requestConnectorJson(options, '/api/v1/connectors/branding', JSON.stringify(body));
+}
+
 export function connectorCatalog(
   options: FetchEventsOptions,
   catalog?: {
