@@ -19,7 +19,11 @@ import {
   computeDefaultWindowBounds,
   createMainWindow,
   fitWindowBounds,
+  getMainWindowState,
+  isCompactWorkArea,
+  resolveMinimumWindowSize,
   resolveTitleBarMode,
+  syncMainWindowToDisplay,
 } from '../main/window-options';
 
 class FakeBrowserWindow {
@@ -270,9 +274,10 @@ restoreWin.setBounds = (b) => {
   restoreWin.calls.push('setBounds');
 };
 const restoredBounds = computeDefaultWindowBounds(fullHd);
-applyWindowControlAction(restoreWin as any, 'toggle-maximize', () => restoredBounds);
+const restoreOptions = { canRestore: () => true, resolveRestoredBounds: () => restoredBounds };
+applyWindowControlAction(restoreWin as any, 'toggle-maximize', restoreOptions);
 assert.equal(restoreWin.bounds, undefined, 'maximizing does not resize');
-applyWindowControlAction(restoreWin as any, 'toggle-maximize', () => restoredBounds);
+applyWindowControlAction(restoreWin as any, 'toggle-maximize', restoreOptions);
 assert.deepEqual(restoreWin.calls, ['maximize', 'unmaximize', 'setBounds']);
 assert.deepEqual(restoreWin.bounds, restoredBounds, 'restore applies display-fitted bounds');
 
@@ -453,3 +458,76 @@ assert.equal(
 );
 assert.equal(appendThemeQueryParam('not a url', true), 'not a url');
 console.log('Theme-mode helpers (gh-513) resolve, validate, and rewrite URLs.');
+
+// Small and 4:3 POS displays (e.g. 15" 1024x768) keep the window maximized.
+const posiflex4by3 = { x: 0, y: 0, width: 1024, height: 728 };
+const svga = { x: 0, y: 0, width: 800, height: 560 };
+assert.equal(isCompactWorkArea(posiflex4by3), true, '1024x768 is too small for a windowed size');
+assert.equal(isCompactWorkArea(svga), true, '800x600 is too small for a windowed size');
+assert.equal(isCompactWorkArea(laptop), false, '1366x768 keeps a windowed size');
+assert.equal(isCompactWorkArea(fullHd), false, '1920x1080 keeps a windowed size');
+assert.deepEqual(resolveMinimumWindowSize(svga), { width: 800, height: 560 });
+assert.deepEqual(resolveMinimumWindowSize(posiflex4by3), { width: 1024, height: 700 });
+assert.deepEqual(resolveMinimumWindowSize(laptop), { width: 1024, height: 700 });
+assert.deepEqual(resolveMinimumWindowSize(fullHd), { width: 1024, height: 700 });
+for (const workArea of [posiflex4by3, svga]) {
+  const bounds = computeDefaultWindowBounds(workArea);
+  assert.ok(
+    bounds.x >= workArea.x &&
+      bounds.y >= workArea.y &&
+      bounds.x + bounds.width <= workArea.x + workArea.width &&
+      bounds.y + bounds.height <= workArea.y + workArea.height,
+    'default bounds never overflow a small display',
+  );
+}
+
+const compactWin = new FakeWindow();
+compactWin.maximized = true;
+assert.deepEqual(
+  applyWindowControlAction(compactWin as any, 'toggle-maximize', {
+    canRestore: () => !isCompactWorkArea(posiflex4by3),
+    resolveRestoredBounds: () => computeDefaultWindowBounds(posiflex4by3),
+  }),
+  { success: true },
+);
+assert.equal(compactWin.maximized, true, 'shrink is a no-op on a compact display');
+assert.deepEqual(compactWin.calls, []);
+
+class SyncWindow {
+  maximized = false;
+  fullscreen = false;
+  minimum: [number, number] | null = null;
+  isDestroyed() {
+    return false;
+  }
+  isMaximized() {
+    return this.maximized;
+  }
+  isFullScreen() {
+    return this.fullscreen;
+  }
+  maximize() {
+    this.maximized = true;
+  }
+  setMinimumSize(width: number, height: number) {
+    this.minimum = [width, height];
+  }
+}
+const svgaWin = new SyncWindow();
+syncMainWindowToDisplay(svgaWin as any, svga);
+assert.deepEqual(svgaWin.minimum, [800, 560], 'minimum size clamps to an 800x600 display');
+assert.equal(svgaWin.maximized, true, 'compact displays maximize the window');
+const laptopWin = new SyncWindow();
+syncMainWindowToDisplay(laptopWin as any, laptop);
+assert.deepEqual(laptopWin.minimum, [1024, 700]);
+assert.equal(laptopWin.maximized, false, '1366x768 leaves a windowed window alone');
+const fullHdWin = new SyncWindow();
+syncMainWindowToDisplay(fullHdWin as any, fullHd);
+assert.equal(fullHdWin.maximized, false, '1920x1080 leaves a windowed window alone');
+assert.deepEqual(getMainWindowState(svgaWin as any, svga), {
+  isMaximized: true,
+  isFullScreen: false,
+  canRestore: false,
+});
+assert.equal(getMainWindowState(fullHdWin as any, fullHd).canRestore, true);
+console.log('Main window stays maximized on compact displays and clamps its minimum size.');

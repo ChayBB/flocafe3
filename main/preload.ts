@@ -70,10 +70,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getWindowState: () => ipcRenderer.invoke('get-window-state'),
   onWindowStateChanged: (
-    callback: (state: { isMaximized: boolean; isFullScreen: boolean }) => void,
+    callback: (state: {
+      isMaximized: boolean;
+      isFullScreen: boolean;
+      canRestore?: boolean;
+    }) => void,
   ) => {
-    const handler = (_event: unknown, state: { isMaximized: boolean; isFullScreen: boolean }) =>
-      callback(state);
+    const handler = (
+      _event: unknown,
+      state: { isMaximized: boolean; isFullScreen: boolean; canRestore?: boolean },
+    ) => callback(state);
     ipcRenderer.on('window-state-changed', handler);
     return () => {
       ipcRenderer.removeListener('window-state-changed', handler);

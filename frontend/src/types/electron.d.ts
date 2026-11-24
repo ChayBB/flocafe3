@@ -14,9 +14,17 @@ export interface ElectronAPI {
 
   // Window controls
   windowAction: (action: WindowControlAction) => Promise<ElectronActionResult | ElectronIpcError>;
-  getWindowState?: () => Promise<{ isMaximized: boolean; isFullScreen: boolean }>;
+  getWindowState?: () => Promise<{
+    isMaximized: boolean;
+    isFullScreen: boolean;
+    canRestore?: boolean;
+  }>;
   onWindowStateChanged?: (
-    callback: (state: { isMaximized: boolean; isFullScreen: boolean }) => void,
+    callback: (state: {
+      isMaximized: boolean;
+      isFullScreen: boolean;
+      canRestore?: boolean;
+    }) => void,
   ) => () => void;
 
   // Database

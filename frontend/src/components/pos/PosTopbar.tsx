@@ -42,6 +42,7 @@ interface Props {
   canUseShift: boolean;
   onShowPrintMenu: () => void;
   fullscreen: boolean;
+  canToggleFullscreen?: boolean;
   onToggleFullscreen: () => void;
   onCustomerModalOpenChange?: (open: boolean) => void;
   scheduledOrderCount?: number;
@@ -73,6 +74,7 @@ export default function PosTopbar({
   canUseShift,
   onShowPrintMenu,
   fullscreen,
+  canToggleFullscreen = true,
   onToggleFullscreen,
   onCustomerModalOpenChange,
   scheduledOrderCount = 0,
@@ -289,15 +291,17 @@ export default function PosTopbar({
           >
             <Lock size={16} />
           </button>
-          <button
-            type="button"
-            onClick={onToggleFullscreen}
-            className="touch-target shrink-0 rounded-lg border border-border bg-card px-3 text-muted-foreground transition-colors hover:bg-muted active:bg-muted"
-            title={fullscreen ? t('exitFullscreen') : t('enterFullscreen')}
-            aria-label={fullscreen ? t('exitFullscreen') : t('enterFullscreen')}
-          >
-            {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          </button>
+          {canToggleFullscreen && (
+            <button
+              type="button"
+              onClick={onToggleFullscreen}
+              className="touch-target shrink-0 rounded-lg border border-border bg-card px-3 text-muted-foreground transition-colors hover:bg-muted active:bg-muted"
+              title={fullscreen ? t('exitFullscreen') : t('enterFullscreen')}
+              aria-label={fullscreen ? t('exitFullscreen') : t('enterFullscreen')}
+            >
+              {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+          )}
         </div>
       </div>
 

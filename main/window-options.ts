@@ -137,6 +137,54 @@ export function computeDefaultWindowBounds(workArea: WindowRect): WindowRect {
   };
 }
 
+/** BrowserWindow minimum size, never larger than the display work area. */
+export function resolveMinimumWindowSize(workArea: WindowRect): { width: number; height: number } {
+  return {
+    width: Math.min(MAIN_WINDOW_MIN_WIDTH, workArea.width),
+    height: Math.min(MAIN_WINDOW_MIN_HEIGHT, workArea.height),
+  };
+}
+
+/** True when a windowed size would cover the display anyway, so the window stays maximized. */
+export function isCompactWorkArea(workArea: WindowRect): boolean {
+  const { width, height } = computeDefaultWindowBounds(workArea);
+  return (
+    width >= workArea.width * NEAR_MAXIMIZED_RATIO &&
+    height >= workArea.height * NEAR_MAXIMIZED_RATIO
+  );
+}
+
+export interface MainWindowState {
+  isMaximized: boolean;
+  isFullScreen: boolean;
+  canRestore: boolean;
+}
+
+export function getMainWindowState(
+  win: Pick<BrowserWindow, 'isMaximized' | 'isFullScreen'>,
+  workArea: WindowRect,
+): MainWindowState {
+  return {
+    isMaximized: win.isMaximized(),
+    isFullScreen: win.isFullScreen(),
+    canRestore: !isCompactWorkArea(workArea),
+  };
+}
+
+/** Clamps the minimum size to the display and keeps compact displays maximized. */
+export function syncMainWindowToDisplay(
+  win: Pick<
+    BrowserWindow,
+    'isDestroyed' | 'isMaximized' | 'isFullScreen' | 'maximize' | 'setMinimumSize'
+  >,
+  workArea: WindowRect,
+): void {
+  if (win.isDestroyed()) return;
+  const minimum = resolveMinimumWindowSize(workArea);
+  win.setMinimumSize(minimum.width, minimum.height);
+  if (isCompactWorkArea(workArea) && !win.isMaximized() && !win.isFullScreen()) win.maximize();
+}
+
 /**
  * Keeps a remembered windowed size when it is sensible on this display, clamped into the work
  * area; otherwise (missing, tiny, near-maximized or off this display) falls back to the default.
@@ -184,7 +232,10 @@ export type WindowControlTarget = Pick<
 export function applyWindowControlAction(
   win: WindowControlTarget,
   action: unknown,
-  resolveRestoredBounds?: () => WindowRect | null,
+  restore: {
+    canRestore?: () => boolean;
+    resolveRestoredBounds?: () => WindowRect | null;
+  } = {},
 ): { success: true } | { error: string } {
   if (action !== 'minimize' && action !== 'toggle-maximize' && action !== 'close') {
     return { error: 'Unsupported window action' };
@@ -201,8 +252,9 @@ export function applyWindowControlAction(
           win.unmaximize();
         }
       } else if (win.isMaximized()) {
+        if (restore.canRestore && !restore.canRestore()) break;
         // Resolve before unmaximizing so the display is the one the maximized window fills.
-        const restored = resolveRestoredBounds?.() ?? null;
+        const restored = restore.resolveRestoredBounds?.() ?? null;
         win.unmaximize();
         if (restored && typeof win.setBounds === 'function') win.setBounds(restored);
       } else {

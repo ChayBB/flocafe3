@@ -120,7 +120,10 @@ import {
   createMainWindow,
   createMainWindowWillNavigateHandler,
   fitWindowBounds,
+  getMainWindowState,
+  resolveMinimumWindowSize,
   resolveTitleBarMode,
+  syncMainWindowToDisplay,
   type TitleBarMode,
 } from './window-options';
 import { registerDirectUpdateIpcHandlers } from './update-ipc';
@@ -903,7 +906,9 @@ function createWindow(): void {
   }
   const initialIsDark = resolveInitialIsDark(themeMode, nativeTheme.shouldUseDarkColors);
   currentEffectiveIsDark = initialIsDark;
-  const initialBounds = computeDefaultWindowBounds(screen.getPrimaryDisplay().workArea);
+  const primaryWorkArea = screen.getPrimaryDisplay().workArea;
+  const initialBounds = computeDefaultWindowBounds(primaryWorkArea);
+  const minimumSize = resolveMinimumWindowSize(primaryWorkArea);
   const createdWindow = createMainWindow(
     BrowserWindow,
     path.join(__dirname, 'preload.js'),
@@ -913,6 +918,8 @@ function createWindow(): void {
     {
       width: initialBounds.width,
       height: initialBounds.height,
+      minWidth: minimumSize.width,
+      minHeight: minimumSize.height,
       // Hidden windows are throttled by Chromium; the native E2E harness still
       // needs live timers and WebSocket traffic from a window it never shows.
       ...(process.env.FLO_E2E_HIDDEN_WINDOW === '1'
@@ -922,11 +929,14 @@ function createWindow(): void {
   );
   mainWindow = createdWindow;
 
+  const currentWorkArea = () => screen.getDisplayMatching(createdWindow.getBounds()).workArea;
+
   mainWindow.once('ready-to-show', () => {
+    const workArea = currentWorkArea();
+    syncMainWindowToDisplay(createdWindow, workArea);
     // A remembered windowed size may not suit the display it reopens on.
     if (!createdWindow.isMaximized() && !createdWindow.isFullScreen()) {
-      const bounds = createdWindow.getBounds();
-      createdWindow.setBounds(fitWindowBounds(bounds, screen.getDisplayMatching(bounds).workArea));
+      createdWindow.setBounds(fitWindowBounds(createdWindow.getBounds(), workArea));
     }
     // The native E2E harness drives the app through Playwright from a window it
     // never shows, so it must not spawn DevTools on the developer's desktop.
@@ -1003,10 +1013,10 @@ function createWindow(): void {
   const sendWindowState = () => {
     if (!createdWindow || createdWindow.isDestroyed()) return;
     try {
-      createdWindow.webContents.send('window-state-changed', {
-        isMaximized: createdWindow.isMaximized(),
-        isFullScreen: createdWindow.isFullScreen(),
-      });
+      createdWindow.webContents.send(
+        'window-state-changed',
+        getMainWindowState(createdWindow, currentWorkArea()),
+      );
     } catch {
       // Ignored if webContents destroyed
     }
@@ -1016,6 +1026,19 @@ function createWindow(): void {
   createdWindow.on('unmaximize', sendWindowState);
   createdWindow.on('enter-full-screen', sendWindowState);
   createdWindow.on('leave-full-screen', sendWindowState);
+
+  const syncDisplay = () => {
+    if (createdWindow.isDestroyed()) return;
+    syncMainWindowToDisplay(createdWindow, currentWorkArea());
+    sendWindowState();
+  };
+  createdWindow.on('moved', syncDisplay);
+  screen.on('display-metrics-changed', syncDisplay);
+  screen.on('display-removed', syncDisplay);
+  createdWindow.once('closed', () => {
+    screen.removeListener('display-metrics-changed', syncDisplay);
+    screen.removeListener('display-removed', syncDisplay);
+  });
 
   mainWindow.on('close', (event) => {
     if (!isQuitting) {

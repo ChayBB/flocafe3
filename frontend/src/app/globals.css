@@ -203,9 +203,13 @@ body:has(.flo-title-bar__fallback-controls) .flo-title-bar__safe-area {
   color: var(--muted-foreground);
 }
 
-.flo-title-bar__fallback-button:hover {
+.flo-title-bar__fallback-button:hover:not(:disabled) {
   background: var(--accent);
   color: var(--accent-foreground);
+}
+
+.flo-title-bar__fallback-button:disabled {
+  opacity: 0.4;
 }
 
 .flo-title-bar__fallback-button--close:hover {

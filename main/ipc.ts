@@ -25,7 +25,13 @@ import {
 } from './services/restore-file-selection';
 import { runHealthCheck, applySafeFixes } from './services/schema-health';
 import { getStatus as getWhatsAppStatus, sanitizeLogText } from './services/whatsapp';
-import { createKdsWindow, applyWindowControlAction, fitWindowBounds } from './window-options';
+import {
+  createKdsWindow,
+  applyWindowControlAction,
+  fitWindowBounds,
+  getMainWindowState,
+  isCompactWorkArea,
+} from './window-options';
 import {
   isApplicationMenuSender,
   listApplicationMenuEntries,
@@ -465,9 +471,11 @@ export function registerIpcHandlers(
   handle('window-action', (event, action: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return { error: 'Window unavailable' };
-    return applyWindowControlAction(win, action, () =>
-      fitWindowBounds(win.getNormalBounds(), screen.getDisplayMatching(win.getBounds()).workArea),
-    );
+    const workArea = () => screen.getDisplayMatching(win.getBounds()).workArea;
+    return applyWindowControlAction(win, action, {
+      canRestore: () => !isCompactWorkArea(workArea()),
+      resolveRestoredBounds: () => fitWindowBounds(win.getNormalBounds(), workArea()),
+    });
   });
 
   // Application menu for the frameless Windows/Linux title bar. Electron does
@@ -505,11 +513,10 @@ export function registerIpcHandlers(
 
   handle('get-window-state', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win || win.isDestroyed()) return { isMaximized: false, isFullScreen: false };
-    return {
-      isMaximized: win.isMaximized(),
-      isFullScreen: win.isFullScreen(),
-    };
+    if (!win || win.isDestroyed()) {
+      return { isMaximized: false, isFullScreen: false, canRestore: true };
+    }
+    return getMainWindowState(win, screen.getDisplayMatching(win.getBounds()).workArea);
   });
 
   handle('window-ready', (event, payload: unknown) => {

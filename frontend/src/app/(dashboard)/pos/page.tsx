@@ -316,6 +316,7 @@ export default function POSPage() {
   } | null>(null);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [canRestoreWindow, setCanRestoreWindow] = useState(true);
   const [showPrintMenuModal, setShowPrintMenuModal] = useState(false);
 
   // Modal state
@@ -1053,6 +1054,7 @@ export default function POSPage() {
         .then((state) => {
           if (state && typeof state === 'object' && 'isMaximized' in state) {
             setFullscreen(Boolean(state.isMaximized || state.isFullScreen));
+            setCanRestoreWindow(state.canRestore !== false);
           }
         })
         .catch(() => {});
@@ -1060,6 +1062,7 @@ export default function POSPage() {
       if (window.electronAPI.onWindowStateChanged) {
         return window.electronAPI.onWindowStateChanged((state) => {
           setFullscreen(Boolean(state?.isMaximized || state?.isFullScreen));
+          setCanRestoreWindow(state?.canRestore !== false);
         });
       }
       return;
@@ -3961,6 +3964,7 @@ export default function POSPage() {
         canUseShift={canUseShift}
         onShowPrintMenu={() => setShowPrintMenuModal(true)}
         fullscreen={fullscreen}
+        canToggleFullscreen={!fullscreen || canRestoreWindow}
         onToggleFullscreen={toggleFullscreen}
         onCustomerModalOpenChange={setTopbarCustomerModalOpen}
         scheduledOrderCount={totalActiveScheduled}
