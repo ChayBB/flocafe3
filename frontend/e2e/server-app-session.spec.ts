@@ -1,4 +1,4 @@
-import { leaveStaffProfile, logoutServerApp, openServerAppTables } from './helpers/server-app';
+import { leaveStaffLanding, logoutServerApp, openServerAppTables } from './helpers/server-app';
 import { test, expect, Page } from '@playwright/test';
 import { E2E_SERVER_APP_BASE_URL } from './helpers/urls';
 import { E2E_PASSWORD, getE2eToken } from './helpers/test-auth';
@@ -61,8 +61,7 @@ test.describe('Server App session', () => {
     await page.getByPlaceholder('Staff code').fill('731');
     expect(attempts).toBe(0);
     await page.getByPlaceholder('Staff code').fill('7314');
-    await expect(page.getByTestId('server-app-staff-profile')).toContainText(name);
-    await leaveStaffProfile(page);
+    await leaveStaffLanding(page);
     await expect(page.getByTestId('server-app-staff-name')).toHaveText(name);
     await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
     expect(attempts).toBe(1);
@@ -172,8 +171,7 @@ test.describe('Server App session', () => {
     await submitLogin(page, name, '7318');
     await expect(page.getByTestId('server-app-table-qr-button')).toHaveCount(0);
     await submitLogin(page, name, '7319');
-    await expect(page.getByTestId('server-app-staff-profile')).toContainText(name);
-    await leaveStaffProfile(page);
+    await leaveStaffLanding(page);
     await expect(page.getByTestId('server-app-staff-name')).toContainText(name);
   });
 

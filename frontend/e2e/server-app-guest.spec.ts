@@ -392,9 +392,9 @@ test.describe('Server App guest from a table QR', () => {
 
     await page.getByTestId('server-app-login-button').click();
     await page.getByPlaceholder('Staff code').fill('4242');
-    const profile = page.getByTestId('server-app-staff-profile');
-    await expect(profile).toBeVisible();
-    await profile.getByRole('button', { name: 'Back', exact: true }).click();
+    const landing = page.getByTestId('service-menu');
+    await expect(landing.getByTestId('service-menu-staff')).toBeVisible();
+    await landing.getByTestId('service-menu-exit').click();
     await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
     await expect(html).toHaveClass(/(^|\s)dark(\s|$)/);
   });
@@ -462,6 +462,8 @@ test.describe('Server App guest from a table QR', () => {
     expect(await page.evaluate(() => localStorage.getItem('flocafe:server-app-token'))).toBeNull();
     await page.getByPlaceholder('Staff code').fill('4242');
 
+    await expect(service.getByRole('heading')).toHaveText('Other');
+    await service.getByTestId('service-menu-staff').click();
     const profile = page.getByTestId('server-app-staff-profile');
     await expect(profile.getByRole('heading', { name: 'Staff profile' })).toBeVisible();
     await expect(profile).toContainText('E2E server');

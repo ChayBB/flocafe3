@@ -39,6 +39,8 @@ export function ServerAppHeader({
   staffLoginLabel,
   staffName,
   onStaffProfile,
+  staffMenuOpen,
+  onStaffMenuClose,
   tablesExpanded,
   onShowTables,
   onHoldTables,
@@ -62,6 +64,8 @@ export function ServerAppHeader({
   staffLoginLabel: string;
   staffName?: string;
   onStaffProfile?: () => void;
+  staffMenuOpen?: boolean;
+  onStaffMenuClose?: () => void;
   tablesExpanded?: boolean;
   onShowTables?: () => void;
   /** Holding Select Table switches between the staff member's own and backup tables. */
@@ -162,7 +166,12 @@ export function ServerAppHeader({
                   className="size-[38px] shrink-0 rounded-full bg-white/85"
                 />
               )}
-              <ServiceMenu onStaffLogin={onStaffLogin}>
+              <ServiceMenu
+                onStaffLogin={onStaffLogin}
+                onStaffProfile={onStaffProfile}
+                staffMenuOpen={staffMenuOpen}
+                onStaffMenuClose={onStaffMenuClose}
+              >
                 <button
                   data-testid="server-app-header-grid-circle"
                   type="button"

@@ -73,14 +73,29 @@ function ServiceIllustration({ kind }: { kind: (typeof SERVICES)[number] }) {
 export function ServiceMenu({
   children,
   onStaffLogin,
+  onStaffProfile,
+  staffMenuOpen = false,
+  onStaffMenuClose,
 }: {
   children: ReactNode;
   onStaffLogin: () => void;
+  /** Signed-in staff open their profile from the Staff card instead of signing in again. */
+  onStaffProfile?: () => void;
+  /** Opens straight on the Other page, as staff land on it after signing in. */
+  staffMenuOpen?: boolean;
+  onStaffMenuClose?: () => void;
 }) {
   const t = useTranslations('serverApp');
   const tCommon = useTranslations('common');
-  const [open, setOpen] = useState(false);
-  const [other, setOther] = useState(false);
+  const [openState, setOpen] = useState(false);
+  const [otherState, setOther] = useState(false);
+  const open = openState || staffMenuOpen;
+  const other = otherState || staffMenuOpen;
+  const close = () => {
+    setOpen(false);
+    setOther(false);
+    onStaffMenuClose?.();
+  };
   const labels = {
     cutlery: t('serviceMenuCutlery'),
     condiments: t('serviceMenuCondiments'),
@@ -91,8 +106,8 @@ export function ServiceMenu({
     <Drawer
       open={open}
       onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setOther(false);
+        if (next) setOpen(true);
+        else close();
       }}
     >
       <DrawerTrigger asChild>{children}</DrawerTrigger>
@@ -104,7 +119,13 @@ export function ServiceMenu({
           {other && (
             <button
               type="button"
-              onClick={() => setOther(false)}
+              onClick={() => {
+                setOther(false);
+                if (staffMenuOpen) {
+                  setOpen(true);
+                  onStaffMenuClose?.();
+                }
+              }}
               aria-label={tCommon('back')}
               className="absolute start-4 top-6 rounded-full p-2 text-[#444444] focus-visible:outline-2 focus-visible:outline-brand"
             >
@@ -130,9 +151,8 @@ export function ServiceMenu({
                   data-testid="service-menu-staff"
                   className={`${CARD_STYLE} focus-visible:outline-2 focus-visible:outline-brand`}
                   onClick={() => {
-                    setOpen(false);
-                    setOther(false);
-                    onStaffLogin();
+                    close();
+                    (onStaffProfile ?? onStaffLogin)();
                   }}
                 >
                   <UserRound size={42} className="text-red-600" aria-hidden="true" />
@@ -150,10 +170,7 @@ export function ServiceMenu({
                 <button
                   type="button"
                   data-testid="service-menu-exit"
-                  onClick={() => {
-                    setOpen(false);
-                    setOther(false);
-                  }}
+                  onClick={close}
                   className="col-span-2 flex h-11 items-center justify-center self-start rounded-[12px] border border-[#F1F1F1] bg-white text-sm font-medium text-red-600 shadow-[0_2px_4px_rgba(0,0,0,0.18)] focus-visible:outline-2 focus-visible:outline-brand"
                 >
                   {t('serviceMenuExit')}
