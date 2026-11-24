@@ -16,6 +16,7 @@ import {
 import { columnsForReceiptPaperSize } from '@print/width';
 import { normalizePrinterTextSize, type PrinterTextSize } from '@print/text-size';
 import {
+  normalizeReceiptLogoDimensionMm,
   normalizeReceiptLogoOffsetMm,
   normalizeReceiptLogoSize,
   type ReceiptLogoSize,
@@ -72,16 +73,32 @@ export function escapeHtml(value: unknown): string {
 /** Render one kernel-annotated value with bidi-isolated LTR span when RTL. */
 
 /** Medium (the original size) caps the logo at 120px; slider scales grow that cap linearly. */
-function receiptLogoImgAttrs(logoSize: unknown, logoOffsetMm: unknown): string {
+function receiptLogoImgAttrs(
+  logoSize: unknown,
+  logoOffsetMm: unknown,
+  logoWidthMm: unknown,
+  logoHeightMm: unknown,
+): string {
   const size = normalizeReceiptLogoSize(logoSize);
+  const widthMm = normalizeReceiptLogoDimensionMm(logoWidthMm);
+  const heightMm = normalizeReceiptLogoDimensionMm(logoHeightMm);
   const styles: string[] = [];
-  if (typeof size === 'number') {
+  if (widthMm > 0 || heightMm > 0) {
+    styles.push(
+      'max-width: 100%',
+      'max-height: none',
+      `width: ${widthMm > 0 ? `${widthMm}mm` : 'auto'}`,
+      `height: ${heightMm > 0 ? `${heightMm}mm` : 'auto'}`,
+    );
+  } else if (typeof size === 'number') {
     styles.push('max-width: 100%', `max-height: ${Math.round(60 * size)}px`);
   }
   const offsetMm = normalizeReceiptLogoOffsetMm(logoOffsetMm);
   if (offsetMm !== 0) styles.push('position: relative', `left: ${offsetMm}mm`);
   const className =
-    typeof size === 'number' ? 'receipt-logo' : `receipt-logo receipt-logo--${size}`;
+    typeof size === 'number' || widthMm > 0 || heightMm > 0
+      ? 'receipt-logo'
+      : `receipt-logo receipt-logo--${size}`;
   return `class="${className}"${styles.length > 0 ? ` style="${styles.join('; ')}"` : ''}`;
 }
 function directionalValue(value: DirectionalText | null, base: TextDirection): string {
@@ -110,6 +127,8 @@ export interface WebPrintOptions {
   receiptLogoRaster?: string;
   receiptLogoSize?: ReceiptLogoSize;
   receiptLogoOffsetMm?: number;
+  receiptLogoWidthMm?: number;
+  receiptLogoHeightMm?: number;
   showTaxBreakdown?: boolean;
   showCustomerName?: boolean;
   showCustomerPhone?: boolean;
@@ -338,6 +357,8 @@ export function generateBillHtml(
     receiptLogoRaster,
     receiptLogoSize,
     receiptLogoOffsetMm,
+    receiptLogoWidthMm,
+    receiptLogoHeightMm,
     showTaxBreakdown = true,
     showCustomerName = true,
     showCustomerPhone = true,
@@ -366,6 +387,8 @@ export function generateBillHtml(
     receiptLogoRaster,
     receiptLogoSize,
     receiptLogoOffsetMm,
+    receiptLogoWidthMm,
+    receiptLogoHeightMm,
     showTaxBreakdown,
     showCustomerName,
     showCustomerPhone,
@@ -457,7 +480,7 @@ export function generateBillHtml(
     ${messages?.onlineOrderBanner ? `<div class="online-order-banner">${escapeHtml(messages.onlineOrderBanner.label.primary)}${messages.onlineOrderBanner.platform.text ? `<div class="online-order-detail">${escapeHtml(messages.onlineOrderBanner.platform.text)}</div>` : ''}${messages.onlineOrderBanner.externalOrderId.text ? `<div class="online-order-detail">#${escapeHtml(messages.onlineOrderBanner.externalOrderId.text)}</div>` : ''}</div>` : ''}
     <!-- Header -->
     <div class="header">
-      ${header?.logo && header.logo.startsWith('data:image/') ? `<div class="logo-container"><img ${receiptLogoImgAttrs(header.logoSize, header.logoOffsetMm)} src="${escapeHtml(header.logo)}" alt="Logo" /></div>` : ''}
+      ${header?.logo && header.logo.startsWith('data:image/') ? `<div class="logo-container"><img ${receiptLogoImgAttrs(header.logoSize, header.logoOffsetMm, header.logoWidthMm, header.logoHeightMm)} src="${escapeHtml(header.logo)}" alt="Logo" /></div>` : ''}
       ${header?.name ? `<h1>${escapeHtml(header.name.text)}</h1>` : ''}
       ${header?.address ? `<p>${escapeHtml(header.address.text).replace(/\n/g, '<br>')}</p>` : ''}
       ${header?.phone && header.phoneLabel ? `<p>${escapeHtml(header.phoneLabel.primary)}: ${directionalValue(header.phone, base)}</p>` : ''}

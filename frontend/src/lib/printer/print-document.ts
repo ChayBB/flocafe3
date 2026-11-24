@@ -58,6 +58,8 @@ export interface BillBusinessOptions {
   receiptLogoRaster?: string;
   receiptLogoSize?: ReceiptLogoSize;
   receiptLogoOffsetMm?: number;
+  receiptLogoWidthMm?: number;
+  receiptLogoHeightMm?: number;
   showCustomerName?: boolean;
   showCustomerPhone?: boolean;
   deliveryShowCustomerPhoneAlways?: boolean;
@@ -272,6 +274,8 @@ export function buildBillPrintData(bill: Bill, opts: BillBusinessOptions = {}): 
       receiptLogoRaster: opts.receiptLogoRaster,
       receiptLogoSize: opts.receiptLogoSize,
       receiptLogoOffsetMm: opts.receiptLogoOffsetMm,
+      receiptLogoWidthMm: opts.receiptLogoWidthMm,
+      receiptLogoHeightMm: opts.receiptLogoHeightMm,
       showName: opts.showBusinessName !== false,
       showAddress: !!opts.address,
       showPhone: !!opts.phone,

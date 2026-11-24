@@ -34,6 +34,7 @@ import type { DirectionSpec } from './direction';
 import { resolveDirectionSpec, resolveValueDirection } from './direction';
 import { graphemeSegments } from './width';
 import {
+  normalizeReceiptLogoDimensionMm,
   normalizeReceiptLogoOffsetMm,
   normalizeReceiptLogoSize,
   type ReceiptLogoSize,
@@ -202,6 +203,8 @@ export interface BusinessSnapshot {
   readonly receiptLogoRaster?: string;
   readonly receiptLogoSize?: ReceiptLogoSize;
   readonly receiptLogoOffsetMm?: number;
+  readonly receiptLogoWidthMm?: number;
+  readonly receiptLogoHeightMm?: number;
 }
 
 /**
@@ -269,6 +272,8 @@ export interface BusinessHeaderBlock {
   readonly logoRaster?: string | null;
   readonly logoSize?: ReceiptLogoSize;
   readonly logoOffsetMm?: number;
+  readonly logoWidthMm?: number;
+  readonly logoHeightMm?: number;
 }
 
 /** Invoice identity: title concept, number, canonical timestamp, table. */
@@ -617,6 +622,8 @@ export function buildBillDocument(printData: PrintData, printContext: PrintConte
       ? {
           logoSize: normalizeReceiptLogoSize(business.receiptLogoSize),
           logoOffsetMm: normalizeReceiptLogoOffsetMm(business.receiptLogoOffsetMm),
+          logoWidthMm: normalizeReceiptLogoDimensionMm(business.receiptLogoWidthMm),
+          logoHeightMm: normalizeReceiptLogoDimensionMm(business.receiptLogoHeightMm),
         }
       : {}),
     name: business.showName ? optionalDirectional(business.name, base) : null,

@@ -100,6 +100,9 @@ export interface ReceiptOptions {
   receiptLogoSize?: ReceiptLogoSize;
   /** Horizontal logo shift in mm; negative moves left */
   receiptLogoOffsetMm?: number;
+  /** Typed printed logo width / height in mm; 0 follows receiptLogoSize */
+  receiptLogoWidthMm?: number;
+  receiptLogoHeightMm?: number;
   /** Show the customer name when available. Default: true */
   showCustomerName?: boolean;
   /** Show the customer phone when available. Default: true */
@@ -428,6 +431,8 @@ function buildReceiptEnvironment(
     receiptLogoRaster: opts.receiptLogoRaster,
     receiptLogoSize: opts.receiptLogoSize,
     receiptLogoOffsetMm: opts.receiptLogoOffsetMm,
+    receiptLogoWidthMm: opts.receiptLogoWidthMm,
+    receiptLogoHeightMm: opts.receiptLogoHeightMm,
     showCustomerName: opts.showCustomerName,
     showCustomerPhone: opts.showCustomerPhone,
     deliveryShowCustomerPhoneAlways: opts.deliveryShowCustomerPhoneAlways,
@@ -698,6 +703,7 @@ export function buildClassicReceiptBytes(
       receiptLogoPrintScale(header?.logoSize),
       receiptLogoOffsetDots(header?.logoOffsetMm),
       receiptLogoScaleIsFractional(header?.logoSize),
+      { widthMm: header?.logoWidthMm, heightMm: header?.logoHeightMm },
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
@@ -1246,6 +1252,7 @@ export function buildCompactReceiptBytes(
       receiptLogoPrintScale(header?.logoSize),
       receiptLogoOffsetDots(header?.logoOffsetMm),
       receiptLogoScaleIsFractional(header?.logoSize),
+      { widthMm: header?.logoWidthMm, heightMm: header?.logoHeightMm },
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));

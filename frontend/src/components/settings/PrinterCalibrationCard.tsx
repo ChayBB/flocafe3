@@ -1,18 +1,19 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ChevronDown, Printer } from 'lucide-react';
+import { ChevronDown, Link2, Link2Off, Printer } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import {
   parseReceiptLogoData,
   RECEIPT_LOGO_OFFSET_LIMIT_MM,
   RECEIPT_LOGO_OFFSET_STEP_MM,
   DEFAULT_RECEIPT_LOGO_SIZE,
-  RECEIPT_LOGO_SCALE_MAX,
-  RECEIPT_LOGO_SCALE_MIN,
-  RECEIPT_LOGO_SCALE_STEP,
+  normalizeReceiptLogoDimensionMm,
+  RECEIPT_LOGO_DIMENSION_MAX_MM,
+  RECEIPT_LOGO_DIMENSION_MIN_MM,
+  RECEIPT_LOGO_DIMENSION_STEP_MM,
+  receiptLogoBoxDots,
   receiptLogoPrintedWidthDots,
-  receiptLogoPrintScale,
   type ReceiptLogoSize,
 } from '@print/image-raster';
 import { getThermalPreviewDataUrl } from '@/lib/printer/logo-processor';
@@ -34,6 +35,9 @@ type Props = {
   onLogoSizeChange: (size: ReceiptLogoSize) => void;
   logoOffsetMm: number;
   onLogoOffsetChange: (offsetMm: number) => void;
+  logoWidthMm: number;
+  logoHeightMm: number;
+  onLogoDimensionsChange: (widthMm: number, heightMm: number) => void;
 };
 
 export function paperMmForProfile(profileId: string): number {
@@ -42,18 +46,82 @@ export function paperMmForProfile(profileId: string): number {
   return 80;
 }
 
-function printedLogoWidthMm(
+function printableWidthDots(paperMm: number): number {
+  return paperMm <= 58 ? 384 : 576;
+}
+
+function printedLogoMm(
   rasterJson: string,
   paperMm: number,
   size: ReceiptLogoSize,
-): number | null {
+  widthMm: number,
+  heightMm: number,
+): { widthMm: number; heightMm: number } | null {
   const parsed = rasterJson ? parseReceiptLogoData(rasterJson) : null;
   if (!parsed) return null;
-  const targetDots = paperMm <= 58 ? 384 : 576;
+  const targetDots = printableWidthDots(paperMm);
   const variant =
     parsed.variants[String(targetDots)] ?? parsed.variants['576'] ?? parsed.variants['384'];
   if (!variant) return null;
-  return receiptLogoPrintedWidthDots(variant.width, targetDots, size) / DOTS_PER_MM;
+  const box = receiptLogoBoxDots(variant.width, variant.height, targetDots, { widthMm, heightMm });
+  if (box) return { widthMm: box.width / DOTS_PER_MM, heightMm: box.height / DOTS_PER_MM };
+  const width = receiptLogoPrintedWidthDots(variant.width, targetDots, size);
+  return {
+    widthMm: width / DOTS_PER_MM,
+    heightMm: Math.round((variant.height * width) / variant.width) / DOTS_PER_MM,
+  };
+}
+
+function formatMm(value: number): string {
+  return String(Math.round(value * 10) / 10);
+}
+
+function DimensionInput({
+  id,
+  label,
+  valueMm,
+  maxMm,
+  disabled,
+  onCommit,
+}: {
+  id: string;
+  label: string;
+  valueMm: number | null;
+  maxMm: number;
+  disabled: boolean;
+  onCommit: (valueMm: number) => void;
+}) {
+  const commit = (raw: string) => {
+    const normalized = normalizeReceiptLogoDimensionMm(raw);
+    if (normalized > 0) onCommit(Math.min(normalized, maxMm));
+  };
+  return (
+    <label htmlFor={id} className="flex flex-1 flex-col gap-1">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <span className="flex items-center rounded-md border border-border focus-within:border-brand">
+        <input
+          key={valueMm ?? 'none'}
+          id={id}
+          type="number"
+          inputMode="decimal"
+          min={RECEIPT_LOGO_DIMENSION_MIN_MM}
+          max={maxMm}
+          step={RECEIPT_LOGO_DIMENSION_STEP_MM}
+          defaultValue={valueMm === null ? '' : formatMm(valueMm)}
+          disabled={disabled}
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit(e.currentTarget.value);
+          }}
+          className="w-full min-w-0 rounded-md border-0 bg-transparent px-3 py-1.5 text-sm font-semibold text-foreground focus:ring-0 disabled:cursor-not-allowed"
+          dir="ltr"
+        />
+        <span className="pe-3 text-xs text-muted-foreground" dir="ltr">
+          mm
+        </span>
+      </span>
+    </label>
+  );
 }
 
 function columnsFromPaperWidth(paperWidth: string): number {
@@ -73,6 +141,9 @@ export function PrinterCalibrationCard({
   onLogoSizeChange,
   logoOffsetMm,
   onLogoOffsetChange,
+  logoWidthMm: typedLogoWidthMm,
+  logoHeightMm: typedLogoHeightMm,
+  onLogoDimensionsChange,
 }: Props) {
   const t = useTranslations('settings');
   const paperMm = paperMmForProfile(profileId);
@@ -92,15 +163,45 @@ export function PrinterCalibrationCard({
     () => getThermalPreviewDataUrl(receiptLogoRaster),
     [receiptLogoRaster],
   );
-  const logoWidthMm = printedLogoWidthMm(receiptLogoRaster, paperMm, logoSize);
-  const logoWidthPct =
-    logoWidthMm === null ? null : Math.min(100, (logoWidthMm / clampedPrintWidth) * 100);
+  const printedLogo = printedLogoMm(
+    receiptLogoRaster,
+    paperMm,
+    logoSize,
+    typedLogoWidthMm,
+    typedLogoHeightMm,
+  );
+  const logoWidthMm = printedLogo?.widthMm ?? null;
+  const logoMaxWidthMm = printableWidthDots(paperMm) / DOTS_PER_MM;
+  const [aspectLocked, setAspectLocked] = useState(
+    !(typedLogoWidthMm > 0 && typedLogoHeightMm > 0),
+  );
+  const logoCustomized =
+    typedLogoWidthMm > 0 || typedLogoHeightMm > 0 || logoSize !== DEFAULT_RECEIPT_LOGO_SIZE;
   const logoShiftLimitMm = logoWidthMm === null ? 0 : Math.max(0, (paperMm - logoWidthMm) / 2);
   const logoShiftMm = Math.min(logoShiftLimitMm, Math.max(-logoShiftLimitMm, logoOffsetMm));
   const logoShiftOwnPct =
     logoWidthMm === null || logoWidthMm === 0 ? 0 : (logoShiftMm / logoWidthMm) * 100;
   const logoEditable = logoSizeEditable && showLogo;
-  const logoScale = receiptLogoPrintScale(logoSize);
+  const commitLogoWidth = (widthMm: number) =>
+    onLogoDimensionsChange(widthMm, aspectLocked ? 0 : (printedLogo?.heightMm ?? 0));
+  const commitLogoHeight = (heightMm: number) =>
+    onLogoDimensionsChange(
+      aspectLocked ? 0 : Math.min(printedLogo?.widthMm ?? 0, logoMaxWidthMm),
+      heightMm,
+    );
+  const toggleAspectLock = () => {
+    if (printedLogo) {
+      if (aspectLocked) {
+        onLogoDimensionsChange(
+          normalizeReceiptLogoDimensionMm(printedLogo.widthMm),
+          normalizeReceiptLogoDimensionMm(printedLogo.heightMm),
+        );
+      } else {
+        onLogoDimensionsChange(normalizeReceiptLogoDimensionMm(printedLogo.widthMm), 0);
+      }
+    }
+    setAspectLocked((locked) => !locked);
+  };
 
   return (
     <div
@@ -150,47 +251,59 @@ export function PrinterCalibrationCard({
 
           <div>
             <div className="mb-1 flex items-center justify-between gap-3">
-              <label htmlFor="printer-calibration-logo-size" className="flex flex-col">
+              <span className="flex flex-col">
                 <span className="text-foreground">{t('logoSize')}</span>
                 <span className="text-[11px] text-muted-foreground">
-                  {showLogo ? t('logoSizeHint') : t('printerCalibrationLogoOffHint')}
-                </span>
-              </label>
-              <span className="flex shrink-0 items-center gap-2">
-                {logoSize !== DEFAULT_RECEIPT_LOGO_SIZE && logoEditable && (
-                  <button
-                    type="button"
-                    onClick={() => onLogoSizeChange(DEFAULT_RECEIPT_LOGO_SIZE)}
-                    className="rounded-full px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
-                  >
-                    {t('logoSizeReset')}
-                  </button>
-                )}
-                <span className="font-semibold text-foreground" dir="ltr">
-                  ×{logoScale.toFixed(1)}
-                  {logoWidthMm !== null && (
-                    <span className="ms-1 text-xs font-normal text-muted-foreground">
-                      ({logoWidthMm.toFixed(0)} mm)
-                    </span>
-                  )}
+                  {showLogo
+                    ? t('logoSizeHint', { mm: formatMm(logoMaxWidthMm) })
+                    : t('printerCalibrationLogoOffHint')}
                 </span>
               </span>
+              {logoCustomized && logoEditable && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLogoDimensionsChange(0, 0);
+                    onLogoSizeChange(DEFAULT_RECEIPT_LOGO_SIZE);
+                    setAspectLocked(true);
+                  }}
+                  className="shrink-0 rounded-full px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+                >
+                  {t('logoSizeReset')}
+                </button>
+              )}
             </div>
-            <input
-              id="printer-calibration-logo-size"
-              type="range"
-              min={RECEIPT_LOGO_SCALE_MIN}
-              max={RECEIPT_LOGO_SCALE_MAX}
-              step={RECEIPT_LOGO_SCALE_STEP}
-              value={logoScale}
-              disabled={!logoEditable}
-              onChange={(e) => onLogoSizeChange(Number(e.target.value))}
-              className="w-full accent-brand disabled:opacity-50"
-              dir="ltr"
-            />
-            <div className="flex justify-between text-[11px] text-muted-foreground" dir="ltr">
-              <span>{t('logoSizeSmaller')}</span>
-              <span>{t('logoSizeLarger')}</span>
+            <div className="flex items-end gap-2" dir="ltr">
+              <DimensionInput
+                id="printer-calibration-logo-width"
+                label={t('logoWidth')}
+                valueMm={printedLogo?.widthMm ?? null}
+                maxMm={logoMaxWidthMm}
+                disabled={!logoEditable || !printedLogo}
+                onCommit={commitLogoWidth}
+              />
+              <span className="pb-2 text-muted-foreground">×</span>
+              <DimensionInput
+                id="printer-calibration-logo-height"
+                label={t('logoHeight')}
+                valueMm={printedLogo?.heightMm ?? null}
+                maxMm={RECEIPT_LOGO_DIMENSION_MAX_MM}
+                disabled={!logoEditable || !printedLogo}
+                onCommit={commitLogoHeight}
+              />
+              <button
+                type="button"
+                onClick={toggleAspectLock}
+                disabled={!logoEditable || !printedLogo}
+                aria-pressed={aspectLocked}
+                title={t('logoAspectLock')}
+                aria-label={t('logoAspectLock')}
+                className={`mb-0.5 rounded-md p-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  aspectLocked ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {aspectLocked ? <Link2 size={16} /> : <Link2Off size={16} />}
+              </button>
             </div>
           </div>
 
@@ -325,12 +438,17 @@ export function PrinterCalibrationCard({
                   dir="ltr"
                 >
                   <div className="border-b-2 border-dashed border-neutral-400 py-2 text-center">
-                    {showLogo && logoPreviewUrl && logoWidthPct !== null && (
+                    {showLogo && logoPreviewUrl && printedLogo && (
                       <img
                         src={logoPreviewUrl}
                         alt=""
-                        className="mx-auto mb-1 block h-auto transition-all"
-                        style={{ width: `${logoWidthPct}%`, translate: `${logoShiftOwnPct}% 0` }}
+                        className="mx-auto mb-1 block transition-all"
+                        style={{
+                          width: `${printedLogo.widthMm}mm`,
+                          height: `${printedLogo.heightMm}mm`,
+                          maxWidth: 'none',
+                          translate: `${logoShiftOwnPct}% 0`,
+                        }}
                         data-testid="printer-calibration-logo"
                       />
                     )}

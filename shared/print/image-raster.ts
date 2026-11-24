@@ -117,6 +117,69 @@ export function receiptLogoOffsetDots(offsetMm: unknown): number {
   return Math.round(normalizeReceiptLogoOffsetMm(offsetMm) * RECEIPT_LOGO_DOTS_PER_MM);
 }
 
+export const RECEIPT_LOGO_DIMENSION_MIN_MM = 5;
+export const RECEIPT_LOGO_DIMENSION_MAX_MM = 100;
+export const RECEIPT_LOGO_DIMENSION_STEP_MM = 0.5;
+
+/** Typed logo width or height in mm; 0 means automatic (follow the size setting or aspect ratio). */
+export function normalizeReceiptLogoDimensionMm(value: unknown): number {
+  const parsed = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof parsed !== 'number' || !Number.isFinite(parsed) || parsed <= 0) return 0;
+  const clamped = Math.min(
+    RECEIPT_LOGO_DIMENSION_MAX_MM,
+    Math.max(RECEIPT_LOGO_DIMENSION_MIN_MM, parsed),
+  );
+  return Math.round(clamped / RECEIPT_LOGO_DIMENSION_STEP_MM) * RECEIPT_LOGO_DIMENSION_STEP_MM;
+}
+
+export function isReceiptLogoDimensionMm(value: unknown): value is number {
+  if (value === 0) return true;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+  const steps = value / RECEIPT_LOGO_DIMENSION_STEP_MM;
+  return (
+    value >= RECEIPT_LOGO_DIMENSION_MIN_MM &&
+    value <= RECEIPT_LOGO_DIMENSION_MAX_MM &&
+    Math.abs(steps - Math.round(steps)) < 1e-9
+  );
+}
+
+export interface ReceiptLogoBoxMm {
+  readonly widthMm?: unknown;
+  readonly heightMm?: unknown;
+}
+
+/**
+ * Exact printed logo size in dots from typed mm values. One value keeps the aspect ratio, two
+ * values set both sides; width never exceeds the paper. Null when neither value is set.
+ */
+export function receiptLogoBoxDots(
+  variantWidth: number,
+  variantHeight: number,
+  targetWidthDots: number,
+  box: ReceiptLogoBoxMm,
+): { width: number; height: number } | null {
+  const widthDots = Math.round(
+    normalizeReceiptLogoDimensionMm(box.widthMm) * RECEIPT_LOGO_DOTS_PER_MM,
+  );
+  const heightDots = Math.round(
+    normalizeReceiptLogoDimensionMm(box.heightMm) * RECEIPT_LOGO_DOTS_PER_MM,
+  );
+  if (widthDots === 0 && heightDots === 0) return null;
+  if (widthDots > 0 && heightDots > 0) {
+    return { width: Math.min(widthDots, targetWidthDots), height: heightDots };
+  }
+  if (widthDots > 0) {
+    const width = Math.min(widthDots, targetWidthDots);
+    return { width, height: Math.max(1, Math.round((variantHeight * width) / variantWidth)) };
+  }
+  const width = Math.round((variantWidth * heightDots) / variantHeight);
+  if (width <= targetWidthDots) return { width: Math.max(1, width), height: heightDots };
+  return {
+    width: targetWidthDots,
+    height: Math.max(1, Math.round((variantHeight * targetWidthDots) / variantWidth)),
+  };
+}
+
 export interface PackedLogoVariant {
   readonly width: number;
   readonly height: number;
@@ -454,6 +517,7 @@ export function getLogoRasterBands(
   scale = 1,
   offsetDots = 0,
   fractional = false,
+  box?: ReceiptLogoBoxMm,
 ): RasterBand[] {
   if (
     !storedLogoData ||
@@ -503,7 +567,14 @@ export function getLogoRasterBands(
     let width: number;
     let height: number;
     let unpacked: Uint8Array;
-    if (fractional) {
+    const boxDots = box
+      ? receiptLogoBoxDots(variant.width, variant.height, targetWidthDots, box)
+      : null;
+    if (boxDots) {
+      width = boxDots.width;
+      height = boxDots.height;
+      unpacked = resamplePixels(source, variant.width, variant.height, width, height);
+    } else if (fractional) {
       width = receiptLogoPrintedWidthDots(variant.width, targetWidthDots, scale);
       height = Math.max(1, Math.round((variant.height * width) / variant.width));
       unpacked = resamplePixels(source, variant.width, variant.height, width, height);

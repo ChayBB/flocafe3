@@ -715,6 +715,58 @@ async function run() {
     );
   }
 
+  console.log('--- 3c3. Typed logo width x height ---');
+  const boxHeight = (bands: { heightDots: number }[]) =>
+    bands.reduce((sum, band) => sum + band.heightDots, 0);
+  const widthOnly = getLogoRasterBands(sizeLogoJson, 384, 200, 2, 0, false, { widthMm: 20 });
+  assertEqualOrThrow(bandInkColumns(widthOnly), 160, '20 mm width prints 160 dots wide');
+  assertEqualOrThrow(boxHeight(widthOnly), 100, 'width-only keeps the aspect ratio');
+  const heightOnly = getLogoRasterBands(sizeLogoJson, 384, 200, 2, 0, false, { heightMm: 10 });
+  assertEqualOrThrow(boxHeight(heightOnly), 80, '10 mm height prints 80 dots tall');
+  assertEqualOrThrow(bandInkColumns(heightOnly), 128, 'height-only keeps the aspect ratio');
+  const both = getLogoRasterBands(sizeLogoJson, 384, 200, 2, 0, false, {
+    widthMm: 30,
+    heightMm: 10,
+  });
+  assertEqualOrThrow(bandInkColumns(both), 240, 'typed width is exact');
+  assertEqualOrThrow(boxHeight(both), 80, 'typed height is exact');
+  const tooWide = getLogoRasterBands(sizeLogoJson, 384, 200, 2, 0, false, { widthMm: 100 });
+  assertEqualOrThrow(bandInkColumns(tooWide), 384, 'typed width clamps to 58mm printable width');
+  assertEqualOrThrow(boxHeight(tooWide), 240, 'clamped typed width keeps the aspect ratio');
+  const tooTall = getLogoRasterBands(sizeLogoJson, 384, 200, 2, 0, false, { heightMm: 100 });
+  assertEqualOrThrow(bandInkColumns(tooTall), 384, 'tall height-only logo stops at paper width');
+  for (const template of ['classic', 'compact'] as const) {
+    const typedReceipt = (box: Record<string, string>) =>
+      formatReceipt(
+        dummyOrder,
+        dummyBill,
+        {
+          name: 'Flo Cafe',
+          country: 'US',
+          currency: 'USD',
+          show_logo: true,
+          receipt_logo: logoUrl,
+          receipt_logo_raster: sizeLogoJson,
+          show_name: true,
+          ...box,
+        },
+        template,
+        32,
+      );
+    assertEqualOrThrow(
+      gsV0Heights(typedReceipt({ receipt_logo_width_mm: '20' })).totalHeight,
+      100,
+      `${template}: typed width reaches the printer`,
+    );
+    assertEqualOrThrow(
+      Buffer.from(
+        typedReceipt({ receipt_logo_width_mm: '0', receipt_logo_height_mm: '0' }),
+      ).toString('hex'),
+      Buffer.from(sizedReceipt(template)).toString('hex'),
+      `${template}: zero width and height print like a shop with no typed size`,
+    );
+  }
+
   console.log('--- 3d. Logo offset setting ---');
   assertEqualOrThrow(receiptLogoOffsetDots(undefined), 0, 'unset offset is centred');
   assertEqualOrThrow(receiptLogoOffsetDots(2.5), 20, '2.5 mm is 20 dots');
@@ -1179,6 +1231,24 @@ async function run() {
     assertEqualOrThrow(scaleRes.status, 200, 'logo slider scale saves');
     const afterScale = await api(baseUrl, '/api/settings/printing', { headers: authHeaders });
     assertEqualOrThrow(afterScale.data.bill_logo_size, 1.7, 'logo slider scale reloads');
+    assertEqualOrThrow(afterScale.data.bill_logo_width_mm, 0, 'typed logo width defaults to 0');
+    for (const badWidth of [4, 30.3, 101, '30']) {
+      const badWidthRes = await api(baseUrl, '/api/settings/printing', {
+        method: 'PUT',
+        headers: authHeaders,
+        body: { ...printingBody, bill_logo_width_mm: badWidth },
+      });
+      assertEqualOrThrow(badWidthRes.status, 400, `typed logo width ${badWidth} is rejected`);
+    }
+    const typedRes = await api(baseUrl, '/api/settings/printing', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: { ...printingBody, bill_logo_width_mm: 30.5, bill_logo_height_mm: 12 },
+    });
+    assertEqualOrThrow(typedRes.status, 200, 'typed logo width and height save');
+    const afterTyped = await api(baseUrl, '/api/settings/printing', { headers: authHeaders });
+    assertEqualOrThrow(afterTyped.data.bill_logo_width_mm, 30.5, 'typed logo width reloads');
+    assertEqualOrThrow(afterTyped.data.bill_logo_height_mm, 12, 'typed logo height reloads');
 
     // Update bill_show_logo toggle via PUT /api/settings/printing
     const toggleRes = await api(baseUrl, '/api/settings/printing', {

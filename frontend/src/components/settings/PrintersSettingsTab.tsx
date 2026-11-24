@@ -107,6 +107,8 @@ export type PrintingForm = {
   billShowLogo: boolean;
   billLogoSize: ReceiptLogoSize;
   billLogoOffsetMm: number;
+  billLogoWidthMm: number;
+  billLogoHeightMm: number;
   billShowName: boolean;
   billShowAddress: boolean;
   billShowPhone: boolean;
@@ -1039,6 +1041,18 @@ export function PrintersSettingsTab({
                   if (!canEditPrintingOptions) return;
                   markHydrationTouched('billLogoOffsetMm');
                   setPrintingForm((previous) => ({ ...previous, billLogoOffsetMm }));
+                }}
+                logoWidthMm={printingForm.billLogoWidthMm}
+                logoHeightMm={printingForm.billLogoHeightMm}
+                onLogoDimensionsChange={(billLogoWidthMm, billLogoHeightMm) => {
+                  if (!canEditPrintingOptions) return;
+                  markHydrationTouched('billLogoWidthMm');
+                  markHydrationTouched('billLogoHeightMm');
+                  setPrintingForm((previous) => ({
+                    ...previous,
+                    billLogoWidthMm,
+                    billLogoHeightMm,
+                  }));
                 }}
               />
 

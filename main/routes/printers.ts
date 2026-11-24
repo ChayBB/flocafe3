@@ -1394,6 +1394,8 @@ router.post(
         receipt_logo_raster: settings.receipt_logo_raster || '',
         receipt_logo_size: settings.bill_logo_size || '',
         receipt_logo_offset_mm: settings.bill_logo_offset_mm || '',
+        receipt_logo_width_mm: settings.bill_logo_width_mm || '',
+        receipt_logo_height_mm: settings.bill_logo_height_mm || '',
         footer_note: settings.bill_footer_message || '',
       };
       const billTemplate = settings.bill_template;

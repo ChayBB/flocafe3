@@ -264,6 +264,7 @@ export function renderBillDocumentToCompactLines(
       receiptLogoPrintScale(header?.logoSize),
       receiptLogoOffsetDots(header?.logoOffsetMm),
       receiptLogoScaleIsFractional(header?.logoSize),
+      { widthMm: header?.logoWidthMm, heightMm: header?.logoHeightMm },
     );
     if (bands.length > 0) {
       const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));

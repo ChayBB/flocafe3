@@ -30,6 +30,7 @@ import type {
 } from '@print/types';
 import {
   isReceiptLogoSize,
+  normalizeReceiptLogoDimensionMm,
   normalizeReceiptLogoOffsetMm,
   normalizeReceiptLogoSize,
   shouldAutoEnableBillShowLogo,
@@ -1834,6 +1835,8 @@ export default function SettingsPage() {
     billShowLogo: posSettings.billShowLogo,
     billLogoSize: posSettings.billLogoSize,
     billLogoOffsetMm: posSettings.billLogoOffsetMm,
+    billLogoWidthMm: posSettings.billLogoWidthMm,
+    billLogoHeightMm: posSettings.billLogoHeightMm,
     billShowName: posSettings.billShowName,
     billShowAddress: posSettings.billShowAddress,
     billShowPhone: posSettings.billShowPhone,
@@ -1939,6 +1942,8 @@ export default function SettingsPage() {
         bill_show_logo: formSnapshot.billShowLogo,
         bill_logo_size: formSnapshot.billLogoSize,
         bill_logo_offset_mm: formSnapshot.billLogoOffsetMm,
+        bill_logo_width_mm: formSnapshot.billLogoWidthMm,
+        bill_logo_height_mm: formSnapshot.billLogoHeightMm,
         bill_show_name: formSnapshot.billShowName,
         bill_show_address: formSnapshot.billShowAddress,
         bill_show_phone: formSnapshot.billShowPhone,
@@ -1971,6 +1976,10 @@ export default function SettingsPage() {
       posSettings.setBillShowLogo(formSnapshot.billShowLogo);
       posSettings.setBillLogoSize(formSnapshot.billLogoSize);
       posSettings.setBillLogoOffsetMm(formSnapshot.billLogoOffsetMm);
+      posSettings.setBillLogoDimensionsMm(
+        formSnapshot.billLogoWidthMm,
+        formSnapshot.billLogoHeightMm,
+      );
       posSettings.setBillShowName(formSnapshot.billShowName);
       posSettings.setBillShowAddress(formSnapshot.billShowAddress);
       posSettings.setBillShowPhone(formSnapshot.billShowPhone);
@@ -2325,6 +2334,8 @@ export default function SettingsPage() {
         billShowLogo: d.bill_show_logo === true,
         billLogoSize: normalizeReceiptLogoSize(d.bill_logo_size),
         billLogoOffsetMm: normalizeReceiptLogoOffsetMm(d.bill_logo_offset_mm),
+        billLogoWidthMm: normalizeReceiptLogoDimensionMm(d.bill_logo_width_mm),
+        billLogoHeightMm: normalizeReceiptLogoDimensionMm(d.bill_logo_height_mm),
         billShowName: d.bill_show_name !== false,
         billShowAddress: d.bill_show_address !== false,
         billShowPhone: d.bill_show_phone !== false,
@@ -2681,6 +2692,8 @@ export default function SettingsPage() {
           billShowLogo: d.bill_show_logo === true,
           billLogoSize: normalizeReceiptLogoSize(d.bill_logo_size),
           billLogoOffsetMm: normalizeReceiptLogoOffsetMm(d.bill_logo_offset_mm),
+          billLogoWidthMm: normalizeReceiptLogoDimensionMm(d.bill_logo_width_mm),
+          billLogoHeightMm: normalizeReceiptLogoDimensionMm(d.bill_logo_height_mm),
           billShowName: d.bill_show_name !== false,
           billShowAddress: d.bill_show_address !== false,
           billShowPhone: d.bill_show_phone !== false,
@@ -2898,6 +2911,18 @@ export default function SettingsPage() {
         const billLogoOffsetMm = normalizeReceiptLogoOffsetMm(printingPayload.bill_logo_offset_mm);
         posSettings.setBillLogoOffsetMm(billLogoOffsetMm);
         printingPatch.billLogoOffsetMm = billLogoOffsetMm;
+      }
+      if (
+        printingPayload.bill_logo_width_mm !== undefined ||
+        printingPayload.bill_logo_height_mm !== undefined
+      ) {
+        const billLogoWidthMm = normalizeReceiptLogoDimensionMm(printingPayload.bill_logo_width_mm);
+        const billLogoHeightMm = normalizeReceiptLogoDimensionMm(
+          printingPayload.bill_logo_height_mm,
+        );
+        posSettings.setBillLogoDimensionsMm(billLogoWidthMm, billLogoHeightMm);
+        printingPatch.billLogoWidthMm = billLogoWidthMm;
+        printingPatch.billLogoHeightMm = billLogoHeightMm;
       }
       if (typeof printingPayload.cash_drawer_pulse_enabled === 'boolean') {
         printingPatch.cashDrawerPulseEnabled = printingPayload.cash_drawer_pulse_enabled;

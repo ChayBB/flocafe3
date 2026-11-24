@@ -24,6 +24,7 @@ import {
 } from '../../shared/print/raster';
 import {
   getLogoRasterBands,
+  normalizeReceiptLogoDimensionMm,
   normalizeReceiptLogoOffsetMm,
   normalizeReceiptLogoSize,
   receiptLogoOffsetDots,
@@ -244,6 +245,8 @@ export function buildBillPrintData(
         typeof business?.receipt_logo_raster === 'string' ? business.receipt_logo_raster : '',
       receiptLogoSize: normalizeReceiptLogoSize(business?.receipt_logo_size),
       receiptLogoOffsetMm: normalizeReceiptLogoOffsetMm(business?.receipt_logo_offset_mm),
+      receiptLogoWidthMm: normalizeReceiptLogoDimensionMm(business?.receipt_logo_width_mm),
+      receiptLogoHeightMm: normalizeReceiptLogoDimensionMm(business?.receipt_logo_height_mm),
     },
   };
 }
@@ -591,6 +594,7 @@ export function renderBillDocumentToClassicLines(
             receiptLogoPrintScale(block.logoSize),
             receiptLogoOffsetDots(block.logoOffsetMm),
             receiptLogoScaleIsFractional(block.logoSize),
+            { widthMm: block.logoWidthMm, heightMm: block.logoHeightMm },
           );
           if (bands.length > 0) {
             const rawBytes = concatBytes(bands.map((band) => encodeGsV0Band(band, maxBandHeight)));
