@@ -440,17 +440,17 @@ test.describe('Server App guest from a table QR', () => {
     await expect(menu).toContainText('วันนี้ต้องการรับบริการด้านใดดีค่ะ');
     const cards = menu.getByTestId('service-menu-card');
     await expect(cards).toHaveCount(4);
-    for (const card of await cards.all()) {
-      expect((await card.boundingBox())?.width).toBeCloseTo(116, 2);
-      expect((await card.boundingBox())?.height).toBeCloseTo(116, 2);
-    }
-    const grid = menu.getByTestId('service-menu-grid');
-    expect(
-      await grid.evaluate(
-        (element) => getComputedStyle(element).gridTemplateRows.split(' ').length,
-      ),
-    ).toBe(8);
-    expect((await grid.boundingBox())?.height).toBeCloseTo(1040, 2);
+    await expect(cards.first()).toContainText('ขอช้อนส้อม');
+    await expect(cards.first()).toContainText('Request Cutlery');
+    await expect(cards.nth(3)).toContainText('Services & Privileges');
+    const [left, right] = await Promise.all([
+      cards.nth(0).boundingBox(),
+      cards.nth(1).boundingBox(),
+    ]);
+    expect(left?.y).toBeCloseTo(right?.y ?? -1, 0);
+    expect(left!.width).toBeGreaterThan(140);
+    await expect(menu.getByText('แตะแถบสีเทา', { exact: false })).toHaveCount(0);
+    await expect(menu.locator('[data-testid="service-menu-staff-taps"] span').first()).toBeHidden();
     await menu.screenshot({ path: test.info().outputPath('service-menu-thai.png') });
     await page.keyboard.press('Escape');
     await expect(menu).toBeHidden();
@@ -463,7 +463,7 @@ test.describe('Server App guest from a table QR', () => {
       'Request cutlery',
       'Request condiments',
       'Refill drink',
-      'Other',
+      'Services & Privileges',
     ]);
     await page.keyboard.press('Escape');
     await expect(menu).toBeHidden();
@@ -482,9 +482,8 @@ test.describe('Server App guest from a table QR', () => {
     const staffCode = page.getByPlaceholder('Staff code');
     const staffArea = service.getByTestId('service-menu-staff-area');
     await page.getByTestId('server-app-header-grid-circle').click();
-    await expect(service).toContainText(
-      'Tap the grey bar above 3 times within 1.5 seconds, or hold it for 3 seconds',
-    );
+    await expect(service).not.toContainText('Tap the grey bar');
+    await expect(taps).toHaveCount(0);
 
     await handle.hover();
     await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
@@ -539,26 +538,26 @@ test.describe('Server App guest from a table QR', () => {
     await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
     await page.getByTestId('server-app-header-grid-circle').click();
     const service = page.getByTestId('service-menu');
-    await service.getByRole('button', { name: 'Other', exact: true }).click();
-    await expect(service.getByRole('heading')).toHaveText('Other');
-    const staffTile = service.getByTestId('service-menu-staff');
-    const leaveTile = service.getByTestId('service-menu-leave');
-    await expect(leaveTile).toBeDisabled();
-    const staffBox = (await staffTile.boundingBox())!;
-    const leaveBox = (await leaveTile.boundingBox())!;
-    expect(leaveBox.x).toBeGreaterThan(staffBox.x);
-    expect(leaveBox.y).toBeCloseTo(staffBox.y, 1);
-    const exit = service.getByTestId('service-menu-exit');
-    expect((await exit.boundingBox())!.y).toBeGreaterThan(staffBox.y + staffBox.height);
-    await service.screenshot({ path: test.info().outputPath('other-staff-leave-exit.png') });
-    await exit.click();
-    await expect(service).toBeHidden();
-    await page.getByTestId('server-app-header-grid-circle').click();
-    await service.getByRole('button', { name: 'Other', exact: true }).click();
+    await service.getByRole('button', { name: 'Services & Privileges', exact: true }).click();
+    await expect(service.getByRole('heading')).toHaveText('Services & Privileges');
+    await expect(service.getByTestId('service-menu-privilege')).toHaveText([
+      'Sign upComing soon',
+      'Reward pointsComing soon',
+      'PromotionsComing soon',
+      'Coupons & discountsComing soon',
+      'VIP membershipComing soon',
+    ]);
+    await expect(service.getByTestId('service-menu-staff')).toHaveCount(0);
+    await expect(service.getByTestId('service-menu-leave')).toHaveCount(0);
+    await expect(service.getByTestId('service-menu-exit')).toHaveCount(0);
+    await service.screenshot({ path: test.info().outputPath('services-and-privileges.png') });
     await service.getByRole('button', { name: 'Back', exact: true }).click();
     await expect(service.getByTestId('service-menu-card')).toHaveCount(4);
-    await service.getByRole('button', { name: 'Other', exact: true }).click();
-    await service.getByTestId('service-menu-staff').click();
+    const handle = service.getByTestId('service-menu-staff-handle');
+    await handle.click();
+    await handle.click();
+    await handle.click();
+    await service.getByTestId('service-menu-staff-area').click();
     await expect(service).toHaveCount(0);
     const rejectedLogin = page.waitForResponse(
       (response) =>

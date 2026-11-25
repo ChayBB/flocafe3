@@ -75,7 +75,7 @@ async function openServiceMenu(page: Page) {
   await page.goto(`${origin}/#table=${TABLE}`);
   await page.getByTestId('server-app-header-grid-circle').click();
   const menu = page.getByTestId('service-menu');
-  await expect(menu).toContainText('แตะแถบสีเทาด้านบน 3 ครั้งภายใน 1.5 วินาที หรือกดค้าง 3 วินาที');
+  await expect(menu).not.toContainText('แตะแถบสีเทา');
   await menu.screenshot({ path: test.info().outputPath('cloud-service-menu.png') });
   return menu.getByTestId('service-menu-staff-handle');
 }

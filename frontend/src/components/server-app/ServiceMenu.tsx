@@ -1,8 +1,18 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { ArrowLeft, CalendarDays, ChevronRight, UserRound } from 'lucide-react';
-import { useTranslations } from 'use-intl';
+import {
+  ArrowLeft,
+  BadgePercent,
+  ChevronRight,
+  Coins,
+  Crown,
+  Ticket,
+  UserPlus,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react';
+import { useLocale, useTranslations } from 'use-intl';
 import {
   Drawer,
   DrawerContent,
@@ -15,57 +25,92 @@ import { useStaffEntryGesture } from '@/hooks/useStaffEntryGesture';
 import { STAFF_ENTRY_TAPS } from '@/lib/staff-entry-gesture';
 
 const CARD_STYLE =
-  'flex flex-col items-center justify-center gap-1 rounded-[12px] border border-[#F1F1F1] bg-white p-2 text-center text-[10px] leading-4 shadow-[0_2px_4px_rgba(0,0,0,0.18)]';
+  'flex min-h-28 flex-col items-center justify-center gap-1.5 rounded-2xl border border-[#F1F1F1] bg-white p-3 text-center text-[15px] leading-snug text-[#222222] shadow-[0_2px_4px_rgba(0,0,0,0.12)]';
+
+const PRIVILEGES: {
+  key:
+    | 'serviceMenuMemberSignup'
+    | 'serviceMenuPoints'
+    | 'serviceMenuPromotions'
+    | 'serviceMenuCoupons'
+    | 'serviceMenuVip';
+  icon: LucideIcon;
+  color: string;
+}[] = [
+  { key: 'serviceMenuMemberSignup', icon: UserPlus, color: 'text-[#2F80ED]' },
+  { key: 'serviceMenuPoints', icon: Coins, color: 'text-[#F2A007]' },
+  { key: 'serviceMenuPromotions', icon: BadgePercent, color: 'text-[#EB5757]' },
+  { key: 'serviceMenuCoupons', icon: Ticket, color: 'text-[#27AE60]' },
+  { key: 'serviceMenuVip', icon: Crown, color: 'text-[#9B51E0]' },
+];
 
 const SERVICES = ['cutlery', 'condiments', 'drink', 'other'] as const;
 
+// White cards with the same type as the menu's dish names.
+const SERVICE_CARD =
+  'flex min-h-36 flex-col items-center justify-end gap-1 rounded-2xl border border-[#F1F1F1] bg-white px-2 pt-4 pb-3 text-center shadow-[0_2px_4px_rgba(0,0,0,0.12)]';
+
+// The bilingual subtitle is part of the card design, so it stays English under the Thai title.
+const SERVICE_SUBTITLE = {
+  cutlery: 'Request Cutlery',
+  condiments: 'Request Condiments',
+  drink: 'Refill Drinks',
+  other: 'Services & Privileges',
+} as const;
+
 function ServiceIllustration({ kind }: { kind: (typeof SERVICES)[number] }) {
   return (
-    <svg viewBox="0 0 48 48" className="size-12" aria-hidden="true">
+    <svg viewBox="0 0 48 48" className="size-14" aria-hidden="true">
       {kind === 'cutlery' && (
         <>
           <path
-            d="M9 5v10q0 6 6 6t6-6V5M15 5v15"
+            d="M18 9q-2-2 0-4t0-4M24 9q-2-2 0-4t0-4M30 9q-2-2 0-4t0-4"
             fill="none"
-            stroke="#C5D5E1"
-            strokeWidth="3"
+            stroke="#F08A24"
+            strokeWidth="1.8"
             strokeLinecap="round"
           />
-          <rect x="12" y="23" width="6" height="21" rx="3" fill="#FF784C" />
-          <ellipse cx="33" cy="12" rx="7" ry="10" fill="#C5D5E1" />
-          <rect x="30" y="23" width="6" height="21" rx="3" fill="#FF784C" />
+          <circle cx="24" cy="15" r="2.5" fill="#F5A524" />
+          <path d="M6 34a18 18 0 0 1 36 0Z" fill="#F7B733" />
+          <path
+            d="M11 27a14 14 0 0 1 8-8"
+            fill="none"
+            stroke="#FFE08A"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          />
+          <rect x="3" y="34" width="42" height="5" rx="2.5" fill="#F08A24" />
         </>
       )}
       {kind === 'condiments' && (
         <>
-          <path d="m8 15 3-8h4l3 8v26H8Z" fill="#F34E50" />
-          <rect x="10" y="4" width="6" height="5" rx="1" fill="#D52D31" />
-          <path d="m21 18 3-12h4l3 12v23H21Z" fill="#FFC332" />
-          <rect x="24" y="3" width="4" height="5" fill="#EBA31B" />
-          <path d="m33 16 3-11h4l3 11v25H33Z" fill="#F99818" />
-          <path d="m36 5 2-5 2 5" fill="#E85618" />
-          <path d="M11 24h4M24 27h4M36 24h4M24 31h4" stroke="#A44B26" strokeWidth="2" />
+          <rect x="11" y="3" width="6" height="5" rx="1" fill="#C62828" />
+          <path d="M10 8h8l3 7v27a3 3 0 0 1-3 3h-8a3 3 0 0 1-3-3V15Z" fill="#F4511E" />
+          <rect x="31" y="3" width="6" height="5" rx="1" fill="#E69500" />
+          <path d="M30 8h8l3 7v27a3 3 0 0 1-3 3h-8a3 3 0 0 1-3-3V15Z" fill="#FFC107" />
+          <path d="M10 20h8M30 20h8" stroke="#FFFFFF" strokeOpacity="0.5" strokeWidth="2" />
         </>
       )}
       {kind === 'drink' && (
         <>
-          <path d="M17 4h20l-3 36H20Z" fill="#E6F9FF" />
-          <path d="M36 13h8v13q0 7-9 7" fill="none" stroke="#9BE9FF" strokeWidth="3" />
-          <path d="M20 23h14l-1 14H21Z" fill="#64DDF8" />
-          <path d="M5 25h14v18H5Z" fill="#71E3FB" />
-          <path d="M7 29h10v12H7Z" fill="#2FCBF1" />
+          <path d="M21 6h17l-2 6v28a4 4 0 0 1-4 4H23a4 4 0 0 1-4-4V12Z" fill="#7FD3F7" />
+          <path
+            d="M36 15h4a5 5 0 0 1 5 5v6a5 5 0 0 1-5 5h-4"
+            fill="none"
+            stroke="#4FB8E8"
+            strokeWidth="3"
+          />
+          <path d="M20 22h16v18a3 3 0 0 1-3 3H23a3 3 0 0 1-3-3Z" fill="#3DA9DF" />
+          <path d="M3 25h14l-1.5 18a2 2 0 0 1-2 2H6.5a2 2 0 0 1-2-2Z" fill="#B9E6FA" />
+          <path d="M4 31h12l-1 12H5Z" fill="#4FB8E8" />
         </>
       )}
       {kind === 'other' && (
         <>
-          <path d="M7 22V17a17 17 0 0 1 34 0v5" fill="#48556B" />
-          <ellipse cx="24" cy="20" rx="14" ry="15" fill="#FFE0D5" />
-          <path d="M9 14Q17 3 36 15V8H11Z" fill="#48556B" />
-          <path d="M9 46V35q15-9 30 0v11" fill="#DCE4ED" />
-          <path d="m20 34 4 3 4-3v9l-4-3-4 3Z" fill="#F06170" />
-          <path d="M17 18v3M29 18v3" stroke="#48556B" strokeWidth="2" strokeLinecap="round" />
-          <path d="M32 30a7 7 0 0 1 14 0Z" fill="#969FB4" />
-          <path d="M31 32h16" stroke="#737F96" strokeWidth="2" strokeLinecap="round" />
+          <circle cx="24" cy="24" r="17" fill="#FFFFFF" stroke="#F0645A" strokeWidth="2.5" />
+          <circle cx="17" cy="24" r="2.5" fill="#F0645A" />
+          <circle cx="24" cy="24" r="2.5" fill="#F0645A" />
+          <circle cx="31" cy="24" r="2.5" fill="#F0645A" />
         </>
       )}
     </svg>
@@ -81,6 +126,7 @@ export function ServiceMenu({
 }) {
   const t = useTranslations('serverApp');
   const tCommon = useTranslations('common');
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [other, setOther] = useState(false);
   const [staffUnlocked, setStaffUnlocked] = useState(false);
@@ -132,6 +178,7 @@ export function ServiceMenu({
             className={`pointer-events-none h-1.5 w-[100px] rounded-full transition-colors ${staffUnlocked ? 'bg-brand' : 'bg-[#B5B5B5]'}`}
           />
         </button>
+        {/* Each count appears only once its tap lands, so guests see no hint of the staff entry. */}
         <div
           data-testid="service-menu-staff-taps"
           aria-hidden="true"
@@ -141,15 +188,12 @@ export function ServiceMenu({
             <span
               key={i}
               data-active={staffUnlocked || i < staffGesture.tapCount ? 'true' : undefined}
-              className="flex size-7 items-center justify-center rounded-full bg-[#FFF1E8] text-xs font-semibold text-brand data-[active=true]:bg-brand data-[active=true]:text-white"
+              className="invisible flex size-7 items-center justify-center rounded-full bg-brand text-xs font-semibold text-white data-[active=true]:visible"
             >
               {i + 1}
             </span>
           ))}
         </div>
-        <p className="mt-1.5 shrink-0 px-4 text-center text-[11px] leading-4 text-[#626B7C]">
-          {t('serviceMenuStaffGestureHint')}
-        </p>
         <DrawerHeader className="shrink-0 items-center gap-1 px-4 pb-5 pt-2 text-center">
           {other && (
             <button
@@ -169,59 +213,53 @@ export function ServiceMenu({
           </DrawerDescription>
         </DrawerHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8">
-          <div
-            data-testid="service-menu-grid"
-            className="grid grid-cols-[repeat(2,116px)] grid-rows-[repeat(8,116px)] justify-center gap-4"
-          >
+          <div data-testid="service-menu-grid" className="grid grid-cols-2 content-start gap-4">
             {other ? (
               <>
-                <button
-                  type="button"
-                  data-testid="service-menu-staff"
-                  className={`${CARD_STYLE} focus-visible:outline-2 focus-visible:outline-brand`}
-                  onClick={enterStaff}
-                >
-                  <UserRound size={42} className="text-red-600" aria-hidden="true" />
-                  <span>{t('staffButton')}</span>
-                </button>
-                <button
-                  type="button"
-                  disabled
-                  data-testid="service-menu-leave"
-                  className={`${CARD_STYLE} cursor-not-allowed`}
-                >
-                  <CalendarDays size={42} className="text-slate-400" aria-hidden="true" />
-                  <span>{t('serviceMenuLeaveRequest')}</span>
-                </button>
-                <button
-                  type="button"
-                  data-testid="service-menu-exit"
-                  onClick={close}
-                  className="col-span-2 flex h-11 items-center justify-center self-start rounded-[12px] border border-[#F1F1F1] bg-white text-sm font-medium text-red-600 shadow-[0_2px_4px_rgba(0,0,0,0.18)] focus-visible:outline-2 focus-visible:outline-brand"
-                >
-                  {t('serviceMenuExit')}
-                </button>
+                {PRIVILEGES.map(({ key, icon: Icon, color }, index) => (
+                  <button
+                    key={key}
+                    type="button"
+                    disabled
+                    data-testid="service-menu-privilege"
+                    className={`${CARD_STYLE} cursor-not-allowed ${index === PRIVILEGES.length - 1 ? 'col-span-2' : ''}`}
+                  >
+                    <Icon size={34} strokeWidth={1.8} className={color} aria-hidden="true" />
+                    <span>{t(key)}</span>
+                    <span className="text-[11px] leading-4 text-[#9CA3AF]">
+                      {t('serviceMenuComingSoon')}
+                    </span>
+                  </button>
+                ))}
               </>
             ) : (
               SERVICES.map((kind) => {
                 const content = (
                   <>
                     <ServiceIllustration kind={kind} />
-                    <span>{labels[kind]}</span>
+                    <span className="text-[15px] leading-snug font-normal text-[#222222]">
+                      {labels[kind]}
+                    </span>
+                    {locale !== 'en' && (
+                      <span lang="en" className="max-w-full truncate text-[13px] text-[#6B7280]">
+                        {SERVICE_SUBTITLE[kind]}
+                      </span>
+                    )}
                   </>
                 );
+                const cardClass = SERVICE_CARD;
                 return kind === 'other' ? (
                   <button
                     key={kind}
                     type="button"
                     data-testid="service-menu-card"
                     onClick={() => setOther(true)}
-                    className={`${CARD_STYLE} focus-visible:outline-2 focus-visible:outline-brand`}
+                    className={`${cardClass} focus-visible:outline-2 focus-visible:outline-brand`}
                   >
                     {content}
                   </button>
                 ) : (
-                  <div key={kind} data-testid="service-menu-card" className={CARD_STYLE}>
+                  <div key={kind} data-testid="service-menu-card" className={cardClass}>
                     {content}
                   </div>
                 );
