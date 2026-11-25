@@ -51,7 +51,9 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     const card = page.getByTestId('table-staff-assignment');
     await expect(card).toContainText('Table Staff Assignment');
     await expect(card).toContainText('Assignment mode');
-    await expect(page.getByTestId('table-staff-assignment-status')).toHaveText('Off');
+    await expect(page.getByTestId('table-staff-assignment-status')).toHaveText(
+      'Managed by manager',
+    );
     await expect(page.getByTestId('staff-assignment-mode-manual')).toHaveAttribute(
       'aria-checked',
       'true',
@@ -234,7 +236,7 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     await page.getByTestId('staff-assignment-confirm-run').click();
     expect((await modeResponse).ok()).toBeTruthy();
     await expect(page.getByText(/Tables assigned for today/)).toBeVisible();
-    await expect(page.getByTestId('table-staff-assignment-status')).toHaveText('Enabled');
+    await expect(page.getByTestId('table-staff-assignment-status')).toHaveText('Rotate daily');
     await expect(page.getByTestId(`staff-roster-edit-${second.id}`)).toHaveCount(0);
     let stored = await (
       await page.request.get(`${BASE}/api/tables/owner-assignment`, { headers: authHeaders })

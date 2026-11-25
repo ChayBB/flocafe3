@@ -276,16 +276,17 @@ export default function TableStaffAssignment() {
         </div>
         <span
           data-testid="table-staff-assignment-status"
-          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
-            automatic
-              ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300'
-              : 'bg-muted text-muted-foreground'
-          }`}
+          className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-300"
         >
-          <span
-            className={`w-2 h-2 rounded-full ${automatic ? 'bg-green-500' : 'bg-muted-foreground'}`}
-          />
-          {automatic ? t('staffAssignmentEnabled') : t('staffAssignmentDisabled')}
+          <span className="w-2 h-2 rounded-full bg-green-500" />
+          {
+            {
+              manual: t('staffAssignmentManual'),
+              staff_managed: t('staffAssignmentStaffManaged'),
+              rotate_daily: t('staffAssignmentRotate'),
+              shuffle_interval: t('staffAssignmentStatusShuffle', { days: saved.shuffle_days }),
+            }[saved.mode]
+          }
         </span>
       </div>
 
