@@ -229,6 +229,23 @@ function writeStaffDark(dark: boolean) {
 
 const subscribeToNothing = () => () => {};
 
+/** The Cloud QR table page that sent a guest device to the staff area, if the link names one. */
+function cloudReturnUrl(): string | null {
+  const raw = new URLSearchParams(window.location.search).get('return');
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return ['http:', 'https:'].includes(url.protocol) &&
+      !url.username &&
+      !url.password &&
+      url.pathname === '/'
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // Tablets and computers: the current ticket sits beside the menu.
 const WIDE_QUERY = '(min-width: 768px)';
 function subscribeToWide(onChange: () => void) {
@@ -406,6 +423,7 @@ export default function ServerStandalonePage() {
     () => new URLSearchParams(window.location.search).get('staff') === 'area',
     () => false,
   );
+  const staffReturnUrl = useSyncExternalStore(subscribeToNothing, cloudReturnUrl, () => null);
   useEffect(() => {
     document.documentElement.classList.add('theme-server-app');
     return () => document.documentElement.classList.remove('theme-server-app');
@@ -2516,6 +2534,16 @@ export default function ServerStandalonePage() {
               className="mt-3 w-full text-center text-sm font-medium text-muted-foreground underline"
             >
               {user ? tCommon('cancel') : t('continueAsGuest')}
+            </button>
+          )}
+          {!user && staffReturnUrl && (
+            <button
+              type="button"
+              data-testid="server-app-login-exit"
+              onClick={() => window.location.assign(staffReturnUrl)}
+              className="mt-3 h-11 w-full rounded-lg border border-border bg-card font-semibold text-foreground"
+            >
+              {t('serviceMenuExit')}
             </button>
           )}
         </form>

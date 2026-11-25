@@ -87,7 +87,9 @@ test('three quick taps on the grey bar unlock the staff area', async ({ page }) 
   await expect(page).toHaveURL(new RegExp(`^${origin}/`));
   await handle.click();
   await page.getByTestId('service-menu-staff-area').click();
-  await expect(page).toHaveURL(`${STAFF_URL}?staff=area`);
+  await expect(page).toHaveURL(
+    `${STAFF_URL}?${new URLSearchParams({ staff: 'area', return: `${origin}/#table=${TABLE}` })}`,
+  );
 });
 
 test('only a three-second hold on the grey bar unlocks the staff area', async ({ page }) => {
@@ -103,5 +105,5 @@ test('only a three-second hold on the grey bar unlocks the staff area', async ({
   await page.waitForTimeout(3300);
   await page.mouse.up();
   await staffArea.click();
-  await expect(page).toHaveURL(`${STAFF_URL}?staff=area`);
+  await expect(page).toHaveURL((url) => url.href.startsWith(`${STAFF_URL}?staff=area&return=`));
 });

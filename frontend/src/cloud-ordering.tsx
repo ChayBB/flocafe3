@@ -248,6 +248,7 @@ function SentStatus({ status }: { status: string }) {
 function staffAreaUrl(address: string) {
   const url = new URL(address);
   url.searchParams.set('staff', 'area');
+  url.searchParams.set('return', tableLink() ?? `${location.origin}/`);
   return url.href;
 }
 
