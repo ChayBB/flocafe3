@@ -52,6 +52,7 @@ import {
   type TableOwnerAssignmentMode,
   REZONE_SKIP_MAX_LENGTH,
   saveRezoneSkip,
+  shuffleTableStaffNow,
 } from '../services/table-owner-rotation';
 
 const router = Router();
@@ -804,6 +805,31 @@ router.put('/staff-roster', requirePermission('tables.manage'), (req: Request, r
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+router.post(
+  '/owner-assignment/shuffle',
+  requirePermission('tables.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const db = getDatabase();
+      const actorUserId = (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
+      const result = shuffleTableStaffNow(db, actorUserId);
+      if (!result) {
+        return res
+          .status(409)
+          .json({ code: 'NO_PRESENT_STAFF', error: 'No staff are marked as working today' });
+      }
+      res.json({
+        ...result.roster,
+        store_timezone: storeTimezone(db),
+        changes: result.changes.length,
+      });
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 router.put('/rezone-skip', requirePermission('tables.manage'), (req: Request, res: Response) => {
   try {

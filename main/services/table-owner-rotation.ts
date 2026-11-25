@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { getDatabase, now } from '../db';
 import { GUEST_USER_ID } from '../lib/guest-order';
 import { currentBusinessDate } from './attendance';
@@ -734,6 +735,31 @@ export function updateTableOwnerAssignmentSettings(
     });
   })();
   return { ...readTableOwnerAssignmentSettings(db), changes: changes.length };
+}
+
+/** A manager's one-off shuffle: today's present staff get a fresh random split, whatever the mode. */
+export function shuffleTableStaffNow(
+  db: Db,
+  actorUserId: string,
+  businessDate = currentBusinessDate(db),
+): { roster: TableStaffRoster; changes: TableAssignmentChange[] } | null {
+  const plan = plannedOwners(
+    db,
+    businessDate,
+    'shuffle_interval',
+    `${businessDate}:${randomUUID()}`,
+  );
+  if (!plan) return null;
+  const changes = db.transaction(() =>
+    activeTablesInOrder(db).flatMap((table) =>
+      setTableStaff(db, table, plan.get(table.id) ?? { owner: null, backup: null }, {
+        action: 'shuffle_now',
+        actorUserId,
+        businessDate,
+      }),
+    ),
+  )();
+  return { roster: readTableStaffRoster(db, businessDate), changes };
 }
 
 /** Saves today's attendance and service table count; automatic modes reassign straight away. */

@@ -61,8 +61,11 @@ export default function TableStaffAssignment() {
   const [present, setPresent] = useState<Set<string>>(() => new Set());
   const [tableCount, setTableCount] = useState('');
   const [saving, setSaving] = useState(false);
-  const [editingFor, setEditingFor] = useState<{ id: string; name: string } | null>(null);
-  const [confirmMode, setConfirmMode] = useState<AssignmentMode | null>(null);
+  const [editingFor, setEditingFor] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [confirmMode, setConfirmMode] = useState<AssignmentMode | 'shuffle_now' | null>(null);
   const [backupSaving, setBackupSaving] = useState(false);
   const [skipSaved, setSkipSaved] = useState('');
   const [skipDraft, setSkipDraft] = useState('');
@@ -220,17 +223,32 @@ export default function TableStaffAssignment() {
     }
   };
 
-  const chooseMode = (value: AssignmentMode) => {
-    if (saving) return;
-    if (value === saved.mode) {
-      setMode(value);
-      return;
+  const requestSave = () => {
+    if (mode !== saved.mode && isAutomatic(mode)) setConfirmMode(mode);
+    else void save();
+  };
+
+  const shuffleNow = async () => {
+    setConfirmMode(null);
+    setSaving(true);
+    try {
+      if (rosterDirty) {
+        const { data } = await api.put<StaffRoster>('/tables/staff-roster', {
+          present_user_ids: [...present],
+          table_count: parsedTables === roster.table_count_default ? null : parsedTables,
+        });
+        applyRoster(data);
+      }
+      const { data } = await api.post<StaffRoster & { changes: number }>(
+        '/tables/owner-assignment/shuffle',
+      );
+      applyRoster(data);
+      toast.success(t('staffAssignmentApplied', { count: data.changes }));
+    } catch {
+      toast.error(t('staffAssignmentShuffleFailed'));
+    } finally {
+      setSaving(false);
     }
-    if (!isAutomatic(value)) {
-      void switchMode(value);
-      return;
-    }
-    setConfirmMode(value);
   };
 
   const save = async () => {
@@ -313,7 +331,9 @@ export default function TableStaffAssignment() {
                 manual: t('staffAssignmentManual'),
                 staff_managed: t('staffAssignmentStaffManaged'),
                 rotate_daily: t('staffAssignmentRotate'),
-                shuffle_interval: t('staffAssignmentStatusShuffle', { days: saved.shuffle_days }),
+                shuffle_interval: t('staffAssignmentStatusShuffle', {
+                  days: saved.shuffle_days,
+                }),
               }[saved.mode]
             }
           </span>
@@ -332,7 +352,10 @@ export default function TableStaffAssignment() {
           <div className="mt-1 mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
             <span>{t('staffRosterSubtitle')}</span>
             <span data-testid="staff-roster-count">
-              {t('staffRosterCount', { present: present.size, total: roster.staff.length })}
+              {t('staffRosterCount', {
+                present: present.size,
+                total: roster.staff.length,
+              })}
             </span>
           </div>
           <div className="mb-3 flex items-center justify-between gap-2">
@@ -399,7 +422,9 @@ export default function TableStaffAssignment() {
                         type="button"
                         onClick={() => setEditingFor({ id: member.id, name: member.name })}
                         data-testid={`staff-roster-edit-${member.id}`}
-                        aria-label={t('staffTablesEditFor', { name: member.name })}
+                        aria-label={t('staffTablesEditFor', {
+                          name: member.name,
+                        })}
                         title={t('staffTablesEdit')}
                         className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
                       >
@@ -464,7 +489,9 @@ export default function TableStaffAssignment() {
               <p className="mt-1 text-xs text-muted-foreground">{t('staffRosterTablesHint')}</p>
               {!tablesValid && roster.table_count_default > 0 && (
                 <p className="mt-1 text-xs text-red-600">
-                  {t('staffRosterTablesInvalid', { max: roster.table_count_default })}
+                  {t('staffRosterTablesInvalid', {
+                    max: roster.table_count_default,
+                  })}
                 </p>
               )}
             </div>
@@ -560,9 +587,21 @@ export default function TableStaffAssignment() {
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
               {[
-                { value: staffCount, label: t('staffRosterStaffUnit'), id: 'staff' },
-                { value: servedTables, label: t('staffRosterTablesUnit'), id: 'tables' },
-                { value: average, label: t('staffRosterAverageUnit'), id: 'average' },
+                {
+                  value: staffCount,
+                  label: t('staffRosterStaffUnit'),
+                  id: 'staff',
+                },
+                {
+                  value: servedTables,
+                  label: t('staffRosterTablesUnit'),
+                  id: 'tables',
+                },
+                {
+                  value: average,
+                  label: t('staffRosterAverageUnit'),
+                  id: 'average',
+                },
               ].map((figure) => (
                 <div key={figure.id} className="rounded-lg bg-card p-3">
                   <div
@@ -579,7 +618,10 @@ export default function TableStaffAssignment() {
               {staffCount === 0
                 ? t('staffRosterSplitNobody')
                 : extra === 0
-                  ? t('staffRosterSplitEven', { staff: staffCount, tables: base })
+                  ? t('staffRosterSplitEven', {
+                      staff: staffCount,
+                      tables: base,
+                    })
                   : t('staffRosterSplit', {
                       lowStaff: staffCount - extra,
                       lowTables: base,
@@ -604,67 +646,67 @@ export default function TableStaffAssignment() {
         <h3 className="text-sm font-semibold text-foreground mb-3">
           {t('staffAssignmentModeHeading')}
         </h3>
-        <div className="space-y-3" role="radiogroup" aria-label={t('staffAssignmentModeHeading')}>
-          {options.map(({ value, icon: Icon, title, description }) => {
+        <div
+          className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+          role="radiogroup"
+          aria-label={t('staffAssignmentModeHeading')}
+        >
+          {options.map(({ value, icon: Icon, title }) => {
             const selected = mode === value;
             return (
-              <div
+              <button
                 key={value}
-                className={`rounded-xl border transition-colors ${
-                  selected ? 'border-brand bg-brand/5' : 'border-border hover:bg-muted/50'
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                data-testid={`staff-assignment-mode-${value}`}
+                onClick={() => !saving && setMode(value)}
+                className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-start text-sm font-semibold transition-colors ${
+                  selected
+                    ? 'border-brand bg-brand/5 text-foreground'
+                    : 'border-border text-muted-foreground hover:bg-muted/50'
                 }`}
               >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  data-testid={`staff-assignment-mode-${value}`}
-                  onClick={() => chooseMode(value)}
-                  className="w-full flex items-center gap-3 p-4 text-start"
+                <span
+                  className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
+                    selected ? 'border-brand' : 'border-border'
+                  }`}
                 >
-                  <span
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
-                      selected ? 'bg-brand text-white' : 'bg-muted text-muted-foreground'
-                    }`}
-                  >
-                    <Icon size={18} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-foreground">{title}</span>
-                    <span className="block text-xs text-muted-foreground">{description}</span>
-                  </span>
-                  <span
-                    className={`h-4 w-4 shrink-0 rounded-full border-2 ${
-                      selected ? 'border-brand bg-brand' : 'border-border'
-                    }`}
-                  />
-                </button>
-                {value === 'shuffle_interval' && selected && (
-                  <label className="flex items-center gap-2 px-4 pb-4 text-sm text-foreground">
-                    {t('staffAssignmentShuffleEvery')}
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={SHUFFLE_DAYS_MIN}
-                      max={SHUFFLE_DAYS_MAX}
-                      step={1}
-                      value={days}
-                      onChange={(event) => setDays(event.target.value)}
-                      data-testid="staff-assignment-shuffle-days"
-                      aria-invalid={!daysValid}
-                      className="w-20 rounded-lg border border-border bg-background px-2 py-1 text-sm"
-                    />
-                    {t('staffAssignmentDays')}
-                  </label>
-                )}
-              </div>
+                  {selected && <span className="size-2 rounded-full bg-brand" />}
+                </span>
+                <Icon size={16} className="shrink-0" aria-hidden="true" />
+                <span className="min-w-0">{title}</span>
+              </button>
             );
           })}
         </div>
-
+        <p className="mt-2 text-xs text-muted-foreground">
+          {options.find((option) => option.value === mode)?.description}
+        </p>
+        {mode === 'shuffle_interval' && (
+          <label className="mt-3 flex items-center gap-2 text-sm text-foreground">
+            {t('staffAssignmentShuffleEvery')}
+            <input
+              type="number"
+              inputMode="numeric"
+              min={SHUFFLE_DAYS_MIN}
+              max={SHUFFLE_DAYS_MAX}
+              step={1}
+              value={days}
+              onChange={(event) => setDays(event.target.value)}
+              data-testid="staff-assignment-shuffle-days"
+              aria-invalid={!daysValid}
+              className="w-20 rounded-lg border border-border bg-background px-2 py-1 text-sm"
+            />
+            {t('staffAssignmentDays')}
+          </label>
+        )}
         {mode === 'shuffle_interval' && !daysValid && (
           <p className="mt-2 text-xs text-red-600">
-            {t('staffAssignmentDaysInvalid', { min: SHUFFLE_DAYS_MIN, max: SHUFFLE_DAYS_MAX })}
+            {t('staffAssignmentDaysInvalid', {
+              min: SHUFFLE_DAYS_MIN,
+              max: SHUFFLE_DAYS_MAX,
+            })}
           </p>
         )}
         <p className="mt-4 text-xs text-muted-foreground">
@@ -679,6 +721,28 @@ export default function TableStaffAssignment() {
             {t('staffAssignmentLastRun')} <Ltr>{saved.last_run}</Ltr>
           </p>
         )}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setConfirmMode('shuffle_now')}
+            disabled={
+              saving || present.size === 0 || !(tablesValid || roster.table_count_default === 0)
+            }
+            data-testid="staff-assignment-shuffle-now"
+          >
+            <Shuffle size={16} aria-hidden="true" />
+            {t('staffAssignmentShuffleNow')}
+          </Button>
+          <Button
+            type="button"
+            onClick={requestSave}
+            disabled={!canSave}
+            data-testid="staff-assignment-save"
+          >
+            {saving ? t('staffAssignmentSaving') : t('saveChanges')}
+          </Button>
+        </div>
         {confirmMode && (
           <div
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
@@ -694,7 +758,9 @@ export default function TableStaffAssignment() {
               <h2 className="text-lg font-bold mb-1">
                 {confirmMode === 'rotate_daily'
                   ? t('staffAssignmentRotate')
-                  : t('staffAssignmentShuffle')}
+                  : confirmMode === 'shuffle_now'
+                    ? t('staffAssignmentShuffleNowTitle')
+                    : t('staffAssignmentShuffle')}
               </h2>
               <p className="text-sm text-muted-foreground mb-4">
                 {t('staffAssignmentConfirmRun', { count: present.size })}
@@ -712,7 +778,9 @@ export default function TableStaffAssignment() {
                   type="button"
                   className="flex-1"
                   data-testid="staff-assignment-confirm-run"
-                  onClick={() => switchMode(confirmMode)}
+                  onClick={() =>
+                    confirmMode === 'shuffle_now' ? shuffleNow() : switchMode(confirmMode)
+                  }
                 >
                   {t('staffAssignmentConfirmRunButton')}
                 </Button>
@@ -732,16 +800,6 @@ export default function TableStaffAssignment() {
             }}
           />
         )}
-        <div className="mt-5 flex justify-end">
-          <Button
-            type="button"
-            onClick={save}
-            disabled={!canSave}
-            data-testid="staff-assignment-save"
-          >
-            {saving ? t('staffAssignmentSaving') : t('saveChanges')}
-          </Button>
-        </div>
       </div>
       <TableZoneBoard
         tables={roster.tables}

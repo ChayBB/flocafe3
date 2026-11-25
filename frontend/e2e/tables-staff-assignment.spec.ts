@@ -231,18 +231,18 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
           res.url().includes('/api/tables/owner-assignment') && res.request().method() === 'PUT',
       );
     await page.getByTestId('staff-assignment-mode-rotate_daily').click();
+    await save.click();
     const confirmDialog = page.getByTestId('staff-assignment-confirm');
     await expect(confirmDialog).toContainText(
       `Reassign today’s tables now among the ${total - 1} staff members marked as working?`,
     );
     await confirmDialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(confirmDialog).toBeHidden();
-    await expect(page.getByTestId('staff-assignment-mode-manual')).toHaveAttribute(
-      'aria-checked',
-      'true',
+    await expect(page.getByTestId('table-staff-assignment-status')).toHaveText(
+      'Managed by manager',
     );
 
-    await page.getByTestId('staff-assignment-mode-rotate_daily').click();
+    await save.click();
     let modeResponse = modeSaved();
     await page.getByTestId('staff-assignment-confirm-run').click();
     expect((await modeResponse).ok()).toBeTruthy();
@@ -284,7 +284,19 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     await expect(page.getByTestId(`staff-roster-tables-${absent}`)).toHaveCount(0);
     await expect(page.getByTestId(`staff-roster-backup-${absent}`)).toHaveCount(0);
 
+    const shuffled = page.waitForResponse(
+      (res) =>
+        res.url().includes('/api/tables/owner-assignment/shuffle') &&
+        res.request().method() === 'POST',
+    );
+    await page.getByTestId('staff-assignment-shuffle-now').click();
+    await expect(confirmDialog).toContainText('Shuffle tables now');
+    await page.getByTestId('staff-assignment-confirm-run').click();
+    expect((await shuffled).ok()).toBeTruthy();
+    await expect(page.getByTestId('table-staff-assignment-status')).toHaveText('Rotate daily');
+
     await page.getByTestId('staff-assignment-mode-shuffle_interval').click();
+    await save.click();
     modeResponse = modeSaved();
     await page.getByTestId('staff-assignment-confirm-run').click();
     expect((await modeResponse).ok()).toBeTruthy();

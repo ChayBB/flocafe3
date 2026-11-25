@@ -383,6 +383,24 @@ async function main() {
     assertEqualOrThrow(zoned('tb-own').floor, '1-1', 'the table moves to its new zone');
     assertEqualOrThrow(zoned('tb-own').position_x, null, 'a moved table leaves the old floor plan');
     assertEqualOrThrow(zoned('tb-other').position_x, 10, 'an unmoved table keeps its position');
+    const shuffled = await api(baseUrl, '/api/tables/owner-assignment/shuffle', {
+      method: 'POST',
+      headers: owner.authHeader,
+    });
+    assertEqualOrThrow(shuffled.status, 200, 'a manager can shuffle tables now');
+    const presentIds = new Set(
+      (shuffled.data.staff as { id: string; present: boolean }[])
+        .filter((member) => member.present)
+        .map((member) => member.id),
+    );
+    const served = (shuffled.data.tables as { owner_user_id: string | null }[]).slice(
+      0,
+      shuffled.data.table_count,
+    );
+    assertOrThrow(
+      served.every((table) => table.owner_user_id && presentIds.has(table.owner_user_id)),
+      'every served table goes to a staff member working today',
+    );
     console.log('\nAll table owner checks passed');
   } finally {
     server.close();
