@@ -103,6 +103,10 @@ test('automatic Cloud acceptance requires an explicit confirmation', async ({ pa
   await mode.selectOption('automatic');
   await dialog.getByRole('button', { name: 'Confirm' }).click();
   await expect(mode).toHaveValue('automatic');
+  await page.getByTestId('qc-enabled').click();
+  await expect(dialog).toContainText('acceptance goes back to staff confirmation');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByTestId('qc-enabled')).toBeChecked();
   await mode.selectOption('manual');
   await expect(mode).toHaveValue('manual');
   expect(updates).toEqual([

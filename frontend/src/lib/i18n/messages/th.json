@@ -3362,6 +3362,7 @@
     "qcEnable": "เปิดใช้ Cloud QR Ordering",
     "qcDisableTitle": "ปิด Cloud QR Ordering?",
     "qcDisableConfirm": "ลูกค้าจะสั่งอาหารผ่าน QR ไม่ได้จนกว่าจะเปิดใหม่",
+    "qcDisableResetsAutomatic": "วิธีรับออเดอร์ Cloud จะกลับเป็นพนักงานยืนยันก่อน เมื่อเปิดใหม่ต้องตั้งให้ส่งเข้าครัวทันทีอีกครั้ง",
     "qcDisableButton": "ปิดการเชื่อมต่อ",
     "qcUrl": "ที่อยู่เซิร์ฟเวอร์ Cloud",
     "qcUrlHint": "ใช้ https เท่านั้น ระบบจะปฏิเสธที่อยู่ภายในเครื่อง วงแลนส่วนตัว และลิงก์โลคอล",

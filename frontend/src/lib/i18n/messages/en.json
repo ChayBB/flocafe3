@@ -3362,6 +3362,7 @@
     "qcEnable": "Enable Cloud QR Ordering",
     "qcDisableTitle": "Turn off Cloud QR Ordering?",
     "qcDisableConfirm": "Guests cannot order by QR until it is turned on again.",
+    "qcDisableResetsAutomatic": "Cloud order acceptance goes back to staff confirmation; set it to send orders to the kitchen again after turning it back on.",
     "qcDisableButton": "Disconnect",
     "qcUrl": "Cloud server URL",
     "qcUrlHint": "https only. Private, loopback and link-local addresses are refused.",

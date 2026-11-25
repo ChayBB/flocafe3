@@ -323,7 +323,11 @@ export function CloudConnectorSettings({
   };
 
   const turnOff = async () => {
-    const ok = await confirm(t('qcDisableConfirm'), {
+    const message =
+      config?.acceptance_mode === 'automatic'
+        ? `${t('qcDisableConfirm')} ${t('qcDisableResetsAutomatic')}`
+        : t('qcDisableConfirm');
+    const ok = await confirm(message, {
       title: t('qcDisableTitle'),
       confirmLabel: t('qcDisableButton'),
       destructive: true,
