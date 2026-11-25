@@ -3,6 +3,7 @@
 // Floorplan canvas editor: drag tables and persist X/Y coordinates per floor as percentages.
 
 import TableOwnerModal, { type OwnerScope } from './TableOwnerModal';
+import FloorEditDialog from './FloorEditDialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,7 @@ import {
   Plus,
   RotateCw,
   Sparkles,
+  SquarePen,
   UserCog,
   Table2,
   Trash2,
@@ -281,6 +283,7 @@ export default function FloorplanEditor({
   const [floorMenuFor, setFloorMenuFor] = useState<string | null>(null);
   const [floorRenameOpen, setFloorRenameOpen] = useState<{ from: string; to: string } | null>(null);
   const [floorDeleteTarget, setFloorDeleteTarget] = useState<string | null>(null);
+  const [floorEditTarget, setFloorEditTarget] = useState<string | null>(null);
   const [floorActionSaving, setFloorActionSaving] = useState(false);
   const [deleteTableTarget, setDeleteTableTarget] = useState<Table | null>(null);
   const [deleteTableSaving, setDeleteTableSaving] = useState(false);
@@ -1192,6 +1195,18 @@ export default function FloorplanEditor({
                         <button
                           type="button"
                           role="menuitem"
+                          data-testid={`floorplan-menu-edit-${f}`}
+                          onClick={() => {
+                            setFloorMenuFor(null);
+                            setFloorEditTarget(f);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-foreground hover:bg-muted"
+                        >
+                          <SquarePen size={14} /> {t('editFloor')}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
                           onClick={() => {
                             setFloorMenuFor(null);
                             setFloorDeleteTarget(f);
@@ -2008,6 +2023,18 @@ export default function FloorplanEditor({
         </div>
       )}
 
+      {floorEditTarget && (
+        <FloorEditDialog
+          floor={floorEditTarget}
+          tables={tables.filter((tb) => (tb.floor || '') === floorEditTarget)}
+          onClose={() => setFloorEditTarget(null)}
+          onSaved={(name) => {
+            setFloorEditTarget(null);
+            setActiveFloor(name);
+            onSaved?.();
+          }}
+        />
+      )}
       {floorDeleteTarget && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"

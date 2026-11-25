@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useTranslations } from 'use-intl';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { formatTableRanges, resolveTableRange } from '@/lib/table-ranges';
 
 type RezoneTable = { id: string; name: string; floor: string | null };
 
@@ -27,14 +28,28 @@ export default function TableRezone({
   onRezoned: () => void;
 }) {
   const t = useTranslations('tables');
-  const sorted = [...tables].sort(byName);
+  const all = [...tables].sort(byName);
+  const [skip, setSkip] = useState('');
   const [staff, setStaff] = useState(String(Math.max(1, defaultStaff)));
   const [perStaff, setPerStaff] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Tables typed as not in use ("26, 12-13") keep their zone and stay out of the split.
+  const labelled = all.map((table) => ({ ...table, label: table.name }));
+  const skipTokens = skip.split(/[,\s]+/).filter(Boolean);
+  const skipFound = skipTokens.map((token) => {
+    const exact = resolveTableRange({ from: token, to: '' }, labelled);
+    if (exact.length) return exact;
+    const [from, to = ''] = token.split(/(?<=\S)-(?=\S)/);
+    return resolveTableRange({ from, to }, labelled);
+  });
+  const skipValid = skipFound.every((found) => found.length > 0);
+  const skipped = new Set(skipFound.flat().map((table) => table.id));
+  const sorted = all.filter((table) => !skipped.has(table.id));
   const staffNumber = Number(staff);
   const staffValid = Number.isInteger(staffNumber) && staffNumber >= 1;
+  const staffMismatch = staffValid && staffNumber !== defaultStaff;
   const suggested = staffValid ? Math.max(1, Math.ceil(sorted.length / staffNumber)) : 0;
   const perNumber = perStaff.trim() === '' ? suggested : Number(perStaff);
   const perValid = Number.isInteger(perNumber) && perNumber >= 1;
@@ -44,7 +59,7 @@ export default function TableRezone({
       proposed.push(sorted.slice(i, i + perNumber));
   }
   const current = [
-    ...sorted
+    ...all
       .reduce((map, table) => {
         const zone = table.floor?.trim() ?? '';
         return map.set(zone, [...(map.get(zone) ?? []), table]);
@@ -127,6 +142,46 @@ export default function TableRezone({
         </label>
       </div>
 
+      {staffMismatch && (
+        <p
+          role="alert"
+          data-testid="table-rezone-staff-mismatch"
+          className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
+        >
+          {staffNumber < defaultStaff
+            ? t('rezoneStaffTooMany', { typed: staffNumber, picked: defaultStaff })
+            : t('rezoneStaffTooFew', { typed: staffNumber, picked: defaultStaff })}
+        </p>
+      )}
+      <label className="mt-3 flex flex-col gap-1 text-xs text-muted-foreground">
+        {t('rezoneSkip')}
+        <input
+          value={skip}
+          placeholder={t('rezoneSkipPlaceholder')}
+          onChange={(event) => {
+            setSkip(event.target.value);
+            setPerStaff('');
+            setConfirming(false);
+          }}
+          aria-invalid={!skipValid}
+          data-testid="table-rezone-skip"
+          className="w-full max-w-sm rounded-lg border border-border bg-background px-2 py-1 text-sm aria-[invalid=true]:border-red-500"
+        />
+        {!skipValid ? (
+          <span className="text-red-600">{t('rezoneSkipInvalid')}</span>
+        ) : (
+          skipped.size > 0 && (
+            <span data-testid="table-rezone-skipped">
+              {t('rezoneSkipped', {
+                tables: formatTableRanges(
+                  all.filter((table) => skipped.has(table.id)).map((table) => table.name),
+                ),
+              })}
+            </span>
+          )
+        )}
+      </label>
+
       <p className="mt-4 mb-2 text-xs font-semibold text-muted-foreground">{t('rezoneCurrent')}</p>
       <div className="flex flex-wrap gap-2">
         {current.map(([zone, list]) =>
@@ -156,7 +211,7 @@ export default function TableRezone({
         <Button
           type="button"
           data-testid="table-rezone-apply"
-          disabled={saving || proposed.length === 0 || unchanged}
+          disabled={saving || staffMismatch || !skipValid || proposed.length === 0 || unchanged}
           onClick={() => (confirming ? void apply() : setConfirming(true))}
         >
           {confirming ? t('rezoneConfirmButton') : t('rezoneApply')}

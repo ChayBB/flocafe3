@@ -502,7 +502,6 @@ export default function TableStaffAssignment() {
           </p>
         </div>
         <TableRezone
-          key={present.size}
           tables={roster.tables}
           defaultStaff={present.size}
           onRezoned={() =>

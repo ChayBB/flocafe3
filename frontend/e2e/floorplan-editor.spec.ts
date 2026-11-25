@@ -445,3 +445,55 @@ test('floorplan editor: a new floor names the table that already exists', async 
     await request.delete(`${BASE}/api/tables/${table.id}`, { headers: auth });
   }
 });
+
+test('floorplan editor: Edit on a zone menu renames it, changes seats and deletes a table', async ({
+  page,
+  request,
+}) => {
+  const apiLogin = await request.post(`${BASE}/api/auth/login`, {
+    data: { email: EMAIL, password: PASSWORD },
+  });
+  const auth = { Authorization: `Bearer ${(await apiLogin.json()).access_token}` };
+  const zone = `Edit${Math.random().toString(36).slice(2, 7)}`;
+  const base = 9300 + Math.floor(Math.random() * 600);
+  const ids: string[] = [];
+  for (const number of [String(base), String(base + 1)]) {
+    const created = await request.post(`${BASE}/api/tables`, {
+      headers: auth,
+      data: { number, capacity: 4, floor: zone },
+    });
+    expect(created.ok()).toBeTruthy();
+    ids.push((await created.json()).table.id);
+  }
+  const renamed = `${zone} new`;
+  try {
+    await login(page);
+    await page.getByRole('button', { name: 'Edit layout' }).click();
+    await page
+      .getByTestId('floorplan-floor-tabs')
+      .getByRole('button', { name: new RegExp(`^${zone}(?:\\s|$)`) })
+      .click();
+    await page.getByTestId(`floorplan-menu-${zone}`).click();
+    await page.getByTestId(`floorplan-menu-edit-${zone}`).click();
+    const form = page.getByTestId('floorplan-floor-edit-form');
+    await expect(form).toContainText(`Edit floor/zone ${zone}`);
+    await form.locator('#floorplan-floor-edit-name').fill(renamed);
+    await form.getByLabel(`Capacity ${base}`, { exact: true }).fill('6');
+    await form.getByTestId(`floorplan-floor-edit-delete-${base + 1}`).click();
+    await expect(form.getByTestId('floorplan-floor-edit-will-delete')).toContainText(
+      `Will delete 1 table: ${base + 1}`,
+    );
+    await form.getByTestId('floorplan-floor-edit-submit').click();
+    await expect(form).toBeHidden();
+    const kept = await (
+      await request.get(`${BASE}/api/tables/${ids[0]}`, { headers: auth })
+    ).json();
+    expect(kept.table.floor).toBe(renamed);
+    expect(kept.table.capacity).toBe(6);
+    expect((await request.get(`${BASE}/api/tables/${ids[1]}`, { headers: auth })).status()).toBe(
+      404,
+    );
+  } finally {
+    for (const id of ids) await request.delete(`${BASE}/api/tables/${id}`, { headers: auth });
+  }
+});

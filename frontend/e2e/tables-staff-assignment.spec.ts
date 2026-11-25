@@ -517,8 +517,15 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     await expect(panel).toContainText('Re-zone tables');
     await expect(panel.getByTestId('table-rezone-current').first()).toBeVisible();
 
-    await panel.getByTestId('table-rezone-staff').fill('2');
-    const per = Math.ceil(total / 2);
+    const picked = (roster.staff as { present: boolean }[]).filter((m) => m.present).length;
+    await panel.getByTestId('table-rezone-staff').fill(String(picked + 1));
+    await expect(panel.getByTestId('table-rezone-staff-mismatch')).toContainText(
+      `Staff today is ${picked + 1}, but only ${picked} staff are marked as working.`,
+    );
+    await expect(panel.getByTestId('table-rezone-apply')).toBeDisabled();
+    await panel.getByTestId('table-rezone-staff').fill(String(picked));
+    await expect(panel.getByTestId('table-rezone-staff-mismatch')).toHaveCount(0);
+    const per = Math.ceil(total / picked);
     await expect(panel.getByTestId('table-rezone-per-staff')).toHaveAttribute(
       'placeholder',
       String(per),
@@ -526,6 +533,17 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(Math.ceil(total / per));
     await panel.getByTestId('table-rezone-per-staff').fill('1');
     await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(total);
+
+    const skippedName = (roster.tables as { name: string }[])
+      .map((table) => table.name)
+      .sort((x, y) => x.localeCompare(y, undefined, { numeric: true }))[0];
+    await panel.getByTestId('table-rezone-skip').fill(skippedName);
+    await expect(panel.getByTestId('table-rezone-skipped')).toContainText(skippedName);
+    await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(total - 1);
+    await panel.getByTestId('table-rezone-skip').fill('no-such-table');
+    await expect(panel.getByTestId('table-rezone-apply')).toBeDisabled();
+    await panel.getByTestId('table-rezone-skip').fill('');
+    await panel.getByTestId('table-rezone-per-staff').fill('1');
 
     await panel.getByTestId('table-rezone-apply').click();
     await expect(panel.getByTestId('table-rezone-confirm')).toContainText(
