@@ -34,49 +34,18 @@ async function pickTable(page: Page, tableName: string): Promise<void> {
 }
 
 test.describe('Server App tableside ordering', () => {
-  test('the flag switches languages instantly and the service menu keeps four cards with eight reserved rows', async ({
-    page,
-  }) => {
+  test('signed-in staff get their profile in place of the service menu', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openServerApp(page, getE2eToken('e2e-server', 'server@flo.local', 'server'));
     const flag = page.getByTestId('server-app-language-button');
     await expect(flag).toHaveAttribute('aria-label', 'Change language');
     await flag.click();
     await expect(flag).toHaveAttribute('aria-label', 'เปลี่ยนภาษา');
-    await expect(page.getByRole('menu')).toHaveCount(0);
-    await page.getByTestId('server-app-header-grid-circle').click();
-    const menu = page.getByTestId('service-menu');
-    await expect(menu.getByRole('heading')).toHaveText('กรุณาเลือกบริการ');
-    await expect(menu).toContainText('วันนี้ต้องการรับบริการด้านใดดีค่ะ');
-    const cards = menu.getByTestId('service-menu-card');
-    await expect(cards).toHaveCount(4);
-    for (const card of await cards.all()) {
-      expect((await card.boundingBox())?.width).toBeCloseTo(116, 2);
-      expect((await card.boundingBox())?.height).toBeCloseTo(116, 2);
-    }
-    const grid = menu.getByTestId('service-menu-grid');
-    expect(
-      await grid.evaluate(
-        (element) => getComputedStyle(element).gridTemplateRows.split(' ').length,
-      ),
-    ).toBe(8);
-    expect((await grid.boundingBox())?.height).toBeCloseTo(1040, 2);
-    await menu.screenshot({ path: test.info().outputPath('service-menu-thai.png') });
-    await page.keyboard.press('Escape');
-    await expect(menu).toBeHidden();
     await flag.click();
-    await expect(flag).toHaveAttribute('aria-label', 'Change language');
-    await expect(page.getByRole('menu')).toHaveCount(0);
-    await page.getByTestId('server-app-header-grid-circle').press('Enter');
-    await expect(menu.getByRole('heading')).toHaveText('Please select a service');
-    await expect(cards).toHaveText([
-      'Request cutlery',
-      'Request condiments',
-      'Refill drink',
-      'Other',
-    ]);
-    await page.keyboard.press('Escape');
-    await expect(menu).toBeHidden();
+    await expect(page.getByTestId('server-app-header-grid-circle')).toHaveCount(0);
+    await page.getByTestId('server-app-open-profile').click();
+    await expect(page.getByTestId('server-app-staff-profile')).toBeVisible();
+    await expect(page.getByTestId('service-menu')).toHaveCount(0);
   });
 
   test('staff see no table label at the top and the shop logo sits higher', async ({ page }) => {
@@ -100,8 +69,6 @@ test.describe('Server App tableside ordering', () => {
       await expect(page.getByTestId('server-app-table-label')).toHaveCount(0);
       await expect(page.getByTestId('server-app-header-table')).toHaveCount(0);
       const circles = page.getByTestId('server-app-header-circles');
-      const circleBox = (await circles.boundingBox())!;
-      const headerBox = (await page.getByTestId('server-app-header').boundingBox())!;
       // The header settles after the viewport change, so wait for the logo to reach its place.
       await expect
         .poll(
@@ -110,8 +77,10 @@ test.describe('Server App tableside ordering', () => {
             (await page.getByTestId('server-app-header').boundingBox())!.y,
         )
         .toBe(41);
-      expect(circleBox.width).toBe(176);
-      expect(circleBox.y - headerBox.y).toBe(7);
+      const circleBox = (await circles.boundingBox())!;
+      const headerBox = (await page.getByTestId('server-app-header').boundingBox())!;
+      expect(circleBox.width).toBe(130);
+      expect(circleBox.y - headerBox.y, `circles y at ${width}`).toBe(7);
       expect(headerBox.x + headerBox.width - circleBox.x - circleBox.width).toBe(12);
       const staffName = page.getByTestId('server-app-staff-name');
       await expect(staffName).toHaveText('E2E server');
@@ -125,15 +94,15 @@ test.describe('Server App tableside ordering', () => {
       expect(flagBox.width).toBeCloseTo(21.6, 1);
       expect(flagBox.height).toBeCloseTo(21.6, 1);
       await expect(circles.getByTestId('server-app-header-empty-circle')).toHaveCount(0);
-      const gridCircle = circles.getByTestId('server-app-header-grid-circle');
-      expect((await gridCircle.boundingBox())!.x - circleBox.x).toBe(138);
-      await expect(gridCircle.locator('svg')).toBeVisible();
-      expect((await gridCircle.locator('svg').boundingBox())!.width).toBe(18);
+      await expect(circles.getByTestId('server-app-header-grid-circle')).toHaveCount(0);
+      const profileCircle = circles.getByTestId('server-app-open-profile');
+      expect((await profileCircle.boundingBox())!.x - circleBox.x).toBe(92);
+      expect((await profileCircle.locator('svg').boundingBox())!.width).toBe(20);
       const theme = circles.getByTestId('server-app-theme-button');
       const themeBox = (await theme.boundingBox())!;
       expect((await theme.locator('svg').boundingBox())!.width).toBeCloseTo(19.8, 1);
-      expect(themeBox.x - circleBox.x).toBe(92);
-      expect((await circles.getByTestId('server-app-open-profile').boundingBox())!.x).toBe(
+      expect(themeBox.x - circleBox.x).toBe(46);
+      expect((await circles.getByTestId('server-app-language-button').boundingBox())!.x).toBe(
         circleBox.x,
       );
       const pressed = await theme.getAttribute('aria-pressed');
@@ -449,7 +418,7 @@ test.describe('Server App tableside ordering', () => {
       const historyButton = header.getByTestId('server-app-history-button');
       await expect(tableButton).toBeVisible();
       await expect(logoutButton).toBeVisible();
-      await expect(header.getByRole('button')).toHaveCount(8);
+      await expect(header.getByRole('button')).toHaveCount(7);
       await expect(header.getByRole('img', { name: 'Flo' })).toHaveCount(0);
 
       for (const button of [tableButton, logoutButton, languageButton, historyButton]) {
@@ -467,7 +436,7 @@ test.describe('Server App tableside ordering', () => {
 
     // The tablet header retains the selector and fits beside language, theme, history and session.
     await page.setViewportSize({ width: 768, height: 1024 });
-    await expect(page.locator('header').getByRole('button')).toHaveCount(8);
+    await expect(page.locator('header').getByRole('button')).toHaveCount(7);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth),
     ).toBeFalsy();

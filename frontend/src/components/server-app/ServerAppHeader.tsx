@@ -39,8 +39,6 @@ export function ServerAppHeader({
   staffLoginLabel,
   staffName,
   onStaffProfile,
-  staffMenuOpen,
-  onStaffMenuClose,
   tablesExpanded,
   onShowTables,
   onHoldTables,
@@ -63,9 +61,8 @@ export function ServerAppHeader({
   onStaffLogin: () => void;
   staffLoginLabel: string;
   staffName?: string;
+  /** Signed-in staff get their profile in place of the guest service menu. */
   onStaffProfile?: () => void;
-  staffMenuOpen?: boolean;
-  onStaffMenuClose?: () => void;
   tablesExpanded?: boolean;
   onShowTables?: () => void;
   /** Holding Select Table switches between the staff member's own and backup tables. */
@@ -125,18 +122,6 @@ export function ServerAppHeader({
               </button>
             )}
             <div data-testid="server-app-header-circles" className="flex items-center gap-2">
-              {onStaffProfile && (
-                <button
-                  type="button"
-                  onClick={onStaffProfile}
-                  className={ICON_BUTTON}
-                  aria-label={profile('profile')}
-                  title={profile('profile')}
-                  data-testid="server-app-open-profile"
-                >
-                  <UserRound size={17} aria-hidden="true" />
-                </button>
-              )}
               <button
                 type="button"
                 data-testid="server-app-language-button"
@@ -166,32 +151,40 @@ export function ServerAppHeader({
                   className="size-[38px] shrink-0 rounded-full bg-white/85"
                 />
               )}
-              <ServiceMenu
-                onStaffLogin={onStaffLogin}
-                onStaffProfile={onStaffProfile}
-                staffMenuOpen={staffMenuOpen}
-                onStaffMenuClose={onStaffMenuClose}
-              >
+              {onStaffProfile ? (
                 <button
-                  data-testid="server-app-header-grid-circle"
                   type="button"
-                  aria-label={t('serviceMenuTitle')}
+                  onClick={onStaffProfile}
                   className={`${ICON_BUTTON} text-[#111111]`}
+                  aria-label={profile('profile')}
+                  title={profile('profile')}
+                  data-testid="server-app-open-profile"
                 >
-                  <svg
-                    aria-hidden="true"
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  >
-                    <path d="M4 7h16 M4 17h10" />
-                  </svg>
+                  <UserRound size={20} aria-hidden="true" />
                 </button>
-              </ServiceMenu>
+              ) : (
+                <ServiceMenu onStaffLogin={onStaffLogin}>
+                  <button
+                    data-testid="server-app-header-grid-circle"
+                    type="button"
+                    aria-label={t('serviceMenuTitle')}
+                    className={`${ICON_BUTTON} text-[#111111]`}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    >
+                      <path d="M4 7h16 M4 17h10" />
+                    </svg>
+                  </button>
+                </ServiceMenu>
+              )}
             </div>
           </div>
         </div>

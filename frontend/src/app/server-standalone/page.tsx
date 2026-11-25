@@ -469,7 +469,6 @@ export default function ServerStandalonePage() {
   const [guestExpired, setGuestExpired] = useState(false);
   const [tableQrOpen, setTableQrOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [staffMenuOpen, setStaffMenuOpen] = useState(false);
   const [fontScale, setFontScale] = useState(readServerAppFontScale);
   const [showLogin, setShowLogin] = useState(false);
   const guestAttemptRef = useRef<{ signature: string; key: string } | null>(null);
@@ -1771,7 +1770,7 @@ export default function ServerStandalonePage() {
       }
       activeUserIdRef.current = res.data.user.id;
       setUser(res.data.user);
-      setStaffMenuOpen(!suspended || suspended.ownerId !== res.data.user.id);
+      setProfileOpen(!suspended || suspended.ownerId !== res.data.user.id);
       setShowLogin(false);
     } catch (error: unknown) {
       toastApiError(error, t('signInFailed'), apiErrorT);
@@ -1815,7 +1814,6 @@ export default function ServerStandalonePage() {
 
   async function logout() {
     setProfileOpen(false);
-    setStaffMenuOpen(false);
     authSessionSeqRef.current += 1;
     try {
       await api?.post('/api/auth/logout');
@@ -2855,8 +2853,6 @@ export default function ServerStandalonePage() {
         staffLoginLabel={tAuth('signIn')}
         staffName={user?.name}
         onStaffProfile={user ? () => setProfileOpen(true) : undefined}
-        staffMenuOpen={Boolean(user) && staffMenuOpen}
-        onStaffMenuClose={() => setStaffMenuOpen(false)}
         tablesExpanded={showTablePicker}
         onShowTables={
           user

@@ -75,34 +75,23 @@ function ServiceIllustration({ kind }: { kind: (typeof SERVICES)[number] }) {
 export function ServiceMenu({
   children,
   onStaffLogin,
-  onStaffProfile,
-  staffMenuOpen = false,
-  onStaffMenuClose,
 }: {
   children: ReactNode;
   onStaffLogin: () => void;
-  /** Signed-in staff open their profile from the Staff card instead of signing in again. */
-  onStaffProfile?: () => void;
-  /** Opens straight on the Other page, as staff land on it after signing in. */
-  staffMenuOpen?: boolean;
-  onStaffMenuClose?: () => void;
 }) {
   const t = useTranslations('serverApp');
   const tCommon = useTranslations('common');
-  const [openState, setOpen] = useState(false);
-  const [otherState, setOther] = useState(false);
-  const open = openState || staffMenuOpen;
-  const other = otherState || staffMenuOpen;
+  const [open, setOpen] = useState(false);
+  const [other, setOther] = useState(false);
   const [staffUnlocked, setStaffUnlocked] = useState(false);
   const close = () => {
     setOpen(false);
     setOther(false);
     setStaffUnlocked(false);
-    onStaffMenuClose?.();
   };
   const enterStaff = () => {
     close();
-    (onStaffProfile ?? onStaffLogin)();
+    onStaffLogin();
   };
   const staffGesture = useStaffEntryGesture(() => setStaffUnlocked(true));
   const labels = {
@@ -165,13 +154,7 @@ export function ServiceMenu({
           {other && (
             <button
               type="button"
-              onClick={() => {
-                setOther(false);
-                if (staffMenuOpen) {
-                  setOpen(true);
-                  onStaffMenuClose?.();
-                }
-              }}
+              onClick={() => setOther(false)}
               aria-label={tCommon('back')}
               className="absolute start-4 top-6 rounded-full p-2 text-[#444444] focus-visible:outline-2 focus-visible:outline-brand"
             >

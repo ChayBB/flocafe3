@@ -392,9 +392,9 @@ test.describe('Server App guest from a table QR', () => {
 
     await page.getByTestId('server-app-login-button').click();
     await page.getByPlaceholder('Staff code').fill('4242');
-    const landing = page.getByTestId('service-menu');
-    await expect(landing.getByTestId('service-menu-staff')).toBeVisible();
-    await landing.getByTestId('service-menu-exit').click();
+    const landing = page.getByTestId('server-app-staff-profile');
+    await expect(landing).toBeVisible();
+    await landing.getByRole('button', { name: 'Back', exact: true }).click();
     await expect(page.getByTestId('server-app-table-qr-button')).toBeVisible();
     await expect(html).toHaveClass(/(^|\s)dark(\s|$)/);
   });
@@ -420,6 +420,53 @@ test.describe('Server App guest from a table QR', () => {
     } finally {
       await setServerLanguage('en');
     }
+  });
+
+  test('the flag switches languages instantly and the guest service menu keeps four cards with eight reserved rows', async ({
+    page,
+  }) => {
+    const table = await createTable(page);
+    await setEnglish(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
+    const flag = page.getByTestId('server-app-language-button');
+    await expect(flag).toHaveAttribute('aria-label', 'Change language');
+    await flag.click();
+    await expect(flag).toHaveAttribute('aria-label', 'เปลี่ยนภาษา');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await page.getByTestId('server-app-header-grid-circle').click();
+    const menu = page.getByTestId('service-menu');
+    await expect(menu.getByRole('heading')).toHaveText('กรุณาเลือกบริการ');
+    await expect(menu).toContainText('วันนี้ต้องการรับบริการด้านใดดีค่ะ');
+    const cards = menu.getByTestId('service-menu-card');
+    await expect(cards).toHaveCount(4);
+    for (const card of await cards.all()) {
+      expect((await card.boundingBox())?.width).toBeCloseTo(116, 2);
+      expect((await card.boundingBox())?.height).toBeCloseTo(116, 2);
+    }
+    const grid = menu.getByTestId('service-menu-grid');
+    expect(
+      await grid.evaluate(
+        (element) => getComputedStyle(element).gridTemplateRows.split(' ').length,
+      ),
+    ).toBe(8);
+    expect((await grid.boundingBox())?.height).toBeCloseTo(1040, 2);
+    await menu.screenshot({ path: test.info().outputPath('service-menu-thai.png') });
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await flag.click();
+    await expect(flag).toHaveAttribute('aria-label', 'Change language');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await page.getByTestId('server-app-header-grid-circle').press('Enter');
+    await expect(menu.getByRole('heading')).toHaveText('Please select a service');
+    await expect(cards).toHaveText([
+      'Request cutlery',
+      'Request condiments',
+      'Refill drink',
+      'Other',
+    ]);
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
   });
 
   test('the grey bar unlocks the staff area after three quick taps or a three-second hold', async ({
@@ -524,8 +571,6 @@ test.describe('Server App guest from a table QR', () => {
     expect(await page.evaluate(() => localStorage.getItem('flocafe:server-app-token'))).toBeNull();
     await page.getByPlaceholder('Staff code').fill('4242');
 
-    await expect(service.getByRole('heading')).toHaveText('Other');
-    await service.getByTestId('service-menu-staff').click();
     const profile = page.getByTestId('server-app-staff-profile');
     await expect(profile.getByRole('heading', { name: 'Staff profile' })).toBeVisible();
     await expect(profile).toContainText('E2E server');
