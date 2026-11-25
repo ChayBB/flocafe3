@@ -322,6 +322,15 @@ export function CloudConnectorSettings({
     }
   };
 
+  const turnOff = async () => {
+    const ok = await confirm(t('qcDisableConfirm'), {
+      title: t('qcDisableTitle'),
+      confirmLabel: t('qcDisableButton'),
+      destructive: true,
+    });
+    if (ok) await save({ enabled: false });
+  };
+
   const clearToken = async () => {
     const ok = await confirm(t('qcTokenClearConfirm'), {
       title: t('qcTokenClear'),
@@ -660,7 +669,7 @@ export function CloudConnectorSettings({
                 disabled={!canManage}
                 data-testid="qc-enabled"
                 checked={config.enabled}
-                onChange={() => void save({ enabled: false })}
+                onChange={() => void turnOff()}
                 className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
               />
               {t('qcEnable')}

@@ -404,5 +404,23 @@ test('a pending cutover hold needs confirmation, then tests and starts polling',
   await expect(verify).toBeEnabled();
   await expect(page.getByTestId('qc-enabled')).toHaveCount(0);
   await verify.click();
-  await expect(page.getByTestId('qc-enabled')).toBeChecked();
+  const enabledBox = page.getByTestId('qc-enabled');
+  await expect(enabledBox).toBeChecked();
+
+  await enabledBox.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Turn off Cloud QR Ordering?');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(enabledBox).toBeChecked();
+  await enabledBox.click();
+  await page.route(`${connectorApi}/settings`, (route) => {
+    enabled = route.request().postDataJSON().enabled;
+    return route.fulfill({ json: { config: current(), status } });
+  });
+  const turnedOff = page.waitForRequest(
+    (req) => req.url() === `${connectorApi}/settings` && req.method() === 'PUT',
+  );
+  await page.getByRole('dialog').getByRole('button', { name: 'Disconnect' }).click();
+  expect((await turnedOff).postDataJSON()).toEqual({ enabled: false });
+  await expect(enabledBox).toHaveCount(0);
 });
