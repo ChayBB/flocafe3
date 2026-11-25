@@ -127,7 +127,12 @@ interface TableForm {
   section: string;
 }
 
-const EMPTY_FORM: TableForm = { name: '', capacity: '4', floor: '', section: '' };
+const EMPTY_FORM: TableForm = {
+  name: '',
+  capacity: '4',
+  floor: '',
+  section: '',
+};
 
 // Auto-fit canvas aspect ratio to bounding box of placed tables
 // using saved positions to maintain drag stability.
@@ -270,18 +275,32 @@ export default function FloorplanEditor({
   const [form, setForm] = useState<TableForm>(EMPTY_FORM);
   const [formSaving, setFormSaving] = useState(false);
   const [floorFormOpen, setFloorFormOpen] = useState(false);
-  const [floorForm, setFloorForm] = useState({ name: '', tableName: '', capacity: '4' });
+  const [floorForm, setFloorForm] = useState({
+    name: '',
+    tableName: '',
+    capacity: '4',
+  });
   const [floorFormSaving, setFloorFormSaving] = useState(false);
   const [floorCapacities, setFloorCapacities] = useState<Record<string, string>>({});
-  const [floorOwner, setFloorOwner] = useState<{ id: string; name: string; move: boolean } | null>(
-    null,
-  );
+  const [floorOwner, setFloorOwner] = useState<{
+    id: string;
+    name: string;
+    move: boolean;
+  } | null>(null);
   const rangeNames = tableNamesForZone(floorForm.name);
+  const existingByName = new Map(tables.map((tb) => [tb.name.trim().toLowerCase(), tb]));
+  const existingIn = (tableName: string) => existingByName.get(tableName.trim().toLowerCase());
+  const zoneLabel = (tb: { floor?: string | null } | undefined) =>
+    tb?.floor?.trim() || t('rezoneNoZone');
+  const floorFormClashes = (rangeNames ?? [floorForm.tableName]).filter((name) => existingIn(name));
   const [actionTable, setActionTable] = useState<Table | null>(null);
   const [ownerScope, setOwnerScope] = useState<OwnerScope | null>(null);
   // Floor management state — Issue #646.
   const [floorMenuFor, setFloorMenuFor] = useState<string | null>(null);
-  const [floorRenameOpen, setFloorRenameOpen] = useState<{ from: string; to: string } | null>(null);
+  const [floorRenameOpen, setFloorRenameOpen] = useState<{
+    from: string;
+    to: string;
+  } | null>(null);
   const [floorDeleteTarget, setFloorDeleteTarget] = useState<string | null>(null);
   const [floorEditTarget, setFloorEditTarget] = useState<string | null>(null);
   const [floorActionSaving, setFloorActionSaving] = useState(false);
@@ -667,7 +686,10 @@ export default function FloorplanEditor({
       if (editingId) {
         const previousFloor = (editingTable?.floor ?? '').trim();
         const floorChanged = floor !== previousFloor;
-        let positionUpdate: { position_x?: number | null; position_y?: number | null } = {};
+        let positionUpdate: {
+          position_x?: number | null;
+          position_y?: number | null;
+        } = {};
         if (floorChanged) {
           if (floor && editingTable && posOf(editingTable) !== null) {
             const others = tables
@@ -744,7 +766,12 @@ export default function FloorplanEditor({
           tableName,
           capacity: (floorCapacities[tableName] ?? '').trim(),
         }))
-      : [{ tableName: floorForm.tableName.trim(), capacity: floorForm.capacity.trim() }];
+      : [
+          {
+            tableName: floorForm.tableName.trim(),
+            capacity: floorForm.capacity.trim(),
+          },
+        ];
     if (entries.some((entry) => !entry.tableName)) return;
     const parsed = entries.map((entry) => ({
       tableName: entry.tableName,
@@ -791,7 +818,12 @@ export default function FloorplanEditor({
       const table = data?.table ?? '';
       const message =
         data?.code === 'TABLE_NAME_DUPLICATE'
-          ? t('tableNameDuplicateNamed', { table })
+          ? existingIn(table)
+            ? t('floorFormTableExists', {
+                table,
+                zone: zoneLabel(existingIn(table)),
+              })
+            : t('tableNameDuplicateNamed', { table })
           : data?.code === 'TABLE_INACTIVE_DUPLICATE'
             ? t('tableInactiveDuplicateNamed', { table })
             : data?.code === 'TABLE_CAPACITY_INVALID'
@@ -815,7 +847,9 @@ export default function FloorplanEditor({
     setFloorActionSaving(true);
     try {
       const { from } = floorRenameOpen;
-      await api.patch(`/tables/floors/${encodeURIComponent(from)}`, { newName: target });
+      await api.patch(`/tables/floors/${encodeURIComponent(from)}`, {
+        newName: target,
+      });
       toast.success(t('floorRenamed'), { position: 'top-center' });
       setFloorRenameOpen(null);
       setActiveFloor(target);
@@ -953,7 +987,9 @@ export default function FloorplanEditor({
   const setTableStatus = async (tb: Table, status: Table['status']) => {
     try {
       await api.patch(`/tables/${tb.id}/status`, { status });
-      toast.success(t(TABLE_STATUS_LABEL_KEYS[status]), { position: 'top-center' });
+      toast.success(t(TABLE_STATUS_LABEL_KEYS[status]), {
+        position: 'top-center',
+      });
       setActionTable(null);
       onSaved?.();
     } catch {
@@ -962,7 +998,11 @@ export default function FloorplanEditor({
   };
 
   const sheetActionsFor = (tb: Table) => {
-    const actions: Array<{ label: string; icon: React.ReactNode; run: () => void }> = [];
+    const actions: Array<{
+      label: string;
+      icon: React.ReactNode;
+      run: () => void;
+    }> = [];
     if (tb.status === 'occupied' && onViewOrder) {
       actions.push({
         label: t('viewOrder'),
@@ -1226,7 +1266,11 @@ export default function FloorplanEditor({
             <button
               data-testid="floorplan-add-floor"
               onClick={() => {
-                setFloorForm({ name: '', tableName: suggestName(), capacity: '4' });
+                setFloorForm({
+                  name: '',
+                  tableName: suggestName(),
+                  capacity: '4',
+                });
                 setFloorFormOpen(true);
               }}
               className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:text-brand"
@@ -1815,8 +1859,23 @@ export default function FloorplanEditor({
                     </div>
                     {rangeNames.map((tableName) => (
                       <div key={tableName} className="grid grid-cols-2 gap-3">
-                        <div className="flex items-center rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm font-medium">
+                        <div
+                          data-testid={`floorplan-floor-range-row-${tableName}`}
+                          data-exists={existingIn(tableName) ? 'true' : undefined}
+                          className={`flex min-w-0 flex-col justify-center rounded-lg border px-3 py-2 text-sm font-medium ${
+                            existingIn(tableName)
+                              ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
+                              : 'border-border bg-muted/40'
+                          }`}
+                        >
                           {tableName}
+                          {existingIn(tableName) && (
+                            <span className="truncate text-[11px] font-normal">
+                              {t('floorFormTableExistsShort', {
+                                zone: zoneLabel(existingIn(tableName)),
+                              })}
+                            </span>
+                          )}
                         </div>
                         <input
                           type="number"
@@ -1825,7 +1884,10 @@ export default function FloorplanEditor({
                           aria-label={`${t('capacity')} ${tableName}`}
                           value={floorCapacities[tableName] ?? ''}
                           onChange={(e) =>
-                            setFloorCapacities({ ...floorCapacities, [tableName]: e.target.value })
+                            setFloorCapacities({
+                              ...floorCapacities,
+                              [tableName]: e.target.value,
+                            })
                           }
                           className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
                         />
@@ -1833,6 +1895,17 @@ export default function FloorplanEditor({
                     ))}
                   </div>
                   <p className="text-xs text-muted-foreground">{t('capacityBlankHint')}</p>
+                  {floorFormClashes.length > 0 && (
+                    <p
+                      role="alert"
+                      data-testid="floorplan-floor-range-clash"
+                      className="text-xs text-red-600"
+                    >
+                      {t('floorFormTablesExist', {
+                        tables: floorFormClashes.join(', '),
+                      })}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <>
@@ -1849,7 +1922,12 @@ export default function FloorplanEditor({
                         id="floorplan-floor-table"
                         type="text"
                         value={floorForm.tableName}
-                        onChange={(e) => setFloorForm({ ...floorForm, tableName: e.target.value })}
+                        onChange={(e) =>
+                          setFloorForm({
+                            ...floorForm,
+                            tableName: e.target.value,
+                          })
+                        }
                         className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
                         required
                       />
@@ -1866,7 +1944,12 @@ export default function FloorplanEditor({
                         type="number"
                         min="1"
                         value={floorForm.capacity}
-                        onChange={(e) => setFloorForm({ ...floorForm, capacity: e.target.value })}
+                        onChange={(e) =>
+                          setFloorForm({
+                            ...floorForm,
+                            capacity: e.target.value,
+                          })
+                        }
                         className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
                         required
                       />
@@ -1904,7 +1987,12 @@ export default function FloorplanEditor({
                   <UserCog size={14} className="me-1 shrink-0" />
                   <span className="truncate">{floorOwner ? floorOwner.name : t('tableOwner')}</span>
                 </Button>
-                <Button type="submit" className="flex-1" disabled={floorFormSaving}>
+                <Button
+                  type="submit"
+                  className="flex-1"
+                  disabled={floorFormSaving || floorFormClashes.length > 0}
+                  data-testid="floorplan-floor-create"
+                >
                   {floorFormSaving ? tCommon('saving') : t('createTable')}
                 </Button>
               </div>
@@ -1942,7 +2030,10 @@ export default function FloorplanEditor({
                   type="text"
                   value={floorRenameOpen.to}
                   onChange={(e) =>
-                    setFloorRenameOpen({ from: floorRenameOpen!.from, to: e.target.value })
+                    setFloorRenameOpen({
+                      from: floorRenameOpen!.from,
+                      to: e.target.value,
+                    })
                   }
                   className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
                   autoFocus
@@ -1953,7 +2044,9 @@ export default function FloorplanEditor({
                 floorRenameOpen.to.trim() !== floorRenameOpen.from &&
                 namedFloors.includes(floorRenameOpen.to.trim()) && (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    {t('renameFloorMergeHint', { target: floorRenameOpen.to.trim() })}
+                    {t('renameFloorMergeHint', {
+                      target: floorRenameOpen.to.trim(),
+                    })}
                   </div>
                 )}
               <div className="flex gap-2 pt-1">
@@ -2051,7 +2144,9 @@ export default function FloorplanEditor({
               {t('deleteFloorTitle', { name: floorDeleteTarget })}
             </h2>
             <p className="text-xs text-muted-foreground mb-4">
-              {t('deleteFloorHint', { count: tablesOnFloor(floorDeleteTarget) })}
+              {t('deleteFloorHint', {
+                count: tablesOnFloor(floorDeleteTarget),
+              })}
             </p>
             <div className="flex gap-2 pt-1">
               <Button

@@ -417,7 +417,7 @@ test('list view: Add Table keeps the selected floor', async ({ page }) => {
   await expect(form.getByLabel('Floor')).toHaveValue('First');
 });
 
-test('floorplan editor: a new floor names the table that already exists', async ({
+test('floorplan editor: a new floor flags the tables that already exist and their zone', async ({
   page,
   request,
 }) => {
@@ -436,11 +436,19 @@ test('floorplan editor: a new floor names the table that already exists', async 
     await page.getByTestId('floorplan-add-floor').click();
     const form = page.getByTestId('floorplan-floor-form');
     await form.locator('#floorplan-floor-name').fill(`${base}-${base + 1}`);
-    await form.locator('button[type="submit"]').click();
-    await expect(
-      page.getByText(`Table name ${base} is already used. Choose another name.`),
-    ).toBeVisible();
-    await expect(form).toBeVisible();
+    await expect(form.getByTestId(`floorplan-floor-range-row-${base}`)).toHaveAttribute(
+      'data-exists',
+      'true',
+    );
+    await expect(form.getByTestId(`floorplan-floor-range-row-${base}`)).toContainText(
+      'Already in Ground',
+    );
+    await expect(form.getByTestId(`floorplan-floor-range-row-${base + 1}`)).not.toHaveAttribute(
+      'data-exists',
+      'true',
+    );
+    await expect(form.getByTestId('floorplan-floor-range-clash')).toContainText(String(base));
+    await expect(form.getByTestId('floorplan-floor-create')).toBeDisabled();
   } finally {
     await request.delete(`${BASE}/api/tables/${table.id}`, { headers: auth });
   }
