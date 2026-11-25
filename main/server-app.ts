@@ -532,6 +532,9 @@ export function startServerApp(): Promise<void> {
           throw error;
         }
         const iat = nextTokenIatSeconds();
+        const [dayStartHour, dayStartMinute] = tenantBusinessDayStartTime(db)
+          .split(':')
+          .map(Number);
         const token = jwt.sign(
           {
             userId: user.id,
@@ -539,7 +542,12 @@ export function startServerApp(): Promise<void> {
             role: user.role,
             jti: randomUUID(),
             iat,
-            exp: nextDailyResetEpochSeconds(new Date(), sessionTimeZone),
+            exp: nextDailyResetEpochSeconds(
+              new Date(),
+              sessionTimeZone,
+              dayStartHour,
+              dayStartMinute,
+            ),
           },
           getJWTSecret(),
         );
@@ -754,8 +762,7 @@ export function startServerApp(): Promise<void> {
           `WITH table_bills AS (
            SELECT o.id, o.guest_count, b.paid_amount
            FROM bills b JOIN orders o ON o.id = b.order_id
-           JOIN tables t ON t.id = o.table_id
-           WHERE t.is_active = 1 AND (t.owner_user_id = ? OR t.backup_user_id = ?)
+           WHERE o.table_owner_user_id = ?
              AND b.paid_at >= ? AND b.paid_at < ?
              AND b.payment_status IN ('paid', 'partially_refunded', 'refunded')
          )
@@ -765,7 +772,7 @@ export function startServerApp(): Promise<void> {
                  FROM (SELECT DISTINCT id, guest_count FROM table_bills)) AS guests
          FROM table_bills`,
         )
-        .get(userId, userId, start, end);
+        .get(userId, start, end);
       res.json({
         business_date: businessDate,
         timezone,
