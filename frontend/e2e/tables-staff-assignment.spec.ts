@@ -293,6 +293,8 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     await expect(confirmDialog).toContainText('Shuffle tables now');
     await page.getByTestId('staff-assignment-confirm-run').click();
     expect((await shuffled).ok()).toBeTruthy();
+    await expect(page.getByTestId('table-rezone-proposed-owner').first()).toBeVisible();
+    await expect(page.getByTestId('table-rezone-proposed-backup').first()).toBeVisible();
     await expect(page.getByTestId('table-staff-assignment-status')).toHaveText('Rotate daily');
 
     await page.getByTestId('staff-assignment-mode-shuffle_interval').click();

@@ -634,6 +634,7 @@ export default function TableStaffAssignment() {
             tables={roster.tables}
             skip={skipDraft}
             defaultStaff={present.size}
+            staffNames={new Map(roster.staff.map((member) => [member.id, member.name]))}
             onRezoned={() =>
               void api
                 .get<StaffRoster>('/tables/staff-roster')

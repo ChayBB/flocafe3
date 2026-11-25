@@ -7,7 +7,13 @@ import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { formatTableRanges, resolveTableRange } from '@/lib/table-ranges';
 
-type RezoneTable = { id: string; name: string; floor: string | null };
+type RezoneTable = {
+  id: string;
+  name: string;
+  floor: string | null;
+  owner_user_id?: string | null;
+  backup_user_id?: string | null;
+};
 
 /** The tables among the declared unused numbers ("26, 12-13"); numbers with no table are simply nothing to leave out. */
 export function resolveSkippedTables(skip: string, tables: RezoneTable[]) {
@@ -36,6 +42,10 @@ const byName = (a: RezoneTable, b: RezoneTable) =>
 const zoneName = (list: RezoneTable[]) =>
   [...new Set([list[0].name, list[list.length - 1].name])].join('-');
 
+const staffOf = (list: RezoneTable[], key: 'owner_user_id' | 'backup_user_id') => [
+  ...new Set(list.map((table) => table[key]).filter((id): id is string => Boolean(id))),
+];
+
 const field =
   'w-24 rounded-lg border border-border bg-background px-2 py-1 text-sm aria-[invalid=true]:border-red-500';
 
@@ -44,10 +54,12 @@ export default function TableRezone({
   tables,
   skip,
   defaultStaff,
+  staffNames,
   onRezoned,
 }: {
   tables: RezoneTable[];
   skip: string;
+  staffNames?: Map<string, string>;
   defaultStaff: number;
   onRezoned: () => void;
 }) {
@@ -107,7 +119,7 @@ export default function TableRezone({
     <span
       key={label}
       data-testid={testId}
-      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-foreground"
+      className="inline-flex items-center justify-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-foreground"
     >
       {label}
       <span className="text-muted-foreground">{t('rezoneTableCount', { count })}</span>
@@ -163,8 +175,14 @@ export default function TableRezone({
           className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
         >
           {staffNumber < defaultStaff
-            ? t('rezoneStaffTooMany', { typed: staffNumber, picked: defaultStaff })
-            : t('rezoneStaffTooFew', { typed: staffNumber, picked: defaultStaff })}
+            ? t('rezoneStaffTooMany', {
+                typed: staffNumber,
+                picked: defaultStaff,
+              })
+            : t('rezoneStaffTooFew', {
+                typed: staffNumber,
+                picked: defaultStaff,
+              })}
         </p>
       )}
 
@@ -177,7 +195,36 @@ export default function TableRezone({
 
       <p className="mt-4 mb-2 text-xs font-semibold text-muted-foreground">{t('rezoneProposed')}</p>
       <div className="flex flex-wrap gap-2">
-        {proposed.map((list) => chip(zoneName(list), list.length, 'table-rezone-proposed'))}
+        {proposed.map((list) => {
+          const names = (key: 'owner_user_id' | 'backup_user_id') =>
+            staffOf(list, key)
+              .map((id) => staffNames?.get(id))
+              .filter(Boolean)
+              .join(', ');
+          const owners = names('owner_user_id');
+          const backups = names('backup_user_id');
+          return (
+            <div key={zoneName(list)} className="flex flex-col items-stretch gap-1">
+              {chip(zoneName(list), list.length, 'table-rezone-proposed')}
+              {owners && (
+                <span
+                  data-testid="table-rezone-proposed-owner"
+                  className="max-w-40 truncate rounded-full border border-green-600 bg-[#EEF8F1] px-3 py-0.5 text-center text-xs font-semibold text-green-800 dark:border-green-500 dark:bg-green-950/40 dark:text-green-300"
+                >
+                  {owners}
+                </span>
+              )}
+              {backups && (
+                <span
+                  data-testid="table-rezone-proposed-backup"
+                  className="max-w-40 truncate rounded-full border border-brand/40 bg-brand-light px-3 py-0.5 text-center text-xs font-medium text-foreground"
+                >
+                  {backups}
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {confirming && (
