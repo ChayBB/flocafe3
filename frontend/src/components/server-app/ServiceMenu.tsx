@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { ArrowLeft, CalendarDays, UserRound } from 'lucide-react';
+import { ArrowLeft, CalendarDays, ChevronRight, UserRound } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import {
   Drawer,
@@ -93,16 +93,18 @@ export function ServiceMenu({
   const [otherState, setOther] = useState(false);
   const open = openState || staffMenuOpen;
   const other = otherState || staffMenuOpen;
+  const [staffUnlocked, setStaffUnlocked] = useState(false);
   const close = () => {
     setOpen(false);
     setOther(false);
+    setStaffUnlocked(false);
     onStaffMenuClose?.();
   };
   const enterStaff = () => {
     close();
     (onStaffProfile ?? onStaffLogin)();
   };
-  const staffGesture = useStaffEntryGesture(enterStaff);
+  const staffGesture = useStaffEntryGesture(() => setStaffUnlocked(true));
   const labels = {
     cutlery: t('serviceMenuCutlery'),
     condiments: t('serviceMenuCondiments'),
@@ -128,16 +130,17 @@ export function ServiceMenu({
           data-vaul-no-drag=""
           data-testid="service-menu-staff-handle"
           aria-label={t('serviceMenuStaffHandle')}
+          aria-pressed={staffUnlocked}
           {...staffGesture.handlers}
           className={`mx-auto mt-3 flex h-8 w-40 shrink-0 touch-none select-none items-center justify-center rounded-[12px] border-2 transition-colors focus-visible:outline-2 focus-visible:outline-brand ${
-            staffGesture.holding || staffGesture.tapCount > 0
+            staffUnlocked || staffGesture.holding || staffGesture.tapCount > 0
               ? 'border-brand'
               : 'border-transparent'
           }`}
         >
           <span
             aria-hidden="true"
-            className="pointer-events-none h-1.5 w-[100px] rounded-full bg-[#B5B5B5]"
+            className={`pointer-events-none h-1.5 w-[100px] rounded-full transition-colors ${staffUnlocked ? 'bg-brand' : 'bg-[#B5B5B5]'}`}
           />
         </button>
         <div
@@ -148,7 +151,7 @@ export function ServiceMenu({
           {Array.from({ length: STAFF_ENTRY_TAPS }, (_, i) => (
             <span
               key={i}
-              data-active={i < staffGesture.tapCount ? 'true' : undefined}
+              data-active={staffUnlocked || i < staffGesture.tapCount ? 'true' : undefined}
               className="flex size-7 items-center justify-center rounded-full bg-[#FFF1E8] text-xs font-semibold text-brand data-[active=true]:bg-brand data-[active=true]:text-white"
             >
               {i + 1}
@@ -240,6 +243,25 @@ export function ServiceMenu({
                   </div>
                 );
               })
+            )}
+            {!other && staffUnlocked && (
+              <button
+                type="button"
+                data-testid="service-menu-staff-area"
+                onClick={enterStaff}
+                className="col-span-2 flex items-center gap-3 self-start rounded-[12px] border border-brand/40 bg-[#FFF4EE] px-4 py-3 text-start focus-visible:outline-2 focus-visible:outline-brand"
+              >
+                <UserRound size={22} className="shrink-0 text-brand" aria-hidden="true" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold leading-5 text-[#222222]">
+                    {t('serviceMenuStaffArea')}
+                  </span>
+                  <span className="block text-[13px] leading-5 text-green-700">
+                    {t('serviceMenuStaffAreaHint')}
+                  </span>
+                </span>
+                <ChevronRight size={18} className="shrink-0 text-[#444444]" aria-hidden="true" />
+              </button>
             )}
           </div>
         </div>

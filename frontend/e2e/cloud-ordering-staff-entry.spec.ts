@@ -80,25 +80,28 @@ async function openServiceMenu(page: Page) {
   return menu.getByTestId('service-menu-staff-handle');
 }
 
-test('three quick taps on the grey bar open the staff area', async ({ page }) => {
+test('three quick taps on the grey bar unlock the staff area', async ({ page }) => {
   const handle = await openServiceMenu(page);
   await handle.click();
   await handle.click();
   await expect(page).toHaveURL(new RegExp(`^${origin}/`));
   await handle.click();
+  await page.getByTestId('service-menu-staff-area').click();
   await expect(page).toHaveURL(`${STAFF_URL}?staff=area`);
 });
 
-test('only a three-second hold on the grey bar opens the staff area', async ({ page }) => {
+test('only a three-second hold on the grey bar unlocks the staff area', async ({ page }) => {
   const handle = await openServiceMenu(page);
   await handle.hover();
   await page.mouse.down();
   await page.waitForTimeout(2000);
   await page.mouse.up();
-  await expect(page).toHaveURL(new RegExp(`^${origin}/`));
+  const staffArea = page.getByTestId('service-menu-staff-area');
+  await expect(staffArea).toHaveCount(0);
   await page.waitForTimeout(1600);
   await page.mouse.down();
   await page.waitForTimeout(3300);
-  await expect(page).toHaveURL(`${STAFF_URL}?staff=area`);
   await page.mouse.up();
+  await staffArea.click();
+  await expect(page).toHaveURL(`${STAFF_URL}?staff=area`);
 });

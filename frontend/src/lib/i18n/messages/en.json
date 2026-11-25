@@ -2061,6 +2061,8 @@
     "serviceMenuTitle": "Please select a service",
     "serviceMenuHint": "What can we help you with today?",
     "serviceMenuStaffHandle": "Staff entry",
+    "serviceMenuStaffArea": "Staff area",
+    "serviceMenuStaffAreaHint": "Registered devices",
     "serviceMenuStaffGestureHint": "Tap the grey bar above 3 times within 1.5 seconds, or hold it for 3 seconds",
     "serviceMenuCutlery": "Request cutlery",
     "serviceMenuCondiments": "Request condiments",

@@ -2061,6 +2061,8 @@
     "serviceMenuTitle": "กรุณาเลือกบริการ",
     "serviceMenuHint": "วันนี้ต้องการรับบริการด้านใดดีค่ะ",
     "serviceMenuStaffHandle": "ทางเข้าพนักงาน",
+    "serviceMenuStaffArea": "พื้นที่พนักงาน",
+    "serviceMenuStaffAreaHint": "อุปกรณ์ที่ลงทะเบียน",
     "serviceMenuStaffGestureHint": "แตะแถบสีเทาด้านบน 3 ครั้งภายใน 1.5 วินาที หรือกดค้าง 3 วินาที",
     "serviceMenuCutlery": "ขอช้อนส้อม",
     "serviceMenuCondiments": "ขอเครื่องปรุง",
