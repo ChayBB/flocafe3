@@ -79,6 +79,9 @@ test.describe('Staff profile My tables row', () => {
       .fill(String(base + 1));
     await expect(primary).toContainText('2 tables');
     await expect(backup.getByRole('textbox')).toHaveCount(4);
+    await expect(backup.getByTestId('staff-range-backup-hint')).toHaveText(
+      'Enter backup table numbers to help serve nearby zones',
+    );
     await expect(backup.getByRole('textbox').nth(2)).toHaveAttribute(
       'placeholder',
       String(base + 2),

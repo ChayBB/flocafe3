@@ -2046,6 +2046,7 @@
     "zone": "Zone {zone}",
     "rangePrimary": "Main tables",
     "rangeBackup": "Backup tables",
+    "rangeBackupHint": "Enter backup table numbers to help serve nearby zones",
     "rangeFrom": "From table",
     "rangeTo": "To table",
     "addPrimaryRange": "Add main tables",

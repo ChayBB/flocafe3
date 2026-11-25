@@ -124,6 +124,11 @@ export function StaffTableRangeForm({
           {t('tableCount', { count })}
         </span>
       </div>
+      {kind === 'backup' && (
+        <p data-testid="staff-range-backup-hint" className="text-base text-muted-foreground">
+          {t('rangeBackupHint')}
+        </p>
+      )}
       <div className="flex gap-3 pe-11 text-base text-muted-foreground">
         <span className="flex-1">{t('rangeFrom')}</span>
         <span className="w-4" />

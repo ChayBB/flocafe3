@@ -2046,6 +2046,7 @@
     "zone": "โซน {zone}",
     "rangePrimary": "โต๊ะหลัก",
     "rangeBackup": "โต๊ะสำรอง",
+    "rangeBackupHint": "กรอกหมายเลขโต๊ะสำรอง เพื่อช่วยบริการโซนที่อยู่ใกล้กัน",
     "rangeFrom": "ตั้งแต่โต๊ะ",
     "rangeTo": "ถึงโต๊ะ",
     "addPrimaryRange": "เพิ่มโต๊ะหลัก",
