@@ -6,6 +6,7 @@ import QRCode from 'qrcode';
 import toast, { Toaster } from 'react-hot-toast';
 import ProductGrid from '@/components/pos/ProductGrid';
 import { blockLongPressMenu } from '@/lib/block-long-press-menu';
+import { lockPageZoom } from '@/lib/lock-page-zoom';
 import { reopenPage } from '@/lib/reopen-page';
 import AddonModal from '@/components/pos/AddonModal';
 import { Button } from '@/components/ui/button';
@@ -747,7 +748,7 @@ function Ordering({
   });
   const staffUrl = snapshot?.staffUrl ? staffAreaUrl(snapshot.staffUrl) : null;
   return (
-    <>
+    <div className="flex h-dvh flex-col overflow-hidden">
       <ServerAppHeader
         logoUrl={branding.logo ?? null}
         coverUrl={branding.cover ?? assetUrl('./server-app-cover.jpg')}
@@ -787,7 +788,7 @@ function Ordering({
           onClose={() => setQrOpen(false)}
         />
       )}
-      <main className="mx-auto flex h-dvh max-w-5xl flex-col bg-background px-3 text-foreground">
+      <main className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col bg-background px-3 text-foreground">
         {status && (
           <p
             className="my-2 rounded-lg bg-muted px-3 py-2 text-center text-sm break-all"
@@ -1172,7 +1173,7 @@ function Ordering({
           </DialogContent>
         </Dialog>
       </main>
-    </>
+    </div>
   );
 }
 
@@ -1209,6 +1210,7 @@ function App() {
 }
 
 blockLongPressMenu();
+lockPageZoom();
 
 createRoot(document.getElementById('root')!, {
   onUncaughtError: () => window.dispatchEvent(new Event('flo-menu-render-error')),

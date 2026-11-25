@@ -95,6 +95,7 @@ import { cartItemToOrderItem } from '@/lib/cart-order-item';
 import { playSoundFile, unlockKdsAlertSound } from '@/lib/kds-alert-sound';
 import { kdsItemLine } from '@/lib/item-options-note';
 import { blockLongPressMenu } from '@/lib/block-long-press-menu';
+import { lockPageZoom } from '@/lib/lock-page-zoom';
 
 const SERVE_CONFIRM_BELL = '/sounds/serve-confirm-bell.wav';
 
@@ -446,6 +447,7 @@ export default function ServerStandalonePage() {
     return () => document.documentElement.classList.remove('theme-server-app');
   }, []);
   useEffect(() => blockLongPressMenu(), []);
+  useEffect(() => lockPageZoom(), []);
   // undefined while rendering on the server; null when the address carries no QR table.
   const guestTableId = useSyncExternalStore(
     subscribeToNothing,
@@ -2864,7 +2866,8 @@ export default function ServerStandalonePage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    // On a phone the page itself never scrolls: the header, table tabs and menu filters stay put while the menu scrolls.
+    <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground md:block md:h-auto md:min-h-screen md:overflow-visible">
       <ServerAppHeader
         logoUrl={
           regional?.store_logo_version
@@ -2996,7 +2999,7 @@ export default function ServerStandalonePage() {
         </div>
       ) : (
         <main
-          className={`mx-auto grid max-w-6xl min-w-0 gap-3 px-4 py-2 md:p-3 ${showTablePicker ? 'md:grid-cols-[180px_1fr] lg:grid-cols-[220px_1fr_340px]' : 'lg:grid-cols-[1fr_340px]'}`}
+          className={`mx-auto flex min-h-0 w-full max-w-6xl min-w-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-2 md:grid md:flex-none md:overflow-visible md:p-3 ${showTablePicker ? 'md:grid-cols-[180px_1fr] lg:grid-cols-[220px_1fr_340px]' : 'lg:grid-cols-[1fr_340px]'}`}
         >
           <GuestAlerts key={user?.id} api={api} apiPrefix="/api" enabled={!!user} />
 
@@ -3082,7 +3085,7 @@ export default function ServerStandalonePage() {
               ref={tablePickerRef}
               id="server-app-table-picker"
               data-testid="server-app-table-picker"
-              className="min-w-0 scroll-mt-20 md:rounded-lg md:border md:border-border md:bg-card md:p-3"
+              className="max-h-[40dvh] min-w-0 shrink-0 scroll-mt-20 overflow-y-auto md:max-h-none md:overflow-visible md:rounded-lg md:border md:border-border md:bg-card md:p-3"
             >
               {backupGroups.length > 0 ? (
                 <div
@@ -3246,7 +3249,7 @@ export default function ServerStandalonePage() {
               On a phone the menu has no frame of its own, so the photos get the full width. */}
           <section
             ref={menuRef}
-            className="flex h-[calc(100svh-5rem)] min-h-96 min-w-0 flex-col md:rounded-lg md:border md:border-border md:bg-card md:p-3"
+            className="flex min-h-[50dvh] min-w-0 flex-1 flex-col md:h-[calc(100svh-5rem)] md:min-h-96 md:flex-none md:rounded-lg md:border md:border-border md:bg-card md:p-3"
           >
             {user && !tablePickerOpen && activeTable && !isWide && showKitchenSummary && (
               <div data-testid="server-app-table-actions" className="mb-3">

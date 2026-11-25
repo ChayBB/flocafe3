@@ -72,7 +72,7 @@ export function ServerAppHeader({
   return (
     <header
       data-testid="server-app-header"
-      className={`relative bg-background ${headerFont.className}`}
+      className={`relative shrink-0 bg-background ${headerFont.className}`}
     >
       <div className="relative flex min-h-[205px] flex-col overflow-hidden bg-[#F3D4A8] sm:min-h-60">
         {/* eslint-disable-next-line @next/next/no-img-element */}
