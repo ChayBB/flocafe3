@@ -24,3 +24,23 @@ test.describe('Staff area sign-in opened from the Cloud QR page', () => {
     }
   });
 });
+
+test('staff sign-in on a device that scanned a table QR offers Exit back to that table', async ({
+  page,
+}) => {
+  const tableLink = `${E2E_SERVER_APP_BASE_URL}/server-standalone/?table=tbl-scanned`;
+  await page.goto(tableLink);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('flocafe:server-app-table-entry')))
+    .toBe(tableLink);
+  await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone/`);
+  await expect(page.getByPlaceholder(/Staff code|รหัสพนักงาน/)).toBeVisible();
+  await page.getByTestId('server-app-login-exit').click();
+  await expect(page).toHaveURL(tableLink);
+});
+
+test('staff sign-in on a device that never scanned a table shows no Exit', async ({ page }) => {
+  await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone/`);
+  await expect(page.getByPlaceholder(/Staff code|รหัสพนักงาน/)).toBeVisible();
+  await expect(page.getByTestId('server-app-login-exit')).toHaveCount(0);
+});

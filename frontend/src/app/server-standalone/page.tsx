@@ -247,6 +247,20 @@ function cloudReturnUrl(): string | null {
   }
 }
 
+const TABLE_ENTRY_KEY = 'flocafe:server-app-table-entry';
+
+/** The table QR link this device last scanned on this Server App, so staff sign-in can lead back to it. */
+function rememberedTableEntry(): string | null {
+  try {
+    const raw = window.localStorage.getItem(TABLE_ENTRY_KEY);
+    if (!raw) return null;
+    const url = new URL(raw);
+    return url.origin === window.location.origin && url.searchParams.get('table') ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 // Tablets and computers: the current ticket sits beside the menu.
 const WIDE_QUERY = '(min-width: 768px)';
 function subscribeToWide(onChange: () => void) {
@@ -424,7 +438,9 @@ export default function ServerStandalonePage() {
     () => new URLSearchParams(window.location.search).get('staff') === 'area',
     () => false,
   );
-  const staffReturnUrl = useSyncExternalStore(subscribeToNothing, cloudReturnUrl, () => null);
+  const cloudStaffReturnUrl = useSyncExternalStore(subscribeToNothing, cloudReturnUrl, () => null);
+  const tableEntryUrl = useSyncExternalStore(subscribeToNothing, rememberedTableEntry, () => null);
+  const staffReturnUrl = cloudStaffReturnUrl ?? tableEntryUrl;
   useEffect(() => {
     document.documentElement.classList.add('theme-server-app');
     return () => document.documentElement.classList.remove('theme-server-app');
@@ -447,6 +463,12 @@ export default function ServerStandalonePage() {
     () => new URLSearchParams(window.location.search).get('s'),
     () => null,
   );
+  useEffect(() => {
+    if (!guestTableId) return;
+    try {
+      window.localStorage.setItem(TABLE_ENTRY_KEY, window.location.href);
+    } catch {}
+  }, [guestTableId]);
   const guestMenuPrefetchRef = useRef<{
     startedAt: number;
     request: Promise<Settled<AxiosResponse>>;
@@ -2552,7 +2574,7 @@ export default function ServerStandalonePage() {
               {user ? tCommon('cancel') : t('continueAsGuest')}
             </button>
           )}
-          {!user && staffReturnUrl && (
+          {!user && !guestTable && staffReturnUrl && (
             <button
               type="button"
               data-testid="server-app-login-exit"
