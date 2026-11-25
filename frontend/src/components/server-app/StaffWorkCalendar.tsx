@@ -13,7 +13,7 @@ const shiftMonth = (key: string, by: number) => {
 };
 
 const tone = {
-  work: 'border-green-600 bg-green-500 text-white',
+  work: 'border-green-600 bg-[#EEF8F1] text-green-800 dark:border-green-500 dark:bg-green-950/40 dark:text-green-300',
   absent: 'border-orange-500 bg-orange-500 text-white',
   off: 'border-border bg-white text-gray-900 dark:bg-background dark:text-foreground',
   future: 'border-transparent bg-transparent text-muted-foreground/60',
