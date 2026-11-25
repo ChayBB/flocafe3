@@ -1,6 +1,6 @@
 'use client';
 
-import { sortZoneNames, zoneOfHighestTable } from '@/lib/table-ranges';
+import { sortZoneNames, tableNamesForZone, zoneOfHighestTable } from '@/lib/table-ranges';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -340,6 +340,7 @@ export default function TablesPage() {
   const [floorFormOpen, setFloorFormOpen] = useState(false);
   const [floorForm, setFloorForm] = useState({ name: '', tableName: '', capacity: '4' });
   const [floorFormSaving, setFloorFormSaving] = useState(false);
+  const [floorCapacities, setFloorCapacities] = useState<Record<string, string>>({});
   const [floorRenameOpen, setFloorRenameOpen] = useState<{ from: string; to: string } | null>(null);
   const [floorDeleteTarget, setFloorDeleteTarget] = useState<string | null>(null);
   const [floorEditTarget, setFloorEditTarget] = useState<string | null>(null);
@@ -567,29 +568,64 @@ export default function TablesPage() {
     }
   };
 
+  const rangeNames = tableNamesForZone(floorForm.name);
+  const existingByName = new Map(
+    tables.map((table) => [(table.name || '').trim().toLowerCase(), table]),
+  );
+  const existingIn = (tableName: string) => existingByName.get(tableName.trim().toLowerCase());
+  const zoneLabel = (table: Table | undefined) => table?.floor?.trim() || tTables('rezoneNoZone');
+  const floorFormClashes = (rangeNames ?? [floorForm.tableName]).filter((name) => existingIn(name));
+
   const submitFloorForm = async (e: React.FormEvent) => {
     e.preventDefault();
     const floorName = floorForm.name.trim();
-    const tableName = floorForm.tableName.trim();
-    const capacity = Number(floorForm.capacity);
-    if (!floorName || !tableName || !Number.isInteger(capacity) || capacity < 1) return;
+    if (!floorName || floorFormClashes.length > 0) return;
+    // A range such as "43-48" lists its tables; a capacity left blank takes the default.
+    const rows = rangeNames
+      ? rangeNames.map((number) => ({
+          number,
+          capacity: (floorCapacities[number] ?? '').trim(),
+        }))
+      : [{ number: floorForm.tableName.trim(), capacity: floorForm.capacity.trim() }];
+    if (rows.some((row) => !row.number)) return;
+    if (
+      rows.some(
+        (row) =>
+          row.capacity !== '' &&
+          (!Number.isInteger(Number(row.capacity)) || Number(row.capacity) < 1),
+      ) ||
+      (!rangeNames && rows[0].capacity === '')
+    ) {
+      return;
+    }
     setFloorFormSaving(true);
     try {
-      const { data } = await api.post('/tables', {
-        name: tableName,
-        capacity,
+      await api.post('/tables/batch', {
         floor: floorName,
+        tables: rows.map((row) => ({
+          number: row.number,
+          capacity: row.capacity === '' ? null : Number(row.capacity),
+        })),
       });
-      setTables((current) => [
-        ...current,
-        { ...data.table, name: data.table.name || data.table.number },
-      ]);
       toast.success(tTables('tableCreated'));
       setFloorFormOpen(false);
       setSelectedFloor(floorName);
       setFloorForm({ name: '', tableName: '', capacity: '4' });
-    } catch {
-      toast.error(tTables('tableCreateFailed'));
+      setFloorCapacities({});
+      fetchTables();
+    } catch (error: unknown) {
+      const data = (error as { response?: { data?: { code?: string; table?: string } } })?.response
+        ?.data;
+      const table = data?.table ?? '';
+      toast.error(
+        data?.code === 'TABLE_NAME_DUPLICATE' && existingIn(table)
+          ? tTables('floorFormTableExists', { table, zone: zoneLabel(existingIn(table)) })
+          : data?.code === 'TABLE_NAME_DUPLICATE'
+            ? tTables('tableNameDuplicateNamed', { table })
+            : data?.code === 'TABLE_INACTIVE_DUPLICATE'
+              ? tTables('tableInactiveDuplicateNamed', { table })
+              : tTables('tableCreateFailed'),
+      );
     } finally {
       setFloorFormSaving(false);
     }
@@ -1507,41 +1543,99 @@ export default function TablesPage() {
                   required
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label
-                    htmlFor="list-floor-table"
-                    className="block text-sm font-medium text-foreground mb-1"
-                  >
-                    {tTables('tableName')}
-                  </label>
-                  <input
-                    id="list-floor-table"
-                    type="text"
-                    value={floorForm.tableName}
-                    onChange={(e) => setFloorForm({ ...floorForm, tableName: e.target.value })}
-                    className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
-                    required
-                  />
+              {rangeNames ? (
+                <div className="space-y-2" data-testid="list-floor-range">
+                  <p className="text-xs text-muted-foreground">
+                    {tTables('floorRangeHint', { count: rangeNames.length })}
+                  </p>
+                  <div className="max-h-56 space-y-2 overflow-y-auto pe-1">
+                    <div className="grid grid-cols-2 gap-3 text-xs font-medium text-muted-foreground">
+                      <span>{tTables('tableName')}</span>
+                      <span>{tTables('capacity')}</span>
+                    </div>
+                    {rangeNames.map((tableName) => (
+                      <div key={tableName} className="grid grid-cols-2 gap-3">
+                        <div
+                          data-testid={`list-floor-range-row-${tableName}`}
+                          data-exists={existingIn(tableName) ? 'true' : undefined}
+                          className={`flex min-w-0 flex-col justify-center rounded-lg border px-3 py-2 text-sm font-medium ${
+                            existingIn(tableName)
+                              ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
+                              : 'border-border bg-muted/40'
+                          }`}
+                        >
+                          {tableName}
+                          {existingIn(tableName) && (
+                            <span className="truncate text-[11px] font-normal">
+                              {tTables('floorFormTableExistsShort', {
+                                zone: zoneLabel(existingIn(tableName)),
+                              })}
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          min="1"
+                          inputMode="numeric"
+                          aria-label={`${tTables('capacity')} ${tableName}`}
+                          value={floorCapacities[tableName] ?? ''}
+                          placeholder="4"
+                          onChange={(e) =>
+                            setFloorCapacities({ ...floorCapacities, [tableName]: e.target.value })
+                          }
+                          className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{tTables('capacityBlankHint')}</p>
+                  {floorFormClashes.length > 0 && (
+                    <p
+                      role="alert"
+                      data-testid="list-floor-range-clash"
+                      className="text-xs text-red-600"
+                    >
+                      {tTables('floorFormTablesExist', { tables: floorFormClashes.join(', ') })}
+                    </p>
+                  )}
                 </div>
-                <div>
-                  <label
-                    htmlFor="list-floor-capacity"
-                    className="block text-sm font-medium text-foreground mb-1"
-                  >
-                    {tTables('capacity')}
-                  </label>
-                  <input
-                    id="list-floor-capacity"
-                    type="number"
-                    min="1"
-                    value={floorForm.capacity}
-                    onChange={(e) => setFloorForm({ ...floorForm, capacity: e.target.value })}
-                    className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
-                    required
-                  />
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label
+                      htmlFor="list-floor-table"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      {tTables('tableName')}
+                    </label>
+                    <input
+                      id="list-floor-table"
+                      type="text"
+                      value={floorForm.tableName}
+                      onChange={(e) => setFloorForm({ ...floorForm, tableName: e.target.value })}
+                      className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="list-floor-capacity"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      {tTables('capacity')}
+                    </label>
+                    <input
+                      id="list-floor-capacity"
+                      type="number"
+                      min="1"
+                      value={floorForm.capacity}
+                      onChange={(e) => setFloorForm({ ...floorForm, capacity: e.target.value })}
+                      className="w-full px-3 py-2 border border-border bg-card rounded-lg outline-none focus:ring-2 focus:ring-brand"
+                      required
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
               <div className="flex gap-2 pt-1">
                 <Button
                   type="button"
@@ -1552,7 +1646,12 @@ export default function TablesPage() {
                 >
                   {tTables('cancel')}
                 </Button>
-                <Button type="submit" className="flex-1" disabled={floorFormSaving}>
+                <Button
+                  type="submit"
+                  className="flex-1"
+                  disabled={floorFormSaving || floorFormClashes.length > 0}
+                  data-testid="list-floor-create"
+                >
                   {floorFormSaving ? tCommon('saving') : tTables('createTable')}
                 </Button>
               </div>

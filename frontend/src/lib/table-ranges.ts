@@ -140,3 +140,15 @@ export function zoneOfHighestTable(
   }
   return top ? top.floor : null;
 }
+
+const MAX_RANGE_TABLES = 100;
+
+/** "19-25" names seven tables, 19 through 25. Anything else is a plain zone name. */
+export function tableNamesForZone(zoneName: string): string[] | null {
+  const match = /^\s*(\d{1,4})\s*[-–]\s*(\d{1,4})\s*$/.exec(zoneName);
+  if (!match) return null;
+  const from = Number(match[1]);
+  const to = Number(match[2]);
+  if (to < from || to - from + 1 > MAX_RANGE_TABLES) return null;
+  return Array.from({ length: to - from + 1 }, (_, index) => String(from + index));
+}

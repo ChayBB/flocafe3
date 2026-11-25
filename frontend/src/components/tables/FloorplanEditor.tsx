@@ -2,7 +2,7 @@
 
 // Floorplan canvas editor: drag tables and persist X/Y coordinates per floor as percentages.
 
-import { sortZoneNames, zoneOfHighestTable } from '@/lib/table-ranges';
+import { sortZoneNames, tableNamesForZone, zoneOfHighestTable } from '@/lib/table-ranges';
 import TableOwnerModal, { type OwnerScope } from './TableOwnerModal';
 import FloorEditDialog from './FloorEditDialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -170,18 +170,6 @@ function tableRadius(capacity: number): number {
 
 // Find the first empty grid cell (5% step) starting top-left so newly added
 // tables drop into a free corner and never overlap existing ones.
-const MAX_RANGE_TABLES = 100;
-
-/** "19-25" names seven tables, 19 through 25. Anything else is a plain zone name. */
-function tableNamesForZone(zoneName: string): string[] | null {
-  const match = /^\s*(\d{1,4})\s*[-–]\s*(\d{1,4})\s*$/.exec(zoneName);
-  if (!match) return null;
-  const from = Number(match[1]);
-  const to = Number(match[2]);
-  if (to < from || to - from + 1 > MAX_RANGE_TABLES) return null;
-  return Array.from({ length: to - from + 1 }, (_, index) => String(from + index));
-}
-
 function findNextFreePosition(
   capacity: number,
   others: Array<{ x: number; y: number; capacity: number }>,

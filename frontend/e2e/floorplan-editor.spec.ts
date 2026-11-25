@@ -517,3 +517,45 @@ test('list view: the floor menu also offers Edit', async ({ page }) => {
   await form.getByRole('button', { name: 'Cancel' }).click();
   await expect(form).toBeHidden();
 });
+
+test('list view: a new floor range lists its tables with seats and creates them', async ({
+  page,
+  request,
+}) => {
+  const auth = {
+    Authorization: `Bearer ${(await (await request.post(`${BASE}/api/auth/login`, { data: { email: EMAIL, password: PASSWORD } })).json()).access_token}`,
+  };
+  const base = 8100 + Math.floor(Math.random() * 800);
+  const zone = `${base}-${base + 2}`;
+  try {
+    await login(page);
+    await page.getByRole('button', { name: 'List' }).click();
+    await page.getByTestId('list-add-floor').click();
+    const form = page.getByTestId('list-floor-form');
+    await form.locator('#list-floor-name').fill(zone);
+    await expect(form.getByTestId('list-floor-range')).toContainText('This creates 3 tables');
+    for (const n of [base, base + 1, base + 2]) {
+      await expect(form.getByTestId(`list-floor-range-row-${n}`)).toBeVisible();
+    }
+    await form.getByLabel(`Capacity ${base + 1}`, { exact: true }).fill('6');
+    await form.getByTestId('list-floor-create').click();
+    await expect(form).toBeHidden();
+    const list = await (await request.get(`${BASE}/api/tables`, { headers: auth })).json();
+    const created = (list.tables as { number: string; capacity: number; floor: string }[]).filter(
+      (table) => table.floor === zone,
+    );
+    expect(created.map((table) => [table.number, table.capacity])).toEqual(
+      expect.arrayContaining([
+        [String(base), 4],
+        [String(base + 1), 6],
+        [String(base + 2), 4],
+      ]),
+    );
+  } finally {
+    const list = await (await request.get(`${BASE}/api/tables`, { headers: auth })).json();
+    for (const table of list.tables as { id: string; floor: string }[]) {
+      if (table.floor === zone)
+        await request.delete(`${BASE}/api/tables/${table.id}`, { headers: auth });
+    }
+  }
+});
