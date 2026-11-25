@@ -6,10 +6,10 @@ const ownerHeaders = {
   Authorization: `Bearer ${getE2eToken('e2e-owner', 'owner@flo.local', 'owner')}`,
 };
 
-async function setMode(page: Page, mode: 'manual' | 'staff_managed') {
+async function setMode(page: Page, mode: 'manual' | 'staff_managed', backup_enabled = false) {
   const response = await page.request.put(`${E2E_BASE_URL}/api/tables/owner-assignment`, {
     headers: ownerHeaders,
-    data: { mode },
+    data: { mode, backup_enabled },
   });
   expect(response.ok()).toBeTruthy();
 }
@@ -52,5 +52,66 @@ test.describe('Staff profile My tables row', () => {
     await expect(row).not.toContainText(/\d+ tables?/);
     await row.click();
     await expect(page.getByTestId('staff-table-picker')).toBeVisible();
+  });
+
+  test('staff type table ranges for their main and backup tables', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const base = 9000 + Math.floor(Math.random() * 900) * 10;
+    const ids: Record<number, string> = {};
+    for (const offset of [0, 1, 2, 4]) {
+      const created = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+        headers: ownerHeaders,
+        data: { number: String(base + offset), capacity: 2 },
+      });
+      expect(created.ok()).toBeTruthy();
+      ids[offset] = (await created.json()).table.id;
+    }
+    await setMode(page, 'staff_managed', true);
+    const row = await openProfile(page);
+    await row.click();
+    const picker = page.getByTestId('staff-table-picker');
+    const primary = picker.getByTestId('staff-range-primary');
+    const backup = picker.getByTestId('staff-range-backup');
+    await primary.getByRole('textbox').nth(0).fill(String(base));
+    await primary
+      .getByRole('textbox')
+      .nth(1)
+      .fill(String(base + 1));
+    await expect(primary).toContainText('2 tables');
+    await backup
+      .getByRole('textbox')
+      .nth(0)
+      .fill(String(base + 1));
+    await backup
+      .getByRole('textbox')
+      .nth(1)
+      .fill(String(base + 1));
+    await expect(backup).toContainText('is in both main and backup tables');
+    await backup
+      .getByRole('textbox')
+      .nth(0)
+      .fill(String(base + 2));
+    await backup
+      .getByRole('textbox')
+      .nth(1)
+      .fill(String(base + 4));
+    await expect(backup).toContainText('2 tables');
+    await expect(picker.getByTestId('staff-range-total')).toHaveText('4 tables');
+    await picker.screenshot({ path: test.info().outputPath('staff-table-ranges.png') });
+    await picker.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(picker).toHaveCount(0);
+
+    const list = await (
+      await page.request.get(`${E2E_BASE_URL}/api/tables`, { headers: ownerHeaders })
+    ).json();
+    const byId = new Map(
+      (list.tables ?? list).map((table: { id: string }) => [table.id, table] as const),
+    );
+    const staffId = (byId.get(ids[0]) as { owner_user_id: string }).owner_user_id;
+    expect(staffId).toBeTruthy();
+    expect((byId.get(ids[1]) as { owner_user_id: string }).owner_user_id).toBe(staffId);
+    expect((byId.get(ids[2]) as { backup_user_id: string }).backup_user_id).toBe(staffId);
+    expect((byId.get(ids[4]) as { backup_user_id: string }).backup_user_id).toBe(staffId);
+    expect((byId.get(ids[2]) as { owner_user_id: string | null }).owner_user_id).toBeNull();
   });
 });

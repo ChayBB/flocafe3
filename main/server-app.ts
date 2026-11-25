@@ -773,12 +773,14 @@ export function startServerApp(): Promise<void> {
          FROM table_bills`,
         )
         .get(userId, start, end);
+      const assignment = readTableOwnerAssignmentSettings(db);
       res.json({
         business_date: businessDate,
         timezone,
         attendance,
         summary,
-        assignment_mode: readTableOwnerAssignmentSettings(db).mode,
+        assignment_mode: assignment.mode,
+        backup_enabled: assignment.backup_enabled,
       });
     });
 

@@ -6,7 +6,6 @@ import toast from 'react-hot-toast';
 import {
   ArrowLeft,
   BarChart3,
-  Check,
   ChevronRight,
   Clock,
   Home,
@@ -27,6 +26,7 @@ import { useLocale, useTranslations } from 'use-intl';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP } from '@/lib/font-scale';
 import type { Language } from '@/lib/i18n/languages';
 import { parseDbTimestamp } from '@/lib/utils';
+import { StaffTableRangeForm } from './StaffTableRangeForm';
 
 type ProfileData = {
   business_date: string;
@@ -38,6 +38,7 @@ type ProfileData = {
   }[];
   summary: { sales: number; bills: number; guests: number };
   assignment_mode?: string;
+  backup_enabled?: boolean;
 };
 
 type ProfileTable = {
@@ -120,7 +121,7 @@ export function StaffProfile({
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [failed, setFailed] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [picking, setPicking] = useState<Set<string> | null>(null);
+  const [picking, setPicking] = useState(false);
   const [savingTables, setSavingTables] = useState(false);
   useEffect(() => {
     if (!api) return;
@@ -246,40 +247,31 @@ export function StaffProfile({
     </section>
   );
   const staffManaged = snapshot?.assignment_mode === 'staff_managed';
-  const startPicking = () =>
-    setPicking(
-      new Set(
-        allTables.filter((table) => table.owner_user_id === user.id).map((table) => table.id),
-      ),
-    );
-  const togglePick = (id: string) =>
-    setPicking((current) => {
-      if (!current) return current;
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const saveTables = async () => {
-    if (!api || !picking || savingTables) return;
+  const startPicking = () => setPicking(true);
+  const saveTables = async (tableIds: string[], backupTableIds: string[] | undefined) => {
+    if (!api || savingTables) return;
     setSavingTables(true);
     try {
-      await api.put('/api/staff-profile/tables', { table_ids: [...picking] });
+      await api.put('/api/staff-profile/tables', {
+        table_ids: tableIds,
+        ...(backupTableIds ? { backup_table_ids: backupTableIds } : {}),
+      });
       toast.success(t('tablesSaved'));
-      setPicking(null);
+      setPicking(false);
       onTablesChanged();
     } catch (error: unknown) {
       const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code;
-      const stale = code === 'TABLE_OWNED_BY_OTHER' || code === 'STAFF_MANAGED_MODE_OFF';
+      const taken = code === 'TABLE_OWNED_BY_OTHER' || code === 'TABLE_BACKUP_TAKEN';
+      const stale = taken || code === 'STAFF_MANAGED_MODE_OFF' || code === 'TABLE_BACKUP_DISABLED';
       toast.error(
-        code === 'TABLE_OWNED_BY_OTHER'
+        taken
           ? t('tablesTaken')
           : code === 'STAFF_MANAGED_MODE_OFF'
             ? t('tablesModeOff')
             : t('tablesSaveFailed'),
       );
       if (stale) {
-        setPicking(null);
+        setPicking(false);
         onTablesChanged();
         setRefresh((value) => value + 1);
       }
@@ -288,52 +280,19 @@ export function StaffProfile({
     }
   };
   const tablePicker = picking && (
-    <section className={card} data-testid="staff-table-picker">
-      {sectionHeader(t('chooseTables'))}
-      <p className="mb-3 text-lg text-muted-foreground">{t('chooseTablesHint')}</p>
-      <div className="grid grid-cols-3 gap-2">
-        {[...allTables].sort(byTableName).map((table) => {
-          const taken = Boolean(table.owner_user_id && table.owner_user_id !== user.id);
-          const selected = picking.has(table.id);
-          return (
-            <button
-              key={table.id}
-              type="button"
-              role="checkbox"
-              aria-checked={selected}
-              disabled={taken}
-              onClick={() => togglePick(table.id)}
-              className={`flex min-h-20 flex-col items-center justify-center rounded-xl border-2 px-1 text-lg font-bold disabled:opacity-50 ${selected ? `${accentBorder} ${accentSoft} ${accentText}` : 'border-border bg-background'}`}
-            >
-              <span className="flex items-center gap-1">
-                {selected && <Check size={20} aria-hidden="true" />}
-                <span className="break-words text-center leading-tight">
-                  {t('tableName', { name: tableLabel(table) })}
-                </span>
-              </span>
-              {taken && <span className="text-sm font-normal">{t('tableTaken')}</span>}
-            </button>
-          );
-        })}
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={() => setPicking(null)}
-          className={`${action} border-2 border-border`}
-        >
-          {t('cancel')}
-        </button>
-        <button
-          type="button"
-          disabled={savingTables}
-          onClick={() => void saveTables()}
-          className={`${action} bg-orange-600 text-white disabled:opacity-60 dark:bg-orange-500 dark:text-orange-950`}
-        >
-          {t('save')}
-        </button>
-      </div>
-    </section>
+    <StaffTableRangeForm
+      tables={allTables.map((table) => ({
+        id: table.id,
+        label: tableLabel(table),
+        owner_user_id: table.owner_user_id,
+        backup_user_id: table.backup_user_id,
+      }))}
+      userId={user.id}
+      backupEnabled={Boolean(snapshot?.backup_enabled)}
+      saving={savingTables}
+      onSave={(tableIds, backupTableIds) => void saveTables(tableIds, backupTableIds)}
+      onCancel={() => setPicking(false)}
+    />
   );
   const openPicker = () => {
     setPanel('tables');

@@ -17,3 +17,62 @@ export function formatTableRanges(names: readonly string[]): string {
   }
   return [...runs, ...others].join(', ');
 }
+
+export type TableRange = { from: string; to: string };
+export type RangeTable = { id: string; label: string };
+
+const asNumber = (value: string) =>
+  PLAIN_INTEGER.test(value.trim()) ? Number(value.trim()) : null;
+
+const byLabel = (a: RangeTable, b: RangeTable) =>
+  a.label.localeCompare(b.label, undefined, { numeric: true });
+
+/** Tables a typed range names: every numbered table from..to, or the one table named exactly. */
+export function resolveTableRange<T extends RangeTable>(
+  range: TableRange,
+  tables: readonly T[],
+): T[] {
+  const from = range.from.trim();
+  const to = range.to.trim() || from;
+  if (!from) return [];
+  const low = asNumber(from);
+  const high = asNumber(to);
+  if (low !== null && high !== null) {
+    const [min, max] = low <= high ? [low, high] : [high, low];
+    return tables
+      .filter((table) => {
+        const number = asNumber(table.label);
+        return number !== null && number >= min && number <= max;
+      })
+      .sort(byLabel);
+  }
+  return from === to ? tables.filter((table) => table.label.trim() === from) : [];
+}
+
+/** The fewest ranges that cover `chosen`, merging tables that sit next to each other in `all`. */
+export function tablesToRanges(
+  chosen: readonly RangeTable[],
+  all: readonly RangeTable[],
+): TableRange[] {
+  const picked = new Set(chosen.map((table) => table.id));
+  const ranges: TableRange[] = [];
+  let run: RangeTable[] = [];
+  const flush = () => {
+    if (run.length) ranges.push({ from: run[0].label, to: run[run.length - 1].label });
+    run = [];
+  };
+  for (const table of [...all].sort(byLabel)) {
+    if (!picked.has(table.id)) {
+      flush();
+      continue;
+    }
+    if (asNumber(table.label) === null) {
+      flush();
+      ranges.push({ from: table.label, to: table.label });
+      continue;
+    }
+    run.push(table);
+  }
+  flush();
+  return ranges;
+}

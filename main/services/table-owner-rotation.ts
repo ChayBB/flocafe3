@@ -572,8 +572,9 @@ export type OwnTablesClaim =
   | { ok: false; status: number; code: string; error: string };
 
 /**
- * In staff-managed mode a signed-in staff member sets which tables they look after. They can take
- * free tables and drop their own, but never take or clear a table another person owns.
+ * In staff-managed mode a signed-in staff member sets which tables they look after, and, when the
+ * store uses backup tables and the request names them, which tables they back up. They can take free
+ * tables and drop their own, but never take or clear a table or backup slot another person holds.
  */
 export function claimOwnTables(db: Db, userId: string, body: unknown): OwnTablesClaim {
   if (readTableOwnerAssignmentSettings(db).mode !== 'staff_managed') {
@@ -593,18 +594,38 @@ export function claimOwnTables(db: Db, userId: string, body: unknown): OwnTables
     };
   }
   const ids = (body as { table_ids?: unknown } | null)?.table_ids;
-  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+  const backupIds = (body as { backup_table_ids?: unknown } | null)?.backup_table_ids;
+  const isIdList = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every((id) => typeof id === 'string');
+  if (!isIdList(ids) || (backupIds !== undefined && !isIdList(backupIds))) {
     return {
       ok: false,
       status: 400,
       code: 'STAFF_TABLES_INVALID',
-      error: 'table_ids must be a list of table ids',
+      error: 'table_ids and backup_table_ids must be lists of table ids',
     };
   }
-  const wanted = new Set(ids as string[]);
+  const wanted = new Set(ids);
+  const wantedBackup = backupIds === undefined ? null : new Set(backupIds);
+  if (wantedBackup?.size && !isTableBackupEnabled(db)) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'TABLE_BACKUP_DISABLED',
+      error: 'The store does not use backup tables',
+    };
+  }
+  if (wantedBackup && [...wantedBackup].some((id) => wanted.has(id))) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'STAFF_TABLES_OVERLAP',
+      error: 'A table cannot be both your table and your backup table',
+    };
+  }
   const tables = activeTablesInOrder(db);
   const active = new Map(tables.map((table) => [table.id, table]));
-  if ([...wanted].some((id) => !active.has(id))) {
+  if ([...wanted, ...(wantedBackup ?? [])].some((id) => !active.has(id))) {
     return {
       ok: false,
       status: 400,
@@ -625,22 +646,40 @@ export function claimOwnTables(db: Db, userId: string, body: unknown): OwnTables
       error: 'Another staff member already looks after this table',
     };
   }
+  if (
+    wantedBackup &&
+    [...wantedBackup].some((id) => {
+      const backup = active.get(id)?.backup_user_id;
+      return backup != null && backup !== userId;
+    })
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'TABLE_BACKUP_TAKEN',
+      error: 'Another staff member already backs up this table',
+    };
+  }
   const businessDate = currentBusinessDate(db);
   const changes = db.transaction(() =>
     tables.flatMap((table) => {
       const mine = table.owner_user_id === userId;
-      if (wanted.has(table.id) === mine) return [];
-      const next = wanted.has(table.id)
-        ? {
-            owner: userId,
-            backup: table.backup_user_id === userId ? null : table.backup_user_id,
-          }
-        : { owner: null, backup: table.backup_user_id };
-      return setTableStaff(db, table, next, {
-        action: 'staff_claim',
-        actorUserId: userId,
-        businessDate,
-      });
+      const owner = wanted.has(table.id) ? userId : mine ? null : table.owner_user_id;
+      let backup = table.backup_user_id;
+      if (wantedBackup)
+        backup = wantedBackup.has(table.id) ? userId : backup === userId ? null : backup;
+      if (owner === userId && backup === userId) backup = null;
+      if (owner === table.owner_user_id && backup === table.backup_user_id) return [];
+      return setTableStaff(
+        db,
+        table,
+        { owner, backup },
+        {
+          action: 'staff_claim',
+          actorUserId: userId,
+          businessDate,
+        },
+      );
     }),
   )();
   return { ok: true, changes };

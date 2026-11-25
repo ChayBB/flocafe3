@@ -167,6 +167,52 @@ async function main() {
       'table_ids must be a list',
     );
 
+    const backupOf = (id: string) =>
+      db.prepare('SELECT backup_user_id FROM tables WHERE id = ?').get(id).backup_user_id;
+    await putMode({ mode: 'staff_managed', backup_enabled: false });
+    const backupOff = claimOwnTables(db, 'staff-a', {
+      table_ids: ['t1'],
+      backup_table_ids: ['t4'],
+    });
+    assertOrThrow(
+      !backupOff.ok && backupOff.code === 'TABLE_BACKUP_DISABLED',
+      'backup tables are refused when the store does not use them',
+    );
+    assertEqualOrThrow(owners(db).t1, null, 'a refused backup claim takes no table either');
+    await putMode({ mode: 'staff_managed', backup_enabled: true });
+    const withBackup = claimOwnTables(db, 'staff-a', {
+      table_ids: ['t1'],
+      backup_table_ids: ['t4'],
+    });
+    assertOrThrow(withBackup.ok, 'staff choose their tables and their backup tables together');
+    assertEqualOrThrow(owners(db).t1, 'staff-a', 'staff-a owns t1');
+    assertEqualOrThrow(backupOf('t4'), 'staff-a', 'staff-a backs up t4');
+    assertEqualOrThrow(owners(db).t4, 'staff-b', 'backing up a table keeps its owner');
+    const overlap = claimOwnTables(db, 'staff-a', { table_ids: ['t1'], backup_table_ids: ['t1'] });
+    assertOrThrow(
+      !overlap.ok && overlap.code === 'STAFF_TABLES_OVERLAP',
+      'a table cannot be both your table and your backup',
+    );
+    assertOrThrow(
+      claimOwnTables(db, 'staff-b', { table_ids: ['t4'], backup_table_ids: ['t1'] }).ok,
+      'staff-b backs up the free backup slot on t1',
+    );
+    const takenBackup = claimOwnTables(db, 'staff-a', { table_ids: [], backup_table_ids: ['t1'] });
+    assertOrThrow(
+      !takenBackup.ok && takenBackup.status === 409 && takenBackup.code === 'TABLE_BACKUP_TAKEN',
+      'staff cannot take a backup slot another person holds',
+    );
+    assertEqualOrThrow(owners(db).t1, 'staff-a', 'a refused backup claim drops nothing');
+    assertOrThrow(claimOwnTables(db, 'staff-a', { table_ids: ['t1'] }).ok, 'tables-only claim');
+    assertEqualOrThrow(backupOf('t4'), 'staff-a', 'leaving out backup_table_ids keeps backups');
+    assertOrThrow(
+      claimOwnTables(db, 'staff-a', { table_ids: ['t1'], backup_table_ids: [] }).ok,
+      'an empty backup list clears your backups',
+    );
+    assertEqualOrThrow(backupOf('t4'), null, 'staff-a no longer backs up t4');
+    assertEqualOrThrow(backupOf('t1'), 'staff-b', "clearing your backups leaves others' alone");
+    await putMode({ mode: 'staff_managed', backup_enabled: false });
+
     const steady = owners(db);
     db.prepare("UPDATE settings SET value = '2000-01-01' WHERE key = ?").run(
       'table_owner_assignment_last_run',
