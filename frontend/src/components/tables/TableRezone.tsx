@@ -9,6 +9,31 @@ import { formatTableRanges, resolveTableRange } from '@/lib/table-ranges';
 
 type RezoneTable = { id: string; name: string; floor: string | null };
 
+/** Resolves typed table numbers ("26, 12-13") to tables; `valid` is false when a token matches none. */
+export function resolveSkippedTables(skip: string, tables: RezoneTable[]) {
+  const labelled = tables.map((table) => ({ ...table, label: table.name }));
+  const found = skip
+    .split(/[,\s]+/)
+    .filter(Boolean)
+    .map((token) => {
+      const exact = resolveTableRange({ from: token, to: '' }, labelled);
+      if (exact.length) return exact;
+      const [from, to = ''] = token.split(/(?<=\S)-(?=\S)/);
+      return resolveTableRange({ from, to }, labelled);
+    });
+  const ids = new Set(found.flat().map((table) => table.id));
+  return {
+    valid: found.every((list) => list.length > 0),
+    ids,
+    names: formatTableRanges(
+      [...tables]
+        .sort(byName)
+        .filter((table) => ids.has(table.id))
+        .map((table) => table.name),
+    ),
+  };
+}
+
 const byName = (a: RezoneTable, b: RezoneTable) =>
   a.name.localeCompare(b.name, undefined, { numeric: true });
 const zoneName = (list: RezoneTable[]) =>
@@ -20,32 +45,24 @@ const field =
 /** Splits the tables into one run of neighbouring tables per staff member and renames the floor-plan zones to match. */
 export default function TableRezone({
   tables,
+  skip,
   defaultStaff,
   onRezoned,
 }: {
   tables: RezoneTable[];
+  skip: string;
   defaultStaff: number;
   onRezoned: () => void;
 }) {
   const t = useTranslations('tables');
   const all = [...tables].sort(byName);
-  const [skip, setSkip] = useState('');
   const [staff, setStaff] = useState(String(Math.max(1, defaultStaff)));
   const [perStaff, setPerStaff] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Tables typed as not in use ("26, 12-13") keep their zone and stay out of the split.
-  const labelled = all.map((table) => ({ ...table, label: table.name }));
-  const skipTokens = skip.split(/[,\s]+/).filter(Boolean);
-  const skipFound = skipTokens.map((token) => {
-    const exact = resolveTableRange({ from: token, to: '' }, labelled);
-    if (exact.length) return exact;
-    const [from, to = ''] = token.split(/(?<=\S)-(?=\S)/);
-    return resolveTableRange({ from, to }, labelled);
-  });
-  const skipValid = skipFound.every((found) => found.length > 0);
-  const skipped = new Set(skipFound.flat().map((table) => table.id));
+  // Tables marked as not in use keep their zone and stay out of the split.
+  const { valid: skipValid, ids: skipped } = resolveSkippedTables(skip, all);
   const sorted = all.filter((table) => !skipped.has(table.id));
   const staffNumber = Number(staff);
   const staffValid = Number.isInteger(staffNumber) && staffNumber >= 1;
@@ -153,34 +170,6 @@ export default function TableRezone({
             : t('rezoneStaffTooFew', { typed: staffNumber, picked: defaultStaff })}
         </p>
       )}
-      <label className="mt-3 flex flex-col gap-1 text-xs text-muted-foreground">
-        {t('rezoneSkip')}
-        <input
-          value={skip}
-          placeholder={t('rezoneSkipPlaceholder')}
-          onChange={(event) => {
-            setSkip(event.target.value);
-            setPerStaff('');
-            setConfirming(false);
-          }}
-          aria-invalid={!skipValid}
-          data-testid="table-rezone-skip"
-          className="w-full max-w-sm rounded-lg border border-border bg-background px-2 py-1 text-sm aria-[invalid=true]:border-red-500"
-        />
-        {!skipValid ? (
-          <span className="text-red-600">{t('rezoneSkipInvalid')}</span>
-        ) : (
-          skipped.size > 0 && (
-            <span data-testid="table-rezone-skipped">
-              {t('rezoneSkipped', {
-                tables: formatTableRanges(
-                  all.filter((table) => skipped.has(table.id)).map((table) => table.name),
-                ),
-              })}
-            </span>
-          )
-        )}
-      </label>
 
       <p className="mt-4 mb-2 text-xs font-semibold text-muted-foreground">{t('rezoneCurrent')}</p>
       <div className="flex flex-wrap gap-2">

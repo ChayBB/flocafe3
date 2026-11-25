@@ -11,7 +11,7 @@ import { Toggle } from '@/components/settings/Toggle';
 import { formatTableRanges } from '@/lib/table-ranges';
 import StaffTablesDialog, { type StaffTablesDialogTable } from './StaffTablesDialog';
 import StaffTablesEditDialog from './StaffTablesEditDialog';
-import TableRezone from './TableRezone';
+import TableRezone, { resolveSkippedTables } from './TableRezone';
 
 type AssignmentMode = 'manual' | 'staff_managed' | 'rotate_daily' | 'shuffle_interval';
 const isAutomatic = (value: AssignmentMode) =>
@@ -39,6 +39,7 @@ interface StaffRoster {
   table_count_default: number;
   table_count_custom: boolean;
   backup_enabled: boolean;
+  rezone_skip?: string;
 }
 
 const SHUFFLE_DAYS_MIN = 1;
@@ -50,6 +51,7 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
 
 export default function TableStaffAssignment() {
   const t = useTranslations('tables');
+  const tCommon = useTranslations('common');
   const locale = useLocale();
   const [saved, setSaved] = useState<AssignmentSettings | null>(null);
   const [roster, setRoster] = useState<StaffRoster | null>(null);
@@ -62,11 +64,35 @@ export default function TableStaffAssignment() {
   const [editingFor, setEditingFor] = useState<{ id: string; name: string } | null>(null);
   const [confirmMode, setConfirmMode] = useState<AssignmentMode | null>(null);
   const [backupSaving, setBackupSaving] = useState(false);
+  const [skipSaved, setSkipSaved] = useState('');
+  const [skipDraft, setSkipDraft] = useState('');
+  const [skipEditing, setSkipEditing] = useState(false);
+  const [skipSaving, setSkipSaving] = useState(false);
 
   const applyRoster = (data: StaffRoster) => {
     setRoster(data);
     setPresent(new Set(data.staff.filter((member) => member.present).map((member) => member.id)));
     setTableCount(String(data.table_count));
+    setSkipSaved(data.rezone_skip ?? '');
+    setSkipDraft(data.rezone_skip ?? '');
+    setSkipEditing(false);
+  };
+
+  const saveSkip = async () => {
+    setSkipSaving(true);
+    try {
+      const { data } = await api.put<{ rezone_skip: string }>('/tables/rezone-skip', {
+        value: skipDraft,
+      });
+      setSkipSaved(data.rezone_skip);
+      setSkipDraft(data.rezone_skip);
+      setSkipEditing(false);
+      toast.success(t('rezoneSkipSaved'));
+    } catch {
+      toast.error(t('rezoneSkipSaveFailed'));
+    } finally {
+      setSkipSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -102,6 +128,7 @@ export default function TableStaffAssignment() {
     Number.isInteger(parsedTables) &&
     parsedTables >= 1 &&
     parsedTables <= roster.table_count_default;
+  const skipCheck = resolveSkippedTables(skipDraft, roster.tables);
   const savedPresent = new Set(
     roster.staff.filter((member) => member.present).map((member) => member.id),
   );
@@ -419,31 +446,102 @@ export default function TableStaffAssignment() {
       </section>
 
       <section className="mb-6" data-testid="staff-roster-tables">
-        <h3 className="text-sm font-semibold text-foreground mb-2">
-          {t('staffRosterTablesTitle')}
-        </h3>
-        <label className="flex items-center gap-2 text-sm text-foreground">
-          <input
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={roster.table_count_default}
-            step={1}
-            value={tableCount}
-            onChange={(event) => setTableCount(event.target.value)}
-            data-testid="staff-roster-table-count"
-            aria-label={t('staffRosterTablesTitle')}
-            aria-invalid={!tablesValid}
-            className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-sm"
-          />
-          {t('staffRosterTablesUnit')}
-        </label>
-        <p className="mt-1 text-xs text-muted-foreground">{t('staffRosterTablesHint')}</p>
-        {!tablesValid && roster.table_count_default > 0 && (
-          <p className="mt-1 text-xs text-red-600">
-            {t('staffRosterTablesInvalid', { max: roster.table_count_default })}
-          </p>
-        )}
+        <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-2">
+              {t('staffRosterTablesTitle')}
+            </h3>
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={roster.table_count_default}
+                step={1}
+                value={tableCount}
+                onChange={(event) => setTableCount(event.target.value)}
+                data-testid="staff-roster-table-count"
+                aria-label={t('staffRosterTablesTitle')}
+                aria-invalid={!tablesValid}
+                className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-sm"
+              />
+              {t('staffRosterTablesUnit')}
+            </label>
+            <p className="mt-1 text-xs text-muted-foreground">{t('staffRosterTablesHint')}</p>
+            {!tablesValid && roster.table_count_default > 0 && (
+              <p className="mt-1 text-xs text-red-600">
+                {t('staffRosterTablesInvalid', { max: roster.table_count_default })}
+              </p>
+            )}
+          </div>
+          <div className="min-w-0 flex-1" data-testid="table-rezone-skip-setting">
+            <h3 className="mb-2 text-sm font-semibold text-foreground">{t('rezoneSkip')}</h3>
+            {skipEditing ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={skipDraft}
+                  placeholder={t('rezoneSkipPlaceholder')}
+                  onChange={(event) => setSkipDraft(event.target.value)}
+                  aria-label={t('rezoneSkip')}
+                  aria-invalid={!skipCheck.valid}
+                  data-testid="table-rezone-skip"
+                  className="w-full max-w-60 rounded-lg border border-border bg-background px-2 py-1 text-sm aria-[invalid=true]:border-red-500"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void saveSkip()}
+                  disabled={skipSaving || !skipCheck.valid || skipDraft.trim() === skipSaved}
+                  data-testid="table-rezone-skip-save"
+                >
+                  <Check size={14} /> {tCommon('save')}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setSkipDraft(skipSaved);
+                    setSkipEditing(false);
+                  }}
+                  disabled={skipSaving}
+                >
+                  {t('cancel')}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className="rounded-lg border border-border bg-muted/50 px-2 py-1 text-sm text-foreground"
+                  data-testid="table-rezone-skip-value"
+                >
+                  {skipSaved || t('rezoneSkipNone')}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSkipEditing(true)}
+                  data-testid="table-rezone-skip-edit"
+                >
+                  <Pencil size={14} /> {tCommon('edit')}
+                </Button>
+              </div>
+            )}
+            {!skipCheck.valid ? (
+              <p className="mt-1 text-xs text-red-600">{t('rezoneSkipInvalid')}</p>
+            ) : (
+              skipCheck.ids.size > 0 && (
+                <p
+                  className="mt-1 text-xs text-muted-foreground"
+                  data-testid="table-rezone-skipped"
+                >
+                  {t('rezoneSkipped', { tables: skipCheck.names })}
+                </p>
+              )
+            )}
+          </div>
+        </div>
 
         <div
           className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border p-3"
@@ -503,6 +601,7 @@ export default function TableStaffAssignment() {
         </div>
         <TableRezone
           tables={roster.tables}
+          skip={skipDraft}
           defaultStaff={present.size}
           onRezoned={() =>
             void api

@@ -537,12 +537,26 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     const skippedName = (roster.tables as { name: string }[])
       .map((table) => table.name)
       .sort((x, y) => x.localeCompare(y, undefined, { numeric: true }))[0];
-    await panel.getByTestId('table-rezone-skip').fill(skippedName);
-    await expect(panel.getByTestId('table-rezone-skipped')).toContainText(skippedName);
+    const skip = page.getByTestId('table-rezone-skip-setting');
+    await expect(skip.getByTestId('table-rezone-skip-value')).toHaveText('None');
+    await skip.getByTestId('table-rezone-skip-edit').click();
+    await skip.getByTestId('table-rezone-skip').fill(skippedName);
+    await expect(skip.getByTestId('table-rezone-skipped')).toContainText(skippedName);
     await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(total - 1);
-    await panel.getByTestId('table-rezone-skip').fill('no-such-table');
+    await skip.getByTestId('table-rezone-skip').fill('no-such-table');
+    await expect(skip.getByTestId('table-rezone-skip-save')).toBeDisabled();
     await expect(panel.getByTestId('table-rezone-apply')).toBeDisabled();
-    await panel.getByTestId('table-rezone-skip').fill('');
+    await skip.getByTestId('table-rezone-skip').fill(skippedName);
+    await skip.getByTestId('table-rezone-skip-save').click();
+    await expect(skip.getByTestId('table-rezone-skip-value')).toHaveText(skippedName);
+    const savedRoster = await (
+      await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
+    ).json();
+    expect(savedRoster.rezone_skip).toBe(skippedName);
+    await skip.getByTestId('table-rezone-skip-edit').click();
+    await skip.getByTestId('table-rezone-skip').fill('');
+    await skip.getByTestId('table-rezone-skip-save').click();
+    await expect(skip.getByTestId('table-rezone-skip-value')).toHaveText('None');
     await panel.getByTestId('table-rezone-per-staff').fill('1');
 
     await panel.getByTestId('table-rezone-apply').click();
@@ -552,6 +566,10 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     await panel.getByRole('button', { name: 'Cancel' }).click();
     await expect(panel.getByTestId('table-rezone-confirm')).toHaveCount(0);
   } finally {
+    await page.request.put(`${BASE}/api/tables/rezone-skip`, {
+      headers: authHeaders,
+      data: { value: '' },
+    });
     for (const id of created) {
       await page.request.delete(`${BASE}/api/tables/${id}`, { headers: authHeaders });
     }

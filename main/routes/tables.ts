@@ -50,6 +50,8 @@ import {
   TABLE_OWNER_ASSIGNMENT_MODES,
   updateTableOwnerAssignmentSettings,
   type TableOwnerAssignmentMode,
+  REZONE_SKIP_MAX_LENGTH,
+  saveRezoneSkip,
 } from '../services/table-owner-rotation';
 
 const router = Router();
@@ -797,6 +799,24 @@ router.put('/staff-roster', requirePermission('tables.manage'), (req: Request, r
     const actorUserId = (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
     const { roster, changes } = saveTableStaffRoster(db, input, actorUserId);
     res.json({ ...roster, store_timezone: storeTimezone(db), changes: changes.length });
+  } catch (error: unknown) {
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/rezone-skip', requirePermission('tables.manage'), (req: Request, res: Response) => {
+  try {
+    const value = (req.body ?? {}).value;
+    if (typeof value !== 'string' || value.length > REZONE_SKIP_MAX_LENGTH) {
+      return res.status(400).json({
+        code: 'INVALID_REZONE_SKIP',
+        error: `value must be text up to ${REZONE_SKIP_MAX_LENGTH} characters`,
+      });
+    }
+    const db = getDatabase();
+    saveRezoneSkip(db, value.trim());
+    res.json({ rezone_skip: value.trim() });
   } catch (error: unknown) {
     console.error('[API] Internal error:', error);
     res.status(500).json({ error: 'Internal server error' });

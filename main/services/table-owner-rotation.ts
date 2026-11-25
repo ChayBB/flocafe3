@@ -26,6 +26,8 @@ const MODE_KEY = 'table_owner_assignment_mode';
 const SHUFFLE_DAYS_KEY = 'table_owner_shuffle_days';
 const LAST_RUN_KEY = 'table_owner_assignment_last_run';
 const BACKUP_ENABLED_KEY = 'table_backup_enabled';
+const REZONE_SKIP_KEY = 'table_rezone_skip';
+export const REZONE_SKIP_MAX_LENGTH = 500;
 
 export interface TableOwnerAssignmentSettings {
   mode: TableOwnerAssignmentMode;
@@ -73,6 +75,7 @@ export interface TableStaffRoster {
   table_count_default: number;
   table_count_custom: boolean;
   backup_enabled: boolean;
+  rezone_skip: string;
 }
 
 function readSetting(db: Db, key: string): string | null {
@@ -223,7 +226,13 @@ export function readTableStaffRoster(
     table_count_default: defaultCount,
     table_count_custom: Boolean(day),
     backup_enabled: backupEnabled,
+    rezone_skip: readSetting(db, REZONE_SKIP_KEY) ?? '',
   };
+}
+
+/** Saves the tables a manager typed as not in use ("26, 12-13"), left out when re-zoning. */
+export function saveRezoneSkip(db: Db, value: string): void {
+  writeSetting(db, REZONE_SKIP_KEY, value);
 }
 
 export type RosterValidation =
