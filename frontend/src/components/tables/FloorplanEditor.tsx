@@ -782,8 +782,19 @@ export default function FloorplanEditor({
       setFloorCapacities({});
       setFloorOwner(null);
       onSaved?.();
-    } catch {
-      toast.error(t('tableCreateFailed'), { position: 'top-center' });
+    } catch (error: unknown) {
+      const data = (error as { response?: { data?: { code?: string; table?: string } } })?.response
+        ?.data;
+      const table = data?.table ?? '';
+      const message =
+        data?.code === 'TABLE_NAME_DUPLICATE'
+          ? t('tableNameDuplicateNamed', { table })
+          : data?.code === 'TABLE_INACTIVE_DUPLICATE'
+            ? t('tableInactiveDuplicateNamed', { table })
+            : data?.code === 'TABLE_CAPACITY_INVALID'
+              ? t('tableCapacityInvalid')
+              : t('tableCreateFailed');
+      toast.error(message, { position: 'top-center' });
     } finally {
       setFloorFormSaving(false);
     }

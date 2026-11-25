@@ -416,3 +416,32 @@ test('list view: Add Table keeps the selected floor', async ({ page }) => {
   const form = page.locator('form').filter({ hasText: 'Floor' });
   await expect(form.getByLabel('Floor')).toHaveValue('First');
 });
+
+test('floorplan editor: a new floor names the table that already exists', async ({
+  page,
+  request,
+}) => {
+  const auth = {
+    Authorization: `Bearer ${(await (await request.post(`${BASE}/api/auth/login`, { data: { email: EMAIL, password: PASSWORD } })).json()).access_token}`,
+  };
+  const base = 9100 + Math.floor(Math.random() * 800);
+  const created = await request.post(`${BASE}/api/tables`, {
+    headers: auth,
+    data: { number: String(base), capacity: 4, floor: 'Ground' },
+  });
+  expect(created.ok()).toBeTruthy();
+  const { table } = await created.json();
+  try {
+    await login(page);
+    await page.getByTestId('floorplan-add-floor').click();
+    const form = page.getByTestId('floorplan-floor-form');
+    await form.locator('#floorplan-floor-name').fill(`${base}-${base + 1}`);
+    await form.locator('button[type="submit"]').click();
+    await expect(
+      page.getByText(`Table name ${base} is already used. Choose another name.`),
+    ).toBeVisible();
+    await expect(form).toBeVisible();
+  } finally {
+    await request.delete(`${BASE}/api/tables/${table.id}`, { headers: auth });
+  }
+});

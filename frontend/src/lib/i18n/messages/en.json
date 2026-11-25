@@ -4031,6 +4031,8 @@
     "tableInactiveDuplicate": "That table already exists but is deactivated. Reactivate it from the list.",
     "tableLocationInvalid": "Floor and section must be text values",
     "tableNameDuplicate": "A table with that name already exists",
+    "tableNameDuplicateNamed": "Table name {table} is already used. Choose another name.",
+    "tableInactiveDuplicateNamed": "Table {table} already exists but is deactivated. Reactivate it from the list.",
     "tableNameRequired": "Enter a table name",
     "tableCreated": "Table created",
     "tableUpdated": "Table updated",

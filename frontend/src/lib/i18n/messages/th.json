@@ -4031,6 +4031,8 @@
     "tableInactiveDuplicate": "มีโต๊ะชื่อนี้อยู่แล้วแต่ปิดใช้งานอยู่ เปิดใช้งานอีกครั้งจากรายการ",
     "tableLocationInvalid": "ชั้น/โซนและส่วนต้องเป็นข้อความ",
     "tableNameDuplicate": "มีโต๊ะชื่อนี้อยู่แล้ว",
+    "tableNameDuplicateNamed": "ชื่อโต๊ะ {table} ซ้ำกับที่มีอยู่ กรุณาใช้ชื่ออื่น",
+    "tableInactiveDuplicateNamed": "โต๊ะ {table} มีอยู่แล้วแต่ปิดใช้งานอยู่ เปิดใช้งานอีกครั้งจากรายการ",
     "tableNameRequired": "กรอกชื่อโต๊ะ",
     "tableCreated": "สร้างโต๊ะแล้ว",
     "tableUpdated": "อัปเดตโต๊ะแล้ว",
