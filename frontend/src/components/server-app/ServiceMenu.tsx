@@ -11,6 +11,8 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from '@/components/ui/drawer';
+import { useStaffEntryGesture } from '@/hooks/useStaffEntryGesture';
+import { STAFF_ENTRY_TAPS } from '@/lib/staff-entry-gesture';
 
 const CARD_STYLE =
   'flex flex-col items-center justify-center gap-1 rounded-[12px] border border-[#F1F1F1] bg-white p-2 text-center text-[10px] leading-4 shadow-[0_2px_4px_rgba(0,0,0,0.18)]';
@@ -96,6 +98,11 @@ export function ServiceMenu({
     setOther(false);
     onStaffMenuClose?.();
   };
+  const enterStaff = () => {
+    close();
+    (onStaffProfile ?? onStaffLogin)();
+  };
+  const staffGesture = useStaffEntryGesture(enterStaff);
   const labels = {
     cutlery: t('serviceMenuCutlery'),
     condiments: t('serviceMenuCondiments'),
@@ -113,9 +120,45 @@ export function ServiceMenu({
       <DrawerTrigger asChild>{children}</DrawerTrigger>
       <DrawerContent
         data-testid="service-menu"
+        showHandle={false}
         className="mx-auto h-[85svh] max-h-[85svh] w-full max-w-sm rounded-t-[20px] bg-white font-sans text-[#444444]"
       >
-        <DrawerHeader className="shrink-0 items-center gap-1 px-4 pb-5 pt-4 text-center">
+        <button
+          type="button"
+          data-vaul-no-drag=""
+          data-testid="service-menu-staff-handle"
+          aria-label={t('serviceMenuStaffHandle')}
+          {...staffGesture.handlers}
+          className={`mx-auto mt-3 flex h-8 w-40 shrink-0 touch-none select-none items-center justify-center rounded-[12px] border-2 transition-colors focus-visible:outline-2 focus-visible:outline-brand ${
+            staffGesture.holding || staffGesture.tapCount > 0
+              ? 'border-brand'
+              : 'border-transparent'
+          }`}
+        >
+          <span
+            aria-hidden="true"
+            className="pointer-events-none h-1.5 w-[100px] rounded-full bg-[#B5B5B5]"
+          />
+        </button>
+        <div
+          data-testid="service-menu-staff-taps"
+          aria-hidden="true"
+          className="mt-2 flex shrink-0 justify-center gap-2"
+        >
+          {Array.from({ length: STAFF_ENTRY_TAPS }, (_, i) => (
+            <span
+              key={i}
+              data-active={i < staffGesture.tapCount ? 'true' : undefined}
+              className="flex size-7 items-center justify-center rounded-full bg-[#FFF1E8] text-xs font-semibold text-brand data-[active=true]:bg-brand data-[active=true]:text-white"
+            >
+              {i + 1}
+            </span>
+          ))}
+        </div>
+        <p className="mt-1.5 shrink-0 px-4 text-center text-[11px] leading-4 text-[#626B7C]">
+          {t('serviceMenuStaffGestureHint')}
+        </p>
+        <DrawerHeader className="shrink-0 items-center gap-1 px-4 pb-5 pt-2 text-center">
           {other && (
             <button
               type="button"
@@ -150,10 +193,7 @@ export function ServiceMenu({
                   type="button"
                   data-testid="service-menu-staff"
                   className={`${CARD_STYLE} focus-visible:outline-2 focus-visible:outline-brand`}
-                  onClick={() => {
-                    close();
-                    (onStaffProfile ?? onStaffLogin)();
-                  }}
+                  onClick={enterStaff}
                 >
                   <UserRound size={42} className="text-red-600" aria-hidden="true" />
                   <span>{t('staffButton')}</span>

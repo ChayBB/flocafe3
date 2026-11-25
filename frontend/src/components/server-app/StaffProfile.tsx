@@ -371,16 +371,21 @@ export function StaffProfile({
     <div className="space-y-4">
       <button
         type="button"
-        onClick={() => setPanel('tables')}
-        disabled={panel === 'tables'}
+        onClick={() => (staffManaged ? openPicker() : setPanel('tables'))}
+        disabled={panel === 'tables' && !staffManaged}
+        data-testid="staff-profile-my-tables"
         className="flex min-h-12 w-full items-center gap-3 text-start disabled:cursor-default"
       >
         <LayoutGrid size={24} className={accentText} aria-hidden="true" />
         <span className="min-w-0 flex-1 text-xl font-bold">{t('myTables')}</span>
-        <span className="text-base text-muted-foreground">
-          {t('tableCount', { count: tables.length })}
-        </span>
-        {panel !== 'tables' && (
+        {staffManaged ? (
+          <span className={`text-base font-semibold ${accentText}`}>{t('manageTablesShort')}</span>
+        ) : (
+          <span className="text-base text-muted-foreground">
+            {t('tableCount', { count: tables.length })}
+          </span>
+        )}
+        {(panel !== 'tables' || staffManaged) && (
           <ChevronRight size={22} className="text-muted-foreground" aria-hidden="true" />
         )}
       </button>

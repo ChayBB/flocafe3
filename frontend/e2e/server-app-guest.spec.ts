@@ -422,6 +422,59 @@ test.describe('Server App guest from a table QR', () => {
     }
   });
 
+  test('the grey bar opens staff sign-in after three quick taps or a three-second hold', async ({
+    page,
+  }) => {
+    const table = await createTable(page);
+    await setEnglish(page);
+    await page.clock.install();
+    await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
+    const service = page.getByTestId('service-menu');
+    const handle = service.getByTestId('service-menu-staff-handle');
+    const taps = service.locator('[data-testid="service-menu-staff-taps"] [data-active="true"]');
+    const staffCode = page.getByPlaceholder('Staff code');
+    await page.getByTestId('server-app-header-grid-circle').click();
+    await expect(service).toContainText(
+      'Tap the grey bar above 3 times within 1.5 seconds, or hold it for 3 seconds',
+    );
+
+    await handle.hover();
+    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+    await handle.click();
+    await handle.click();
+    await expect(taps).toHaveCount(2);
+    await page.clock.runFor(1500);
+    await expect(taps).toHaveCount(0);
+    await handle.click();
+    await expect(taps).toHaveCount(1);
+    await page.clock.runFor(1600);
+    await handle.click();
+    await handle.click();
+    await expect(taps).toHaveCount(2);
+    await expect(staffCode).toHaveCount(0);
+    await handle.click();
+    await expect(service).toHaveCount(0);
+    await expect(staffCode).toBeVisible();
+    await page.clock.resume();
+
+    await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone?${table.query}`);
+    await page.getByTestId('server-app-header-grid-circle').click();
+    await handle.hover();
+    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+    await page.mouse.down();
+    await page.clock.runFor(2900);
+    await page.mouse.up();
+    await expect(service).toBeVisible();
+    await expect(staffCode).toHaveCount(0);
+    await page.clock.runFor(1600);
+    await page.mouse.down();
+    await page.clock.runFor(3000);
+    await expect(service).toHaveCount(0);
+    await expect(staffCode).toBeVisible();
+    await page.mouse.up();
+    await expect(staffCode).toBeVisible();
+  });
+
   test('signing in shows the staff name and the table list while keeping the QR table', async ({
     page,
   }) => {
