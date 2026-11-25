@@ -1,5 +1,6 @@
 'use client';
 
+import { sortZoneNames, zoneOfHighestTable } from '@/lib/table-ranges';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -433,9 +434,10 @@ export default function TablesPage() {
     else ordersByTable.set(tableKey, [order]);
   }
 
-  const namedFloors = [
+  const namedFloors = sortZoneNames([
     ...new Set(tables.map((table) => table.floor?.trim()).filter((f): f is string => Boolean(f))),
-  ].sort((a, b) => a.localeCompare(b));
+  ]);
+  const topFloor = zoneOfHighestTable(tables);
 
   const floorCounts = new Map<string, number>();
   let unassignedCount = 0;
@@ -891,12 +893,15 @@ export default function TablesPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedFloor(floor)}
+                  data-top-zone={floor === topFloor ? 'true' : undefined}
                   className={`inline-flex items-center gap-1.5 border px-3 py-1.5 text-sm font-medium transition-colors ${
                     canManageTables ? 'rounded-s-full pe-2' : 'rounded-full'
                   } ${
                     isSelected
                       ? 'border-brand bg-brand text-white'
-                      : 'border-border bg-card text-muted-foreground hover:border-brand hover:text-brand'
+                      : floor === topFloor
+                        ? 'border-brand bg-brand-light font-semibold text-brand'
+                        : 'border-border bg-card text-muted-foreground hover:border-brand hover:text-brand'
                   }`}
                 >
                   <span>{floor}</span>

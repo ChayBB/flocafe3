@@ -120,3 +120,23 @@ export function backupTableGroups<T extends RangeTable>(
   flush();
   return groups;
 }
+
+const byNumber = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+
+/** Zone names in table-number order: "2-5", "7-12", "11-12", "14-18". */
+export function sortZoneNames(names: readonly string[]): string[] {
+  return [...names].sort(byNumber);
+}
+
+/** The zone holding the highest-numbered active table, or null when there is none. */
+export function zoneOfHighestTable(
+  tables: readonly { name?: string; number?: string; floor?: string | null; is_active?: unknown }[],
+): string | null {
+  let top: { label: string; floor: string } | null = null;
+  for (const table of tables) {
+    const label = (table.name ?? table.number ?? '').trim();
+    if (!label || table.is_active === false || table.is_active === 0) continue;
+    if (!top || byNumber(label, top.label) > 0) top = { label, floor: table.floor?.trim() ?? '' };
+  }
+  return top ? top.floor : null;
+}

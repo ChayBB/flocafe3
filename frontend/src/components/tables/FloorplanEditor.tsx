@@ -2,6 +2,7 @@
 
 // Floorplan canvas editor: drag tables and persist X/Y coordinates per floor as percentages.
 
+import { sortZoneNames, zoneOfHighestTable } from '@/lib/table-ranges';
 import TableOwnerModal, { type OwnerScope } from './TableOwnerModal';
 import FloorEditDialog from './FloorEditDialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -402,15 +403,15 @@ export default function FloorplanEditor({
   }
 
   const floors = useMemo(() => {
-    const count = (f: string) => tables.filter((tb) => (tb.floor || '') === f).length;
-    const named = [
+    const named = sortZoneNames([
       ...new Set(tables.map((tb) => tb.floor).filter((f): f is string => Boolean(f))),
-    ].sort((a, b) => count(b) - count(a) || a.localeCompare(b));
+    ]);
     const hasUnassigned = tables.some((tb) => !tb.floor);
     return hasUnassigned ? [...named, ''] : named;
   }, [tables]);
 
   const overview = activeFloor === ALL_FLOORS;
+  const topFloor = zoneOfHighestTable(tables);
   const floor = overview ? '' : floors.includes(activeFloor) ? activeFloor : (floors[0] ?? '');
   const namedFloors = floors.filter((f) => f !== '');
   const zoneOwners = useMemo(() => {
@@ -1175,10 +1176,13 @@ export default function FloorplanEditor({
               >
                 <button
                   onClick={() => setActiveFloor(f)}
+                  data-top-zone={f === topFloor ? 'true' : undefined}
                   className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all ${
-                    !overview && f === floor
-                      ? 'text-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
+                    f === topFloor
+                      ? 'text-brand font-semibold'
+                      : !overview && f === floor
+                        ? 'text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
                   }`}
                   title={f === '' ? t('floorplanUnassignedHint') : undefined}
                 >
@@ -1186,9 +1190,11 @@ export default function FloorplanEditor({
                   {count > 0 && (
                     <span
                       className={`rounded-full px-1.5 text-[10px] font-semibold ${
-                        !overview && f === floor
-                          ? 'bg-muted text-foreground'
-                          : 'bg-card/70 text-muted-foreground'
+                        f === topFloor
+                          ? 'bg-brand text-white'
+                          : !overview && f === floor
+                            ? 'bg-muted text-foreground'
+                            : 'bg-card/70 text-muted-foreground'
                       }`}
                     >
                       {count}
