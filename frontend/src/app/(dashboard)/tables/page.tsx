@@ -19,10 +19,12 @@ import {
   MoreHorizontal,
   Trash2,
   Eye,
+  SquarePen,
 } from 'lucide-react';
 import type { Table, Customer, Order, OrderItem } from '@/lib/types';
 import FloorplanEditor from '@/components/tables/FloorplanEditor';
 import TableStaffAssignment from '@/components/tables/TableStaffAssignment';
+import FloorEditDialog from '@/components/tables/FloorEditDialog';
 import MoveTableModal from '@/components/tables/MoveTableModal';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
@@ -339,6 +341,7 @@ export default function TablesPage() {
   const [floorFormSaving, setFloorFormSaving] = useState(false);
   const [floorRenameOpen, setFloorRenameOpen] = useState<{ from: string; to: string } | null>(null);
   const [floorDeleteTarget, setFloorDeleteTarget] = useState<string | null>(null);
+  const [floorEditTarget, setFloorEditTarget] = useState<string | null>(null);
   const [floorActionSaving, setFloorActionSaving] = useState(false);
   const [selectedTableIds, setSelectedTableIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
@@ -937,6 +940,18 @@ export default function TablesPage() {
                           className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-foreground hover:bg-muted"
                         >
                           <Pencil size={14} /> {tTables('renameFloor')}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid={`list-floor-menu-edit-${floor}`}
+                          onClick={() => {
+                            setFloorMenuFor(null);
+                            setFloorEditTarget(floor);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-foreground hover:bg-muted"
+                        >
+                          <SquarePen size={14} /> {tTables('editFloor')}
                         </button>
                         <button
                           type="button"
@@ -1611,6 +1626,18 @@ export default function TablesPage() {
         </div>
       )}
 
+      {floorEditTarget && (
+        <FloorEditDialog
+          floor={floorEditTarget}
+          tables={tables.filter((tb) => (tb.floor || '') === floorEditTarget)}
+          onClose={() => setFloorEditTarget(null)}
+          onSaved={(name) => {
+            setFloorEditTarget(null);
+            setSelectedFloor(name);
+            void fetchTables();
+          }}
+        />
+      )}
       {floorDeleteTarget && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"

@@ -491,10 +491,11 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
   };
   const created: string[] = [];
+  const stamp = Date.now();
   for (const offset of [1, 2, 3]) {
     const res = await page.request.post(`${BASE}/api/tables`, {
       headers: authHeaders,
-      data: { number: `E2E-ZONE-${Date.now()}-${offset}`, capacity: 2 },
+      data: { number: `E2E-ZONE-${stamp}-${offset}`, capacity: 2 },
     });
     expect(res.ok()).toBeTruthy();
     created.push((await res.json()).table.id);
@@ -513,6 +514,11 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
       await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
     ).json();
     const total = (roster.tables as unknown[]).length;
+    const board = page.getByTestId('table-zone-board');
+    await expect(board).toContainText('All tables by zone');
+    const freeCard = board.getByTestId(`table-zone-board-table-E2E-ZONE-${stamp}-1`);
+    await expect(freeCard).toContainText('Unassigned');
+    await expect(freeCard).not.toHaveAttribute('data-table-owner');
     const panel = page.getByTestId('table-rezone');
     await expect(panel).toContainText('Re-zone tables');
     await expect(panel.getByTestId('table-rezone-current').first()).toBeVisible();

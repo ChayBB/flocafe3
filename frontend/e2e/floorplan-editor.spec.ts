@@ -497,3 +497,15 @@ test('floorplan editor: Edit on a zone menu renames it, changes seats and delete
     for (const id of ids) await request.delete(`${BASE}/api/tables/${id}`, { headers: auth });
   }
 });
+
+test('list view: the floor menu also offers Edit', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: 'List' }).click();
+  await page.getByTestId('list-floor-menu-Ground').click();
+  await page.getByTestId('list-floor-menu-edit-Ground').click();
+  const form = page.getByTestId('floorplan-floor-edit-form');
+  await expect(form).toContainText('Edit floor/zone Ground');
+  await expect(form.getByLabel('Capacity T1', { exact: true })).toBeVisible();
+  await form.getByRole('button', { name: 'Cancel' }).click();
+  await expect(form).toBeHidden();
+});

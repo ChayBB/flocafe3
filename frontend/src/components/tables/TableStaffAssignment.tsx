@@ -12,6 +12,7 @@ import { formatTableRanges } from '@/lib/table-ranges';
 import StaffTablesDialog, { type StaffTablesDialogTable } from './StaffTablesDialog';
 import StaffTablesEditDialog from './StaffTablesEditDialog';
 import TableRezone, { resolveSkippedTables } from './TableRezone';
+import TableZoneBoard from './TableZoneBoard';
 
 type AssignmentMode = 'manual' | 'staff_managed' | 'rotate_daily' | 'shuffle_interval';
 const isAutomatic = (value: AssignmentMode) =>
@@ -293,478 +294,486 @@ export default function TableStaffAssignment() {
   ];
 
   return (
-    <div
-      className="bg-card rounded-2xl border border-border p-6 max-w-3xl"
-      data-testid="table-staff-assignment"
-    >
-      <div className="flex items-start justify-between gap-3 mb-6">
-        <div>
-          <h2 className="text-lg font-bold text-foreground">{t('staffAssignmentTitle')}</h2>
-          <p className="text-sm text-muted-foreground">{t('staffAssignmentSubtitle')}</p>
-        </div>
-        <span
-          data-testid="table-staff-assignment-status"
-          className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-300"
-        >
-          <span className="w-2 h-2 rounded-full bg-green-500" />
-          {
-            {
-              manual: t('staffAssignmentManual'),
-              staff_managed: t('staffAssignmentStaffManaged'),
-              rotate_daily: t('staffAssignmentRotate'),
-              shuffle_interval: t('staffAssignmentStatusShuffle', { days: saved.shuffle_days }),
-            }[saved.mode]
-          }
-        </span>
-      </div>
-
-      <section className="mb-6" data-testid="staff-roster">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-foreground">{t('staffRosterTitle')}</h3>
+    <div className="flex flex-col items-start gap-6 lg:flex-row">
+      <div
+        className="w-full max-w-3xl shrink-0 bg-card rounded-2xl border border-border p-6 lg:w-3/5"
+        data-testid="table-staff-assignment"
+      >
+        <div className="flex items-start justify-between gap-3 mb-6">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">{t('staffAssignmentTitle')}</h2>
+            <p className="text-sm text-muted-foreground">{t('staffAssignmentSubtitle')}</p>
+          </div>
           <span
-            className="rounded-full bg-muted px-3 py-1 text-xs font-medium text-foreground"
-            data-testid="staff-roster-date"
+            data-testid="table-staff-assignment-status"
+            className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-300"
           >
-            {businessDateLabel}
+            <span className="w-2 h-2 rounded-full bg-green-500" />
+            {
+              {
+                manual: t('staffAssignmentManual'),
+                staff_managed: t('staffAssignmentStaffManaged'),
+                rotate_daily: t('staffAssignmentRotate'),
+                shuffle_interval: t('staffAssignmentStatusShuffle', { days: saved.shuffle_days }),
+              }[saved.mode]
+            }
           </span>
         </div>
-        <div className="mt-1 mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span>{t('staffRosterSubtitle')}</span>
-          <span data-testid="staff-roster-count">
-            {t('staffRosterCount', { present: present.size, total: roster.staff.length })}
-          </span>
-        </div>
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => setPresent(new Set(roster.staff.map((member) => member.id)))}
-            className="rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted"
+
+        <section className="mb-6" data-testid="staff-roster">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-foreground">{t('staffRosterTitle')}</h3>
+            <span
+              className="rounded-full bg-muted px-3 py-1 text-xs font-medium text-foreground"
+              data-testid="staff-roster-date"
+            >
+              {businessDateLabel}
+            </span>
+          </div>
+          <div className="mt-1 mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>{t('staffRosterSubtitle')}</span>
+            <span data-testid="staff-roster-count">
+              {t('staffRosterCount', { present: present.size, total: roster.staff.length })}
+            </span>
+          </div>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setPresent(new Set(roster.staff.map((member) => member.id)))}
+              className="rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted"
+            >
+              {t('staffRosterSelectAll')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPresent(new Set())}
+              className="text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              {t('staffRosterClear')}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {roster.staff.map((member) => {
+              const isPresent = present.has(member.id);
+              return (
+                <div
+                  key={member.id}
+                  data-testid={`staff-roster-card-${member.id}`}
+                  className={`relative rounded-xl border p-3 transition-colors ${
+                    isPresent
+                      ? 'border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-950/40'
+                      : 'border-border bg-muted/40'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={isPresent}
+                    data-testid={`staff-roster-member-${member.id}`}
+                    onClick={() => togglePresent(member.id)}
+                    className={`flex w-full items-center gap-2 text-start ${automatic ? 'pe-8' : 'pe-16'}`}
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-card text-muted-foreground">
+                      <User size={16} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-foreground">
+                        {member.name}
+                      </span>
+                      <span
+                        className={`flex items-center gap-1 text-xs ${
+                          isPresent ? 'text-green-700 dark:text-green-300' : 'text-muted-foreground'
+                        }`}
+                      >
+                        {isPresent ? (
+                          <Check size={12} />
+                        ) : (
+                          <span className="h-2.5 w-2.5 rounded-full border border-muted-foreground" />
+                        )}
+                        {isPresent ? t('staffRosterPresent') : t('staffRosterAbsent')}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="absolute end-2 top-2 flex gap-1">
+                    {!automatic && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingFor({ id: member.id, name: member.name })}
+                        data-testid={`staff-roster-edit-${member.id}`}
+                        aria-label={t('staffTablesEditFor', { name: member.name })}
+                        title={t('staffTablesEdit')}
+                        className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setAddingFor({ id: member.id, name: member.name })}
+                      data-testid={`staff-roster-add-${member.id}`}
+                      aria-label={t('staffTablesAddFor', { name: member.name })}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                  {(member.tables.length > 0 || member.backup_tables.length > 0) && (
+                    <div className="mt-2 space-y-1 border-t border-border/60 pt-2 text-xs">
+                      {member.tables.length > 0 && (
+                        <p data-testid={`staff-roster-tables-${member.id}`}>
+                          <span className="text-muted-foreground">{t('staffTablesOwnLabel')} </span>
+                          <span className="font-medium text-foreground">
+                            {t('staffTablesTableName', {
+                              name: formatTableRanges(member.tables.map((table) => table.name)),
+                            })}
+                          </span>
+                        </p>
+                      )}
+                      {member.backup_tables.length > 0 && (
+                        <p
+                          data-testid={`staff-roster-backup-${member.id}`}
+                          className="inline-block rounded-md border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                        >
+                          {t('staffTablesBackupName', {
+                            name: formatTableRanges(
+                              member.backup_tables.map((table) => table.name),
+                            ),
+                          })}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mb-6" data-testid="staff-roster-tables">
+          <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground mb-2">
+                {t('staffRosterTablesTitle')}
+              </h3>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={roster.table_count_default}
+                  step={1}
+                  value={tableCount}
+                  onChange={(event) => setTableCount(event.target.value)}
+                  data-testid="staff-roster-table-count"
+                  aria-label={t('staffRosterTablesTitle')}
+                  aria-invalid={!tablesValid}
+                  className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-sm"
+                />
+                {t('staffRosterTablesUnit')}
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">{t('staffRosterTablesHint')}</p>
+              {!tablesValid && roster.table_count_default > 0 && (
+                <p className="mt-1 text-xs text-red-600">
+                  {t('staffRosterTablesInvalid', { max: roster.table_count_default })}
+                </p>
+              )}
+            </div>
+            <div className="min-w-0 flex-1" data-testid="table-rezone-skip-setting">
+              <h3 className="mb-2 text-sm font-semibold text-foreground">{t('rezoneSkip')}</h3>
+              {skipEditing ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    value={skipDraft}
+                    placeholder={t('rezoneSkipPlaceholder')}
+                    onChange={(event) => setSkipDraft(event.target.value)}
+                    aria-label={t('rezoneSkip')}
+                    aria-invalid={!skipCheck.valid}
+                    data-testid="table-rezone-skip"
+                    className="w-full max-w-60 rounded-lg border border-border bg-background px-2 py-1 text-sm aria-[invalid=true]:border-red-500"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void saveSkip()}
+                    disabled={skipSaving || !skipCheck.valid || skipDraft.trim() === skipSaved}
+                    data-testid="table-rezone-skip-save"
+                  >
+                    <Check size={14} /> {tCommon('save')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setSkipDraft(skipSaved);
+                      setSkipEditing(false);
+                    }}
+                    disabled={skipSaving}
+                  >
+                    {t('cancel')}
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className="rounded-lg border border-border bg-muted/50 px-2 py-1 text-sm text-foreground"
+                    data-testid="table-rezone-skip-value"
+                  >
+                    {skipSaved || t('rezoneSkipNone')}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSkipEditing(true)}
+                    data-testid="table-rezone-skip-edit"
+                  >
+                    <Pencil size={14} /> {tCommon('edit')}
+                  </Button>
+                </div>
+              )}
+              {!skipCheck.valid ? (
+                <p className="mt-1 text-xs text-red-600">{t('rezoneSkipInvalid')}</p>
+              ) : (
+                skipCheck.ids.size > 0 && (
+                  <p
+                    className="mt-1 text-xs text-muted-foreground"
+                    data-testid="table-rezone-skipped"
+                  >
+                    {t('rezoneSkipped', { tables: skipCheck.names })}
+                  </p>
+                )
+              )}
+            </div>
+          </div>
+
+          <div
+            className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border p-3"
+            data-testid="staff-backup-setting"
           >
-            {t('staffRosterSelectAll')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setPresent(new Set())}
-            className="text-xs font-medium text-muted-foreground hover:text-foreground"
-          >
-            {t('staffRosterClear')}
-          </button>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {roster.staff.map((member) => {
-            const isPresent = present.has(member.id);
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">{t('staffBackupToggle')}</p>
+              <p className="text-xs text-muted-foreground">{t('staffBackupToggleHint')}</p>
+            </div>
+            <Toggle
+              value={roster.backup_enabled !== false}
+              onChange={(enabled) => void toggleBackup(enabled)}
+              label={t('staffBackupToggle')}
+              disabled={backupSaving || saving}
+              dataTestId="staff-backup-toggle"
+            />
+          </div>
+
+          <div className="mt-4 rounded-xl bg-muted/50 p-4" data-testid="staff-roster-summary">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">
+                {t('staffRosterEstimate')}
+              </span>
+              <span className="rounded-full bg-card px-2 py-0.5 text-xs text-muted-foreground">
+                {t('staffRosterAuto')}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              {[
+                { value: staffCount, label: t('staffRosterStaffUnit'), id: 'staff' },
+                { value: servedTables, label: t('staffRosterTablesUnit'), id: 'tables' },
+                { value: average, label: t('staffRosterAverageUnit'), id: 'average' },
+              ].map((figure) => (
+                <div key={figure.id} className="rounded-lg bg-card p-3">
+                  <div
+                    className="text-xl font-bold text-foreground"
+                    data-testid={`staff-roster-summary-${figure.id}`}
+                  >
+                    <Ltr>{figure.value}</Ltr>
+                  </div>
+                  <div className="text-xs text-muted-foreground">{figure.label}</div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-sm text-foreground" data-testid="staff-roster-split">
+              {staffCount === 0
+                ? t('staffRosterSplitNobody')
+                : extra === 0
+                  ? t('staffRosterSplitEven', { staff: staffCount, tables: base })
+                  : t('staffRosterSplit', {
+                      lowStaff: staffCount - extra,
+                      lowTables: base,
+                      highStaff: extra,
+                      highTables: base + 1,
+                    })}
+            </p>
+          </div>
+          <TableRezone
+            tables={roster.tables}
+            skip={skipDraft}
+            defaultStaff={present.size}
+            onRezoned={() =>
+              void api
+                .get<StaffRoster>('/tables/staff-roster')
+                .then((res) => applyRoster(res.data))
+                .catch(() => toast.error(t('staffAssignmentLoadFailed')))
+            }
+          />
+        </section>
+
+        <h3 className="text-sm font-semibold text-foreground mb-3">
+          {t('staffAssignmentModeHeading')}
+        </h3>
+        <div className="space-y-3" role="radiogroup" aria-label={t('staffAssignmentModeHeading')}>
+          {options.map(({ value, icon: Icon, title, description }) => {
+            const selected = mode === value;
             return (
               <div
-                key={member.id}
-                data-testid={`staff-roster-card-${member.id}`}
-                className={`relative rounded-xl border p-3 transition-colors ${
-                  isPresent
-                    ? 'border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-950/40'
-                    : 'border-border bg-muted/40'
+                key={value}
+                className={`rounded-xl border transition-colors ${
+                  selected ? 'border-brand bg-brand/5' : 'border-border hover:bg-muted/50'
                 }`}
               >
                 <button
                   type="button"
-                  role="checkbox"
-                  aria-checked={isPresent}
-                  data-testid={`staff-roster-member-${member.id}`}
-                  onClick={() => togglePresent(member.id)}
-                  className={`flex w-full items-center gap-2 text-start ${automatic ? 'pe-8' : 'pe-16'}`}
+                  role="radio"
+                  aria-checked={selected}
+                  data-testid={`staff-assignment-mode-${value}`}
+                  onClick={() => chooseMode(value)}
+                  className="w-full flex items-center gap-3 p-4 text-start"
                 >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-card text-muted-foreground">
-                    <User size={16} />
+                  <span
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
+                      selected ? 'bg-brand text-white' : 'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    <Icon size={18} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-foreground">
-                      {member.name}
-                    </span>
-                    <span
-                      className={`flex items-center gap-1 text-xs ${
-                        isPresent ? 'text-green-700 dark:text-green-300' : 'text-muted-foreground'
-                      }`}
-                    >
-                      {isPresent ? (
-                        <Check size={12} />
-                      ) : (
-                        <span className="h-2.5 w-2.5 rounded-full border border-muted-foreground" />
-                      )}
-                      {isPresent ? t('staffRosterPresent') : t('staffRosterAbsent')}
-                    </span>
+                    <span className="block text-sm font-semibold text-foreground">{title}</span>
+                    <span className="block text-xs text-muted-foreground">{description}</span>
                   </span>
+                  <span
+                    className={`h-4 w-4 shrink-0 rounded-full border-2 ${
+                      selected ? 'border-brand bg-brand' : 'border-border'
+                    }`}
+                  />
                 </button>
-                <div className="absolute end-2 top-2 flex gap-1">
-                  {!automatic && (
-                    <button
-                      type="button"
-                      onClick={() => setEditingFor({ id: member.id, name: member.name })}
-                      data-testid={`staff-roster-edit-${member.id}`}
-                      aria-label={t('staffTablesEditFor', { name: member.name })}
-                      title={t('staffTablesEdit')}
-                      className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
-                    >
-                      <Pencil size={13} />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setAddingFor({ id: member.id, name: member.name })}
-                    data-testid={`staff-roster-add-${member.id}`}
-                    aria-label={t('staffTablesAddFor', { name: member.name })}
-                    className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-                {(member.tables.length > 0 || member.backup_tables.length > 0) && (
-                  <div className="mt-2 space-y-1 border-t border-border/60 pt-2 text-xs">
-                    {member.tables.length > 0 && (
-                      <p data-testid={`staff-roster-tables-${member.id}`}>
-                        <span className="text-muted-foreground">{t('staffTablesOwnLabel')} </span>
-                        <span className="font-medium text-foreground">
-                          {t('staffTablesTableName', {
-                            name: formatTableRanges(member.tables.map((table) => table.name)),
-                          })}
-                        </span>
-                      </p>
-                    )}
-                    {member.backup_tables.length > 0 && (
-                      <p
-                        data-testid={`staff-roster-backup-${member.id}`}
-                        className="inline-block rounded-md border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
-                      >
-                        {t('staffTablesBackupName', {
-                          name: formatTableRanges(member.backup_tables.map((table) => table.name)),
-                        })}
-                      </p>
-                    )}
-                  </div>
+                {value === 'shuffle_interval' && selected && (
+                  <label className="flex items-center gap-2 px-4 pb-4 text-sm text-foreground">
+                    {t('staffAssignmentShuffleEvery')}
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={SHUFFLE_DAYS_MIN}
+                      max={SHUFFLE_DAYS_MAX}
+                      step={1}
+                      value={days}
+                      onChange={(event) => setDays(event.target.value)}
+                      data-testid="staff-assignment-shuffle-days"
+                      aria-invalid={!daysValid}
+                      className="w-20 rounded-lg border border-border bg-background px-2 py-1 text-sm"
+                    />
+                    {t('staffAssignmentDays')}
+                  </label>
                 )}
               </div>
             );
           })}
         </div>
-      </section>
 
-      <section className="mb-6" data-testid="staff-roster-tables">
-        <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground mb-2">
-              {t('staffRosterTablesTitle')}
-            </h3>
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              <input
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={roster.table_count_default}
-                step={1}
-                value={tableCount}
-                onChange={(event) => setTableCount(event.target.value)}
-                data-testid="staff-roster-table-count"
-                aria-label={t('staffRosterTablesTitle')}
-                aria-invalid={!tablesValid}
-                className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-sm"
-              />
-              {t('staffRosterTablesUnit')}
-            </label>
-            <p className="mt-1 text-xs text-muted-foreground">{t('staffRosterTablesHint')}</p>
-            {!tablesValid && roster.table_count_default > 0 && (
-              <p className="mt-1 text-xs text-red-600">
-                {t('staffRosterTablesInvalid', { max: roster.table_count_default })}
+        {mode === 'shuffle_interval' && !daysValid && (
+          <p className="mt-2 text-xs text-red-600">
+            {t('staffAssignmentDaysInvalid', { min: SHUFFLE_DAYS_MIN, max: SHUFFLE_DAYS_MAX })}
+          </p>
+        )}
+        <p className="mt-4 text-xs text-muted-foreground">
+          {mode === 'manual'
+            ? t('staffAssignmentManualNote')
+            : mode === 'staff_managed'
+              ? t('staffAssignmentStaffManagedNote')
+              : t('staffAssignmentAutoNote')}
+        </p>
+        {automatic && saved.last_run && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t('staffAssignmentLastRun')} <Ltr>{saved.last_run}</Ltr>
+          </p>
+        )}
+        {confirmMode && (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={() => setConfirmMode(null)}
+          >
+            <div
+              className="bg-card text-foreground rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+              data-testid="staff-assignment-confirm"
+              role="dialog"
+              aria-modal="true"
+            >
+              <h2 className="text-lg font-bold mb-1">
+                {confirmMode === 'rotate_daily'
+                  ? t('staffAssignmentRotate')
+                  : t('staffAssignmentShuffle')}
+              </h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                {t('staffAssignmentConfirmRun', { count: present.size })}
               </p>
-            )}
-          </div>
-          <div className="min-w-0 flex-1" data-testid="table-rezone-skip-setting">
-            <h3 className="mb-2 text-sm font-semibold text-foreground">{t('rezoneSkip')}</h3>
-            {skipEditing ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={skipDraft}
-                  placeholder={t('rezoneSkipPlaceholder')}
-                  onChange={(event) => setSkipDraft(event.target.value)}
-                  aria-label={t('rezoneSkip')}
-                  aria-invalid={!skipCheck.valid}
-                  data-testid="table-rezone-skip"
-                  className="w-full max-w-60 rounded-lg border border-border bg-background px-2 py-1 text-sm aria-[invalid=true]:border-red-500"
-                />
+              <div className="flex gap-2">
                 <Button
                   type="button"
-                  size="sm"
-                  onClick={() => void saveSkip()}
-                  disabled={skipSaving || !skipCheck.valid || skipDraft.trim() === skipSaved}
-                  data-testid="table-rezone-skip-save"
-                >
-                  <Check size={14} /> {tCommon('save')}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
                   variant="outline"
-                  onClick={() => {
-                    setSkipDraft(skipSaved);
-                    setSkipEditing(false);
-                  }}
-                  disabled={skipSaving}
+                  className="flex-1"
+                  onClick={() => setConfirmMode(null)}
                 >
                   {t('cancel')}
                 </Button>
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className="rounded-lg border border-border bg-muted/50 px-2 py-1 text-sm text-foreground"
-                  data-testid="table-rezone-skip-value"
-                >
-                  {skipSaved || t('rezoneSkipNone')}
-                </span>
                 <Button
                   type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setSkipEditing(true)}
-                  data-testid="table-rezone-skip-edit"
+                  className="flex-1"
+                  data-testid="staff-assignment-confirm-run"
+                  onClick={() => switchMode(confirmMode)}
                 >
-                  <Pencil size={14} /> {tCommon('edit')}
+                  {t('staffAssignmentConfirmRunButton')}
                 </Button>
               </div>
-            )}
-            {!skipCheck.valid ? (
-              <p className="mt-1 text-xs text-red-600">{t('rezoneSkipInvalid')}</p>
-            ) : (
-              skipCheck.ids.size > 0 && (
-                <p
-                  className="mt-1 text-xs text-muted-foreground"
-                  data-testid="table-rezone-skipped"
-                >
-                  {t('rezoneSkipped', { tables: skipCheck.names })}
-                </p>
-              )
-            )}
+            </div>
           </div>
-        </div>
-
-        <div
-          className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border p-3"
-          data-testid="staff-backup-setting"
-        >
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">{t('staffBackupToggle')}</p>
-            <p className="text-xs text-muted-foreground">{t('staffBackupToggleHint')}</p>
-          </div>
-          <Toggle
-            value={roster.backup_enabled !== false}
-            onChange={(enabled) => void toggleBackup(enabled)}
-            label={t('staffBackupToggle')}
-            disabled={backupSaving || saving}
-            dataTestId="staff-backup-toggle"
+        )}
+        {editingFor && (
+          <StaffTablesEditDialog<StaffRoster>
+            member={editingFor}
+            tables={roster.tables}
+            backupEnabled={roster.backup_enabled !== false}
+            onClose={() => setEditingFor(null)}
+            onSaved={(data) => {
+              setRoster(data);
+              setEditingFor(null);
+            }}
           />
-        </div>
-
-        <div className="mt-4 rounded-xl bg-muted/50 p-4" data-testid="staff-roster-summary">
-          <div className="mb-3 flex items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">
-              {t('staffRosterEstimate')}
-            </span>
-            <span className="rounded-full bg-card px-2 py-0.5 text-xs text-muted-foreground">
-              {t('staffRosterAuto')}
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-center">
-            {[
-              { value: staffCount, label: t('staffRosterStaffUnit'), id: 'staff' },
-              { value: servedTables, label: t('staffRosterTablesUnit'), id: 'tables' },
-              { value: average, label: t('staffRosterAverageUnit'), id: 'average' },
-            ].map((figure) => (
-              <div key={figure.id} className="rounded-lg bg-card p-3">
-                <div
-                  className="text-xl font-bold text-foreground"
-                  data-testid={`staff-roster-summary-${figure.id}`}
-                >
-                  <Ltr>{figure.value}</Ltr>
-                </div>
-                <div className="text-xs text-muted-foreground">{figure.label}</div>
-              </div>
-            ))}
-          </div>
-          <p className="mt-3 text-sm text-foreground" data-testid="staff-roster-split">
-            {staffCount === 0
-              ? t('staffRosterSplitNobody')
-              : extra === 0
-                ? t('staffRosterSplitEven', { staff: staffCount, tables: base })
-                : t('staffRosterSplit', {
-                    lowStaff: staffCount - extra,
-                    lowTables: base,
-                    highStaff: extra,
-                    highTables: base + 1,
-                  })}
-          </p>
-        </div>
-        <TableRezone
-          tables={roster.tables}
-          skip={skipDraft}
-          defaultStaff={present.size}
-          onRezoned={() =>
-            void api
-              .get<StaffRoster>('/tables/staff-roster')
-              .then((res) => applyRoster(res.data))
-              .catch(() => toast.error(t('staffAssignmentLoadFailed')))
-          }
-        />
-      </section>
-
-      <h3 className="text-sm font-semibold text-foreground mb-3">
-        {t('staffAssignmentModeHeading')}
-      </h3>
-      <div className="space-y-3" role="radiogroup" aria-label={t('staffAssignmentModeHeading')}>
-        {options.map(({ value, icon: Icon, title, description }) => {
-          const selected = mode === value;
-          return (
-            <div
-              key={value}
-              className={`rounded-xl border transition-colors ${
-                selected ? 'border-brand bg-brand/5' : 'border-border hover:bg-muted/50'
-              }`}
-            >
-              <button
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                data-testid={`staff-assignment-mode-${value}`}
-                onClick={() => chooseMode(value)}
-                className="w-full flex items-center gap-3 p-4 text-start"
-              >
-                <span
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
-                    selected ? 'bg-brand text-white' : 'bg-muted text-muted-foreground'
-                  }`}
-                >
-                  <Icon size={18} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold text-foreground">{title}</span>
-                  <span className="block text-xs text-muted-foreground">{description}</span>
-                </span>
-                <span
-                  className={`h-4 w-4 shrink-0 rounded-full border-2 ${
-                    selected ? 'border-brand bg-brand' : 'border-border'
-                  }`}
-                />
-              </button>
-              {value === 'shuffle_interval' && selected && (
-                <label className="flex items-center gap-2 px-4 pb-4 text-sm text-foreground">
-                  {t('staffAssignmentShuffleEvery')}
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={SHUFFLE_DAYS_MIN}
-                    max={SHUFFLE_DAYS_MAX}
-                    step={1}
-                    value={days}
-                    onChange={(event) => setDays(event.target.value)}
-                    data-testid="staff-assignment-shuffle-days"
-                    aria-invalid={!daysValid}
-                    className="w-20 rounded-lg border border-border bg-background px-2 py-1 text-sm"
-                  />
-                  {t('staffAssignmentDays')}
-                </label>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {mode === 'shuffle_interval' && !daysValid && (
-        <p className="mt-2 text-xs text-red-600">
-          {t('staffAssignmentDaysInvalid', { min: SHUFFLE_DAYS_MIN, max: SHUFFLE_DAYS_MAX })}
-        </p>
-      )}
-      <p className="mt-4 text-xs text-muted-foreground">
-        {mode === 'manual'
-          ? t('staffAssignmentManualNote')
-          : mode === 'staff_managed'
-            ? t('staffAssignmentStaffManagedNote')
-            : t('staffAssignmentAutoNote')}
-      </p>
-      {automatic && saved.last_run && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t('staffAssignmentLastRun')} <Ltr>{saved.last_run}</Ltr>
-        </p>
-      )}
-      {confirmMode && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setConfirmMode(null)}
-        >
-          <div
-            className="bg-card text-foreground rounded-2xl p-6 w-full max-w-sm shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-            data-testid="staff-assignment-confirm"
-            role="dialog"
-            aria-modal="true"
+        )}
+        {addingFor && (
+          <StaffTablesDialog<StaffRoster>
+            member={addingFor}
+            tables={roster.tables}
+            backupEnabled={roster.backup_enabled !== false}
+            onClose={() => setAddingFor(null)}
+            onSaved={(data) => {
+              setRoster(data);
+              setAddingFor(null);
+            }}
+          />
+        )}
+        <div className="mt-5 flex justify-end">
+          <Button
+            type="button"
+            onClick={save}
+            disabled={!canSave}
+            data-testid="staff-assignment-save"
           >
-            <h2 className="text-lg font-bold mb-1">
-              {confirmMode === 'rotate_daily'
-                ? t('staffAssignmentRotate')
-                : t('staffAssignmentShuffle')}
-            </h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              {t('staffAssignmentConfirmRun', { count: present.size })}
-            </p>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="flex-1"
-                onClick={() => setConfirmMode(null)}
-              >
-                {t('cancel')}
-              </Button>
-              <Button
-                type="button"
-                className="flex-1"
-                data-testid="staff-assignment-confirm-run"
-                onClick={() => switchMode(confirmMode)}
-              >
-                {t('staffAssignmentConfirmRunButton')}
-              </Button>
-            </div>
-          </div>
+            {saving ? t('staffAssignmentSaving') : t('saveChanges')}
+          </Button>
         </div>
-      )}
-      {editingFor && (
-        <StaffTablesEditDialog<StaffRoster>
-          member={editingFor}
-          tables={roster.tables}
-          backupEnabled={roster.backup_enabled !== false}
-          onClose={() => setEditingFor(null)}
-          onSaved={(data) => {
-            setRoster(data);
-            setEditingFor(null);
-          }}
-        />
-      )}
-      {addingFor && (
-        <StaffTablesDialog<StaffRoster>
-          member={addingFor}
-          tables={roster.tables}
-          backupEnabled={roster.backup_enabled !== false}
-          onClose={() => setAddingFor(null)}
-          onSaved={(data) => {
-            setRoster(data);
-            setAddingFor(null);
-          }}
-        />
-      )}
-      <div className="mt-5 flex justify-end">
-        <Button
-          type="button"
-          onClick={save}
-          disabled={!canSave}
-          data-testid="staff-assignment-save"
-        >
-          {saving ? t('staffAssignmentSaving') : t('saveChanges')}
-        </Button>
       </div>
+      <TableZoneBoard
+        tables={roster.tables}
+        staffNames={new Map(roster.staff.map((member) => [member.id, member.name]))}
+      />
     </div>
   );
 }
