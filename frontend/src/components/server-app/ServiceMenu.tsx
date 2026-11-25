@@ -107,10 +107,20 @@ function ServiceIllustration({ kind }: { kind: (typeof SERVICES)[number] }) {
       )}
       {kind === 'other' && (
         <>
-          <circle cx="24" cy="24" r="17" fill="#FFFFFF" stroke="#F0645A" strokeWidth="2.5" />
-          <circle cx="17" cy="24" r="2.5" fill="#F0645A" />
-          <circle cx="24" cy="24" r="2.5" fill="#F0645A" />
-          <circle cx="31" cy="24" r="2.5" fill="#F0645A" />
+          <path
+            d="M24 14q-4-9-10-7t2 7ZM24 14q4-9 10-7t-2 7Z"
+            fill="none"
+            stroke="#E5484D"
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+          />
+          <rect x="7" y="14" width="34" height="9" rx="2" fill="#F0645A" />
+          <rect x="9" y="23" width="30" height="20" rx="2" fill="#FF8A80" />
+          <rect x="21" y="14" width="6" height="29" fill="#FFC542" />
+          <path
+            d="m35 27 1.2 2.4 2.6.4-1.9 1.8.5 2.6-2.4-1.2-2.4 1.2.5-2.6-1.9-1.8 2.6-.4Z"
+            fill="#FFF6D6"
+          />
         </>
       )}
     </svg>
@@ -168,9 +178,7 @@ export function ServiceMenu({
           aria-pressed={staffUnlocked}
           {...staffGesture.handlers}
           className={`mx-auto mt-3 flex h-8 w-40 shrink-0 touch-none select-none items-center justify-center rounded-[12px] border-2 transition-colors focus-visible:outline-2 focus-visible:outline-brand ${
-            staffUnlocked || staffGesture.holding || staffGesture.tapCount > 0
-              ? 'border-brand'
-              : 'border-transparent'
+            staffUnlocked ? 'border-brand' : 'border-transparent'
           }`}
         >
           <span
@@ -178,7 +186,7 @@ export function ServiceMenu({
             className={`pointer-events-none h-1.5 w-[100px] rounded-full transition-colors ${staffUnlocked ? 'bg-brand' : 'bg-[#B5B5B5]'}`}
           />
         </button>
-        {/* Each count appears only once its tap lands, so guests see no hint of the staff entry. */}
+        {/* The bar stays plain grey until the staff gesture completes, so guests see no hint of it. */}
         <div
           data-testid="service-menu-staff-taps"
           aria-hidden="true"
@@ -188,7 +196,7 @@ export function ServiceMenu({
             <span
               key={i}
               data-active={staffUnlocked || i < staffGesture.tapCount ? 'true' : undefined}
-              className="invisible flex size-7 items-center justify-center rounded-full bg-brand text-xs font-semibold text-white data-[active=true]:visible"
+              className={`flex size-7 items-center justify-center rounded-full bg-brand text-xs font-semibold text-white ${staffUnlocked ? '' : 'invisible'}`}
             >
               {i + 1}
             </span>

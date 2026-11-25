@@ -1,7 +1,11 @@
 'use client';
 
+import { useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import type { StaffTablesDialogTable } from './StaffTablesDialog';
+
+const COLLAPSED_KEY = 'flocafe:table-zone-board-collapsed';
 
 const byName = (a: { name: string }, b: { name: string }) =>
   a.name.localeCompare(b.name, undefined, { numeric: true });
@@ -15,6 +19,13 @@ export default function TableZoneBoard({
   staffNames: Map<string, string>;
 }) {
   const t = useTranslations('tables');
+  const [collapsed, setCollapsed] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem(COLLAPSED_KEY) === '1',
+  );
+  const toggle = () => {
+    localStorage.setItem(COLLAPSED_KEY, collapsed ? '0' : '1');
+    setCollapsed(!collapsed);
+  };
   const zones = [
     ...tables
       .reduce((map, table) => {
@@ -28,14 +39,28 @@ export default function TableZoneBoard({
 
   return (
     <section
-      className="min-w-0 flex-1 rounded-2xl border border-border bg-card p-6"
+      className={`min-w-0 rounded-2xl border border-border bg-card p-6 ${collapsed ? 'w-full lg:w-auto' : 'flex-1'}`}
       data-testid="table-zone-board"
+      data-collapsed={collapsed ? 'true' : undefined}
     >
-      <h3 className="mb-4 text-sm font-semibold text-foreground">{t('zoneBoardTitle')}</h3>
-      {zones.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('zoneBoardEmpty')}</p>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        data-testid="table-zone-board-toggle"
+        className="flex w-full items-center justify-between gap-3 text-start text-sm font-semibold text-foreground"
+      >
+        {t('zoneBoardTitle')}
+        <ChevronDown
+          size={18}
+          className={`shrink-0 text-muted-foreground transition-transform ${collapsed ? '-rotate-90' : ''}`}
+          aria-hidden="true"
+        />
+      </button>
+      {collapsed ? null : zones.length === 0 ? (
+        <p className="mt-4 text-sm text-muted-foreground">{t('zoneBoardEmpty')}</p>
       ) : (
-        <div className="space-y-5">
+        <div className="mt-4 space-y-5">
           {zones.map(({ zone, list }) => {
             const assigned = list.filter((table) => table.owner_user_id).length;
             return (

@@ -491,6 +491,13 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     const freeCard = board.getByTestId(`table-zone-board-table-E2E-ZONE-${stamp}-1`);
     await expect(freeCard).toContainText('Unassigned');
     await expect(freeCard).not.toHaveAttribute('data-table-owner');
+    await board.getByTestId('table-zone-board-toggle').click();
+    await expect(freeCard).toHaveCount(0);
+    await page.reload();
+    await page.getByTestId('tables-view-staff').click();
+    await expect(board).toHaveAttribute('data-collapsed', 'true');
+    await board.getByTestId('table-zone-board-toggle').click();
+    await expect(freeCard).toBeVisible();
     const panel = page.getByTestId('table-rezone');
     await expect(panel).toContainText('Re-zone tables');
     await expect(panel.getByTestId('table-rezone-current').first()).toBeVisible();
