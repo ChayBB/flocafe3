@@ -3,7 +3,12 @@
 import { useState } from 'react';
 import { LayoutGrid, MinusCircle, Plus } from 'lucide-react';
 import { useTranslations } from 'use-intl';
-import { resolveTableRange, tablesToRanges, type TableRange } from '@/lib/table-ranges';
+import {
+  neighbourRanges,
+  resolveTableRange,
+  tablesToRanges,
+  type TableRange,
+} from '@/lib/table-ranges';
 
 export type RangeFormTable = {
   id: string;
@@ -13,9 +18,17 @@ export type RangeFormTable = {
 };
 
 type Kind = 'primary' | 'backup';
+const MIN_ROWS: Record<Kind, number> = { primary: 1, backup: 2 };
+const blankRows = (kind: Kind, ranges: TableRange[]) => [
+  ...ranges,
+  ...Array.from({ length: Math.max(0, MIN_ROWS[kind] - ranges.length) }, () => ({
+    from: '',
+    to: '',
+  })),
+];
 
 const input =
-  'h-14 min-w-0 flex-1 rounded-xl border-2 bg-background px-3 text-lg outline-none focus-visible:border-orange-600';
+  'h-14 min-w-0 flex-1 rounded-xl border-2 bg-background px-3 text-lg outline-none placeholder:text-muted-foreground/50 focus-visible:border-orange-600';
 
 export function StaffTableRangeForm({
   tables,
@@ -33,13 +46,15 @@ export function StaffTableRangeForm({
   onCancel: () => void;
 }) {
   const t = useTranslations('staffProfile');
-  const initial = (mine: (table: RangeFormTable) => boolean) => {
-    const ranges = tablesToRanges(tables.filter(mine), tables);
-    return ranges.length ? ranges : [{ from: '', to: '' }];
-  };
+  const initial = (kind: Kind, mine: (table: RangeFormTable) => boolean) =>
+    blankRows(kind, tablesToRanges(tables.filter(mine), tables));
+
   const [ranges, setRanges] = useState<Record<Kind, TableRange[]>>(() => ({
-    primary: initial((table) => table.owner_user_id === userId),
-    backup: initial((table) => table.owner_user_id !== userId && table.backup_user_id === userId),
+    primary: initial('primary', (table) => table.owner_user_id === userId),
+    backup: initial(
+      'backup',
+      (table) => table.owner_user_id !== userId && table.backup_user_id === userId,
+    ),
   }));
   const [checked, setChecked] = useState(false);
 
@@ -60,6 +75,12 @@ export function StaffTableRangeForm({
   ];
   const primaryIds = ids(primary);
   const backupIds = ids(backup);
+  const neighbours = neighbourRanges(
+    tables.filter((table) => primaryIds.includes(table.id)),
+    tables,
+  );
+  const guide = (kind: Kind, index: number) =>
+    kind === 'backup' ? [neighbours.before, neighbours.after][index] : undefined;
   const overlap = new Set(primaryIds.filter((id) => backupIds.includes(id)));
   const names = (list: RangeFormTable[]) => list.map((table) => table.label).join(', ');
   const rowError = (row: (typeof primary)[number], range: TableRange) => {
@@ -83,10 +104,13 @@ export function StaffTableRangeForm({
   const add = (kind: Kind) =>
     setRanges((current) => ({ ...current, [kind]: [...current[kind], { from: '', to: '' }] }));
   const remove = (kind: Kind, index: number) =>
-    setRanges((current) => {
-      const next = current[kind].filter((_, i) => i !== index);
-      return { ...current, [kind]: next.length ? next : [{ from: '', to: '' }] };
-    });
+    setRanges((current) => ({
+      ...current,
+      [kind]: blankRows(
+        kind,
+        current[kind].filter((_, i) => i !== index),
+      ),
+    }));
 
   const section = (kind: Kind, rows: typeof primary, count: number) => (
     <section data-testid={`staff-range-${kind}`} className="space-y-2">
@@ -112,6 +136,7 @@ export function StaffTableRangeForm({
             <div className="flex items-center gap-3">
               <input
                 value={range.from}
+                placeholder={guide(kind, index)?.from}
                 onChange={(event) => update(kind, index, 'from', event.target.value)}
                 inputMode="numeric"
                 aria-label={`${kind === 'primary' ? t('rangePrimary') : t('rangeBackup')} ${index + 1} ${t('rangeFrom')}`}
@@ -120,6 +145,7 @@ export function StaffTableRangeForm({
               <span className="w-4 text-center text-muted-foreground">–</span>
               <input
                 value={range.to}
+                placeholder={guide(kind, index)?.to}
                 onChange={(event) => update(kind, index, 'to', event.target.value)}
                 inputMode="numeric"
                 aria-label={`${kind === 'primary' ? t('rangePrimary') : t('rangeBackup')} ${index + 1} ${t('rangeTo')}`}

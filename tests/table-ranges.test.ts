@@ -1,6 +1,10 @@
 /** Typed table ranges on the staff profile: numbered runs, exact names, and ranges rebuilt from choices. */
 import assert from 'node:assert/strict';
-import { resolveTableRange, tablesToRanges } from '../frontend/src/lib/table-ranges';
+import {
+  neighbourRanges,
+  resolveTableRange,
+  tablesToRanges,
+} from '../frontend/src/lib/table-ranges';
 
 const tables = ['9', '10', '11', '15', '16', '17', '19', 'VIP', 'Bar 1'].map((label) => ({
   id: `t-${label}`,
@@ -32,5 +36,15 @@ assert.deepEqual(tablesToRanges(pick('VIP', '19'), tables), [
   { from: 'VIP', to: 'VIP' },
 ]);
 assert.deepEqual(tablesToRanges([], tables), []);
+
+assert.deepEqual(neighbourRanges(pick('15', '16'), tables), {
+  before: { from: '10', to: '11' },
+  after: { from: '17', to: '19' },
+});
+assert.deepEqual(neighbourRanges(pick('9'), tables), {
+  before: null,
+  after: { from: '10', to: '10' },
+});
+assert.deepEqual(neighbourRanges([], tables), { before: null, after: null });
 
 console.log('table-ranges: ok');

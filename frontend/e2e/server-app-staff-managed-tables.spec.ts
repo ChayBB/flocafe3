@@ -78,6 +78,15 @@ test.describe('Staff profile My tables row', () => {
       .nth(1)
       .fill(String(base + 1));
     await expect(primary).toContainText('2 tables');
+    await expect(backup.getByRole('textbox')).toHaveCount(4);
+    await expect(backup.getByRole('textbox').nth(2)).toHaveAttribute(
+      'placeholder',
+      String(base + 2),
+    );
+    await expect(backup.getByRole('textbox').nth(3)).toHaveAttribute(
+      'placeholder',
+      String(base + 4),
+    );
     await backup
       .getByRole('textbox')
       .nth(0)

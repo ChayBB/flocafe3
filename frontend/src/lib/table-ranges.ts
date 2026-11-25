@@ -76,3 +76,23 @@ export function tablesToRanges(
   flush();
   return ranges;
 }
+
+/** The run of tables just before and just after `chosen` in table order, each as long as `chosen`. */
+export function neighbourRanges(
+  chosen: readonly RangeTable[],
+  all: readonly RangeTable[],
+): { before: TableRange | null; after: TableRange | null } {
+  const sorted = [...all].sort(byLabel);
+  const picked = new Set(chosen.map((table) => table.id));
+  const indexes = sorted.flatMap((table, index) => (picked.has(table.id) ? [index] : []));
+  if (!indexes.length) return { before: null, after: null };
+  const size = indexes.length;
+  const first = indexes[0];
+  const last = indexes[indexes.length - 1];
+  const asRange = (run: RangeTable[]) =>
+    run.length ? { from: run[0].label, to: run[run.length - 1].label } : null;
+  return {
+    before: asRange(sorted.slice(Math.max(0, first - size), first)),
+    after: asRange(sorted.slice(last + 1, last + 1 + size)),
+  };
+}
