@@ -773,11 +773,33 @@ export function startServerApp(): Promise<void> {
          FROM table_bills`,
         )
         .get(userId, start, end);
+      // The work calendar covers this month and the two before it.
+      const [year, month] = businessDate.split('-').map(Number);
+      const since = new Date(Date.UTC(year, month - 3, 1)).toISOString().slice(0, 10);
+      const workDays = (
+        db
+          .prepare(
+            `SELECT business_date FROM staff_attendance
+             WHERE user_id = ? AND business_date >= ? ORDER BY business_date`,
+          )
+          .all(userId, since) as { business_date: string }[]
+      ).map((row) => row.business_date);
+      const absentDays = (
+        db
+          .prepare(
+            `SELECT business_date FROM table_staff_attendance
+             WHERE user_id = ? AND present = 0 AND business_date >= ? ORDER BY business_date`,
+          )
+          .all(userId, since) as { business_date: string }[]
+      )
+        .map((row) => row.business_date)
+        .filter((date) => !workDays.includes(date));
       const assignment = readTableOwnerAssignmentSettings(db);
       res.json({
         business_date: businessDate,
         timezone,
         attendance,
+        calendar: { since, work_days: workDays, absent_days: absentDays },
         summary,
         assignment_mode: assignment.mode,
         backup_enabled: assignment.backup_enabled,

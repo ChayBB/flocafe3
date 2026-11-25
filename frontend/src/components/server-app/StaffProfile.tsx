@@ -26,7 +26,9 @@ import { useLocale, useTranslations } from 'use-intl';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP } from '@/lib/font-scale';
 import type { Language } from '@/lib/i18n/languages';
 import { parseDbTimestamp } from '@/lib/utils';
+import { StaffAllTables } from './StaffAllTables';
 import { StaffTableRangeForm } from './StaffTableRangeForm';
+import { StaffWorkCalendar, type WorkCalendarData } from './StaffWorkCalendar';
 
 type ProfileData = {
   business_date: string;
@@ -36,6 +38,7 @@ type ProfileData = {
     clock_in_at: string;
     clock_out_at: string | null;
   }[];
+  calendar?: WorkCalendarData;
   summary: { sales: number; bills: number; guests: number };
   assignment_mode?: string;
   backup_enabled?: boolean;
@@ -49,6 +52,7 @@ type ProfileTable = {
   floor?: string | null;
   owner_user_id?: string | null;
   backup_user_id?: string | null;
+  owner_name?: string | null;
 };
 
 const tableLabel = (table: ProfileTable) => String(table.name ?? table.number ?? '');
@@ -122,6 +126,7 @@ export function StaffProfile({
   const [failed, setFailed] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [picking, setPicking] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const [savingTables, setSavingTables] = useState(false);
   useEffect(() => {
     if (!api) return;
@@ -296,7 +301,13 @@ export function StaffProfile({
   );
   const openPicker = () => {
     setPanel('tables');
+    setBrowsing(false);
     startPicking();
+  };
+  const openAllTables = () => {
+    setPanel('tables');
+    setPicking(false);
+    setBrowsing(true);
   };
   const tableCard = (table: ProfileTable, tone: keyof typeof tableTone) => {
     const busy = Boolean(table.status && table.status !== 'available');
@@ -330,7 +341,7 @@ export function StaffProfile({
     <div className="space-y-4">
       <button
         type="button"
-        onClick={() => (staffManaged ? openPicker() : setPanel('tables'))}
+        onClick={() => (staffManaged ? openAllTables() : setPanel('tables'))}
         disabled={panel === 'tables' && !staffManaged}
         data-testid="staff-profile-my-tables"
         className="flex min-h-12 w-full items-center gap-3 text-start disabled:cursor-default"
@@ -338,7 +349,7 @@ export function StaffProfile({
         <LayoutGrid size={24} className={accentText} aria-hidden="true" />
         <span className="min-w-0 flex-1 text-xl font-bold">{t('myTables')}</span>
         {staffManaged ? (
-          <span className={`text-base font-semibold ${accentText}`}>{t('manageTablesShort')}</span>
+          <span className={`text-base font-semibold ${accentText}`}>{t('viewAllTables')}</span>
         ) : (
           <span className="text-base text-muted-foreground">
             {t('tableCount', { count: tables.length })}
@@ -371,6 +382,11 @@ export function StaffProfile({
   const history = (
     <section className={card}>
       {sectionHeader(panel === 'profile' ? t('todayWork') : t('history'), viewAll('history'))}
+      {panel === 'history' && snapshot?.calendar && (
+        <div className="mb-4 border-b-2 border-border pb-4">
+          <StaffWorkCalendar calendar={snapshot.calendar} businessDate={snapshot.business_date} />
+        </div>
+      )}
       {!(panel === 'profile' ? today : snapshot?.attendance.length) ? (
         <p className="text-lg text-muted-foreground">{t('noAttendance')}</p>
       ) : (
@@ -405,7 +421,14 @@ export function StaffProfile({
             type="button"
             className={action}
             aria-label={t('back')}
-            onClick={panel === 'profile' ? onClose : () => setPanel('profile')}
+            onClick={
+              panel === 'profile'
+                ? onClose
+                : () => {
+                    setPanel('profile');
+                    setBrowsing(false);
+                  }
+            }
           >
             <ArrowLeft size={26} aria-hidden="true" />
           </button>
@@ -498,7 +521,13 @@ export function StaffProfile({
               </dl>
             </section>
           )}
-          {panel === 'tables' && (tablePicker || <section className={card}>{myTables}</section>)}
+          {panel === 'tables' &&
+            (tablePicker ||
+              (browsing ? (
+                <StaffAllTables tables={allTables} userId={user.id} onTable={onTable} />
+              ) : (
+                <section className={card}>{myTables}</section>
+              )))}
           {panel === 'sales' && summary}
           {panel === 'history' && history}
           {panel === 'preferences' && (

@@ -41,17 +41,66 @@ test.describe('Staff profile My tables row', () => {
     await setMode(page, 'manual');
     const row = await openProfile(page);
     await expect(row).toContainText(/\d+ tables?/);
-    await expect(row).not.toContainText('Manage tables');
+    await expect(row).not.toContainText('View all tables');
   });
 
-  test('offers Manage tables when staff manage their own tables', async ({ page }) => {
+  test('offers View all tables when staff manage their own tables', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await setMode(page, 'staff_managed');
-    const row = await openProfile(page);
-    await expect(row).toContainText('Manage tables');
-    await expect(row).not.toContainText(/\d+ tables?/);
-    await row.click();
-    await expect(page.getByTestId('staff-table-picker')).toBeVisible();
+    const zone = `Zone ${Math.random().toString(36).slice(2, 7)}`;
+    const base = 8000 + Math.floor(Math.random() * 900) * 10;
+    const ids: string[] = [];
+    for (const offset of [1, 2]) {
+      const created = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+        headers: ownerHeaders,
+        data: { number: String(base + offset), capacity: 2, floor: zone },
+      });
+      expect(created.ok()).toBeTruthy();
+      ids.push((await created.json()).table.id);
+    }
+    try {
+      const freeZone = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+        headers: ownerHeaders,
+        data: { number: String(base + 5), capacity: 2, floor: `${zone} free` },
+      });
+      expect(freeZone.ok()).toBeTruthy();
+      ids.push((await freeZone.json()).table.id);
+      const assigned = await page.request.put(`${E2E_BASE_URL}/api/tables/staff-tables`, {
+        headers: ownerHeaders,
+        data: { user_id: 'e2e-server', table_ids: [ids[0]], kind: 'owner' },
+      });
+      expect(assigned.ok()).toBeTruthy();
+      const list = await (
+        await page.request.get(`${E2E_BASE_URL}/api/tables`, { headers: ownerHeaders })
+      ).json();
+      const ownerName = (list.tables as { id: string; owner_name: string }[]).find(
+        (table) => table.id === ids[0],
+      )!.owner_name;
+
+      await setMode(page, 'staff_managed');
+      const row = await openProfile(page);
+      await expect(row).toContainText('View all tables');
+      await expect(row).not.toContainText(/\d+ tables?/);
+      await row.click();
+      const all = page.getByTestId('staff-all-tables');
+      const zoneTab = all.getByRole('tab', { name: zone, exact: true });
+      await expect(zoneTab).not.toHaveAttribute('data-zone-free');
+      await zoneTab.click();
+      const taken = all.getByRole('button', { name: new RegExp(`Table ${base + 1}`) });
+      const free = all.getByRole('button', { name: new RegExp(`Table ${base + 2}`) });
+      await expect(taken).toHaveAttribute('data-table-owner', ownerName);
+      await expect(taken).toContainText(ownerName);
+      await expect(free).not.toHaveAttribute('data-table-owner');
+      await expect(free).toContainText('Available');
+      await expect(all.getByRole('tab', { name: `${zone} free` })).toHaveAttribute(
+        'data-zone-free',
+        'true',
+      );
+      await all.screenshot({ path: test.info().outputPath('all-tables.png') });
+    } finally {
+      for (const id of ids) {
+        await page.request.delete(`${E2E_BASE_URL}/api/tables/${id}`, { headers: ownerHeaders });
+      }
+    }
   });
 
   test('staff type table ranges for their main and backup tables', async ({ page }) => {
@@ -67,8 +116,8 @@ test.describe('Staff profile My tables row', () => {
       ids[offset] = (await created.json()).table.id;
     }
     await setMode(page, 'staff_managed', true);
-    const row = await openProfile(page);
-    await row.click();
+    await openProfile(page);
+    await page.getByRole('button', { name: 'Manage my tables' }).click();
     const picker = page.getByTestId('staff-table-picker');
     const primary = picker.getByTestId('staff-range-primary');
     const backup = picker.getByTestId('staff-range-backup');
@@ -125,5 +174,20 @@ test.describe('Staff profile My tables row', () => {
     expect((byId.get(ids[2]) as { backup_user_id: string }).backup_user_id).toBe(staffId);
     expect((byId.get(ids[4]) as { backup_user_id: string }).backup_user_id).toBe(staffId);
     expect((byId.get(ids[2]) as { owner_user_id: string | null }).owner_user_id).toBeNull();
+  });
+
+  test('work history shows a month calendar with today worked', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await setMode(page, 'manual');
+    await openProfile(page);
+    await page.getByTestId('server-app-staff-profile').getByText('Work history').first().click();
+    const calendar = page.getByTestId('staff-work-calendar');
+    await expect(calendar).toBeVisible();
+    await expect(calendar.locator('[data-day-kind="work"]').first()).toBeVisible();
+    await calendar.screenshot({ path: test.info().outputPath('work-calendar.png') });
+    await expect(calendar.getByRole('button', { name: 'Next month' })).toBeDisabled();
+    await calendar.getByRole('button', { name: 'Previous month' }).click();
+    await expect(calendar.locator('[data-day-kind="future"]')).toHaveCount(0);
+    expect(await calendar.locator('[data-day-kind]').count()).toBeGreaterThan(27);
   });
 });
