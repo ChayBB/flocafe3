@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, Hand, Pencil, Plus, RotateCw, Shuffle, User, UserCheck } from 'lucide-react';
+import { Check, Hand, Pencil, RotateCw, Shuffle, User, UserCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useLocale, useTranslations } from 'use-intl';
 import api from '@/lib/api';
@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Ltr } from '@/components/layout/Ltr';
 import { Toggle } from '@/components/settings/Toggle';
 import { formatTableRanges } from '@/lib/table-ranges';
-import StaffTablesDialog, { type StaffTablesDialogTable } from './StaffTablesDialog';
+import type { StaffTablesDialogTable } from './StaffTablesDialog';
 import StaffTablesEditDialog from './StaffTablesEditDialog';
 import TableRezone, { resolveSkippedTables } from './TableRezone';
 import TableZoneBoard from './TableZoneBoard';
@@ -61,7 +61,6 @@ export default function TableStaffAssignment() {
   const [present, setPresent] = useState<Set<string>>(() => new Set());
   const [tableCount, setTableCount] = useState('');
   const [saving, setSaving] = useState(false);
-  const [addingFor, setAddingFor] = useState<{ id: string; name: string } | null>(null);
   const [editingFor, setEditingFor] = useState<{ id: string; name: string } | null>(null);
   const [confirmMode, setConfirmMode] = useState<AssignmentMode | null>(null);
   const [backupSaving, setBackupSaving] = useState(false);
@@ -407,15 +406,6 @@ export default function TableStaffAssignment() {
                         <Pencil size={13} />
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setAddingFor({ id: member.id, name: member.name })}
-                      data-testid={`staff-roster-add-${member.id}`}
-                      aria-label={t('staffTablesAddFor', { name: member.name })}
-                      className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
-                    >
-                      <Plus size={14} />
-                    </button>
                   </div>
                   {(member.tables.length > 0 || member.backup_tables.length > 0) && (
                     <div className="mt-2 space-y-1 border-t border-border/60 pt-2 text-xs">
@@ -487,7 +477,6 @@ export default function TableStaffAssignment() {
                     placeholder={t('rezoneSkipPlaceholder')}
                     onChange={(event) => setSkipDraft(event.target.value)}
                     aria-label={t('rezoneSkip')}
-                    aria-invalid={!skipCheck.valid}
                     data-testid="table-rezone-skip"
                     className="w-full max-w-60 rounded-lg border border-border bg-background px-2 py-1 text-sm aria-[invalid=true]:border-red-500"
                   />
@@ -495,7 +484,7 @@ export default function TableStaffAssignment() {
                     type="button"
                     size="sm"
                     onClick={() => void saveSkip()}
-                    disabled={skipSaving || !skipCheck.valid || skipDraft.trim() === skipSaved}
+                    disabled={skipSaving || skipDraft.trim() === skipSaved}
                     data-testid="table-rezone-skip-save"
                   >
                     <Check size={14} /> {tCommon('save')}
@@ -532,17 +521,13 @@ export default function TableStaffAssignment() {
                   </Button>
                 </div>
               )}
-              {!skipCheck.valid ? (
-                <p className="mt-1 text-xs text-red-600">{t('rezoneSkipInvalid')}</p>
-              ) : (
-                skipCheck.ids.size > 0 && (
-                  <p
-                    className="mt-1 text-xs text-muted-foreground"
-                    data-testid="table-rezone-skipped"
-                  >
-                    {t('rezoneSkipped', { tables: skipCheck.names })}
-                  </p>
-                )
+              {skipCheck.ids.size > 0 && (
+                <p
+                  className="mt-1 text-xs text-muted-foreground"
+                  data-testid="table-rezone-skipped"
+                >
+                  {t('rezoneSkipped', { tables: skipCheck.names })}
+                </p>
               )}
             </div>
           </div>
@@ -744,18 +729,6 @@ export default function TableStaffAssignment() {
             onSaved={(data) => {
               setRoster(data);
               setEditingFor(null);
-            }}
-          />
-        )}
-        {addingFor && (
-          <StaffTablesDialog<StaffRoster>
-            member={addingFor}
-            tables={roster.tables}
-            backupEnabled={roster.backup_enabled !== false}
-            onClose={() => setAddingFor(null)}
-            onSaved={(data) => {
-              setRoster(data);
-              setAddingFor(null);
             }}
           />
         )}

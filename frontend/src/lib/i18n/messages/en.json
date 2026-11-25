@@ -3973,7 +3973,6 @@
     "rezoneStaffTooFew": "Staff today is {typed}, but only {picked} staff are marked as working. Mark the staff who are in so the numbers match.",
     "rezoneSkip": "Table numbers not in use",
     "rezoneSkipPlaceholder": "e.g. 26, 12-13",
-    "rezoneSkipInvalid": "Some of these tables were not found",
     "rezoneSkipped": "Left out, zone unchanged: {tables}",
     "rezoneSkipNone": "None",
     "rezoneSkipSaved": "Tables not in use saved",

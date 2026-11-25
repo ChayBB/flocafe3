@@ -3973,7 +3973,6 @@
     "rezoneStaffTooFew": "จำนวนพนักงานวันนี้คือ {typed} คน แต่เลือกว่ามาทำงานเพียง {picked} คน กรุณาเลือกพนักงานที่มาทำงานเพิ่ม เพื่อให้ตัวเลขตรงกัน",
     "rezoneSkip": "หมายเลขโต๊ะที่ไม่ใช้งาน",
     "rezoneSkipPlaceholder": "เช่น 26, 12-13",
-    "rezoneSkipInvalid": "ไม่พบโต๊ะบางหมายเลข",
     "rezoneSkipped": "ไม่นำมาแบ่ง คงโซนเดิม: {tables}",
     "rezoneSkipNone": "ไม่มี",
     "rezoneSkipSaved": "บันทึกหมายเลขโต๊ะที่ไม่ใช้งานแล้ว",

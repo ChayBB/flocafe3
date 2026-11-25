@@ -125,42 +125,29 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     const second = roster.staff[1] as { id: string; name: string };
     const [tableA, tableB] = createdTables;
     const [nameA, nameB] = createdNames;
-    const dialog = page.getByTestId('staff-tables-dialog');
+    // Each staff card offers only the pencil; extra tables are typed in the range form.
+    await expect(page.getByTestId(`staff-roster-add-${first.id}`)).toHaveCount(0);
     const handOut = async (memberId: string, kind: 'owner' | 'backup', tableIds: string[]) => {
-      await page.getByTestId(`staff-roster-add-${memberId}`).click();
-      await page.getByTestId(`staff-tables-kind-${kind}`).click();
-      for (const id of tableIds) await page.getByTestId(`staff-tables-option-${id}`).check();
+      const res = await page.request.put(`${BASE}/api/tables/staff-tables`, {
+        headers: authHeaders,
+        data: { user_id: memberId, kind, table_ids: tableIds },
+      });
+      expect(res.ok()).toBeTruthy();
     };
-
     await handOut(first.id, 'owner', [tableA]);
-    await page.getByTestId('staff-tables-submit').click();
-    await expect(dialog).toBeHidden();
-    await expect(page.getByTestId(`staff-roster-tables-${first.id}`)).toContainText('Looks after');
-    await expect(page.getByTestId(`staff-roster-tables-${first.id}`)).toContainText(nameA);
+    await handOut(first.id, 'backup', [tableB]);
+    await handOut(second.id, 'owner', [tableA]);
+    await page.reload();
+    await page.getByTestId('tables-view-staff').click();
+    await expect(page.getByTestId(`staff-roster-backup-${first.id}`)).toHaveText(
+      `Backup tables ${nameB}`,
+    );
+    await expect(page.getByTestId(`staff-roster-tables-${second.id}`)).toContainText('Looks after');
+    await expect(page.getByTestId(`staff-roster-tables-${second.id}`)).toContainText(nameA);
     await expect(page.getByTestId(`staff-roster-member-${absent}`)).toHaveAttribute(
       'aria-checked',
       'false',
     );
-
-    await handOut(first.id, 'backup', [tableB]);
-    await expect(page.getByTestId(`staff-tables-option-${tableA}`)).toBeDisabled();
-    await page.getByTestId('staff-tables-submit').click();
-    await expect(dialog).toBeHidden();
-    await expect(page.getByTestId(`staff-roster-backup-${first.id}`)).toHaveText(
-      `Backup tables ${nameB}`,
-    );
-
-    await handOut(second.id, 'owner', [tableA]);
-    await page.getByTestId('staff-tables-submit').click();
-    await expect(page.getByTestId('staff-tables-confirm')).toHaveText(
-      `Move tables ${nameA} from ${first.name} to ${second.name}?`,
-    );
-    await page.getByTestId('staff-tables-submit').click();
-    await expect(dialog).toBeHidden();
-    await expect(page.getByTestId(`staff-roster-tables-${second.id}`)).toContainText(nameA);
-    await expect(
-      page.getByTestId(`staff-roster-tables-${first.id}`).filter({ hasText: nameA }),
-    ).toHaveCount(0);
     const afterMove = await (
       await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
     ).json();
@@ -373,9 +360,7 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
   }
 });
 
-test('add-tables dialog uses the brand colour and the backup switch hides backup tables', async ({
-  page,
-}) => {
+test('the backup switch hides backup tables', async ({ page }) => {
   test.setTimeout(90_000);
   const authHeaders = {
     Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
@@ -407,22 +392,9 @@ test('add-tables dialog uses the brand colour and the backup switch hides backup
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('staff-backup-setting')).toContainText('Use backup tables');
 
-    const dialog = page.getByTestId('staff-tables-dialog');
-    await page.getByTestId(`staff-roster-add-${member.id}`).click();
-    await expect(page.getByTestId('staff-tables-kind-owner')).toHaveClass(/bg-brand/);
-    await expect(page.getByTestId('staff-tables-kind-backup')).not.toHaveClass(/bg-brand/);
-    const submit = page.getByTestId('staff-tables-submit');
-    await expect(submit).toHaveClass(/bg-brand/);
-    await expect(submit).toBeDisabled();
-    await page.getByTestId(`staff-tables-option-${tableId}`).check();
-    await expect(page.getByTestId(`staff-tables-row-${tableId}`)).toHaveAttribute(
-      'data-selected',
-      'true',
-    );
-    await expect(page.getByTestId(`staff-tables-option-${tableId}`)).toHaveClass(/accent-brand/);
-    await expect(submit).toBeEnabled();
-    await page.getByTestId('staff-tables-kind-backup').click();
-    await expect(page.getByTestId('staff-tables-kind-backup')).toHaveClass(/bg-brand/);
+    const dialog = page.getByTestId('staff-tables-edit-dialog');
+    await page.getByTestId(`staff-roster-edit-${member.id}`).click();
+    await expect(dialog.getByTestId('staff-range-backup')).toBeVisible();
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).toHaveCount(0);
 
@@ -463,9 +435,9 @@ test('add-tables dialog uses the brand colour and the backup switch hides backup
     ).json();
     expect(stored.backup_enabled).toBe(false);
 
-    await page.getByTestId(`staff-roster-add-${member.id}`).click();
+    await page.getByTestId(`staff-roster-edit-${member.id}`).click();
     await expect(dialog).toBeVisible();
-    await expect(page.getByTestId('staff-tables-kind-backup')).toHaveCount(0);
+    await expect(dialog.getByTestId('staff-range-backup')).toHaveCount(0);
     await dialog.getByRole('button', { name: 'Cancel' }).click();
 
     await page.reload();
@@ -549,9 +521,9 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     await skip.getByTestId('table-rezone-skip').fill(skippedName);
     await expect(skip.getByTestId('table-rezone-skipped')).toContainText(skippedName);
     await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(total - 1);
-    await skip.getByTestId('table-rezone-skip').fill('no-such-table');
-    await expect(skip.getByTestId('table-rezone-skip-save')).toBeDisabled();
-    await expect(panel.getByTestId('table-rezone-apply')).toBeDisabled();
+    await skip.getByTestId('table-rezone-skip').fill(`${skippedName}, 99999`);
+    await expect(skip.getByTestId('table-rezone-skip-save')).toBeEnabled();
+    await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(total - 1);
     await skip.getByTestId('table-rezone-skip').fill(skippedName);
     await skip.getByTestId('table-rezone-skip-save').click();
     await expect(skip.getByTestId('table-rezone-skip-value')).toHaveText(skippedName);

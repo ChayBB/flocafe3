@@ -9,21 +9,18 @@ import { formatTableRanges, resolveTableRange } from '@/lib/table-ranges';
 
 type RezoneTable = { id: string; name: string; floor: string | null };
 
-/** Resolves typed table numbers ("26, 12-13") to tables; `valid` is false when a token matches none. */
+/** The tables among the declared unused numbers ("26, 12-13"); numbers with no table are simply nothing to leave out. */
 export function resolveSkippedTables(skip: string, tables: RezoneTable[]) {
   const labelled = tables.map((table) => ({ ...table, label: table.name }));
-  const found = skip
-    .split(/[,\s]+/)
-    .filter(Boolean)
-    .map((token) => {
-      const exact = resolveTableRange({ from: token, to: '' }, labelled);
-      if (exact.length) return exact;
-      const [from, to = ''] = token.split(/(?<=\S)-(?=\S)/);
-      return resolveTableRange({ from, to }, labelled);
-    });
+  const tokens = skip.split(/[,\s]+/).filter(Boolean);
+  const found = tokens.map((token) => {
+    const exact = resolveTableRange({ from: token, to: '' }, labelled);
+    if (exact.length) return exact;
+    const [from, to = ''] = token.split(/(?<=\S)-(?=\S)/);
+    return resolveTableRange({ from, to }, labelled);
+  });
   const ids = new Set(found.flat().map((table) => table.id));
   return {
-    valid: found.every((list) => list.length > 0),
     ids,
     names: formatTableRanges(
       [...tables]
@@ -62,7 +59,7 @@ export default function TableRezone({
   const [saving, setSaving] = useState(false);
 
   // Tables marked as not in use keep their zone and stay out of the split.
-  const { valid: skipValid, ids: skipped } = resolveSkippedTables(skip, all);
+  const { ids: skipped } = resolveSkippedTables(skip, all);
   const sorted = all.filter((table) => !skipped.has(table.id));
   const staffNumber = Number(staff);
   const staffValid = Number.isInteger(staffNumber) && staffNumber >= 1;
@@ -200,7 +197,7 @@ export default function TableRezone({
         <Button
           type="button"
           data-testid="table-rezone-apply"
-          disabled={saving || staffMismatch || !skipValid || proposed.length === 0 || unchanged}
+          disabled={saving || staffMismatch || proposed.length === 0 || unchanged}
           onClick={() => (confirming ? void apply() : setConfirming(true))}
         >
           {confirming ? t('rezoneConfirmButton') : t('rezoneApply')}
