@@ -93,6 +93,7 @@ import {
 } from './lib/server-app-rate-limit';
 import { callMainApiAsGuest, ensureGuestUser, placeGuestOrder } from './lib/guest-order-placement';
 import { requestOrderBill } from './services/orders';
+import { claimOwnTables, readTableOwnerAssignmentSettings } from './services/table-owner-rotation';
 import { notifyOrderUpdated } from './services/kds';
 import {
   addGuestDevice,
@@ -765,8 +766,33 @@ export function startServerApp(): Promise<void> {
          FROM table_bills`,
         )
         .get(userId, userId, start, end);
-      res.json({ business_date: businessDate, timezone, attendance, summary });
+      res.json({
+        business_date: businessDate,
+        timezone,
+        attendance,
+        summary,
+        assignment_mode: readTableOwnerAssignmentSettings(db).mode,
+      });
     });
+
+    app.put(
+      '/api/staff-profile/tables',
+      serverAppApiRateLimit,
+      requireServerAppAuth,
+      (req, res) => {
+        try {
+          const { userId } = (req as Request & { user: ServerAppUser }).user;
+          const result = claimOwnTables(getDatabase(), userId, req.body);
+          if (!result.ok) {
+            return res.status(result.status).json({ code: result.code, error: result.error });
+          }
+          res.json({ changes: result.changes.length });
+        } catch (error: unknown) {
+          console.error('[Server App] Staff table claim error:', error);
+          res.status(500).json({ error: 'Internal server error' });
+        }
+      },
+    );
 
     app.post(
       '/api/auth/pin/change',

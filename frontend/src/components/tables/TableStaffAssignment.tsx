@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, Hand, Pencil, Plus, RotateCw, Shuffle, User } from 'lucide-react';
+import { Check, Hand, Pencil, Plus, RotateCw, Shuffle, User, UserCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useLocale, useTranslations } from 'use-intl';
 import api from '@/lib/api';
@@ -12,7 +12,9 @@ import { formatTableRanges } from '@/lib/table-ranges';
 import StaffTablesDialog, { type StaffTablesDialogTable } from './StaffTablesDialog';
 import StaffTablesEditDialog from './StaffTablesEditDialog';
 
-type AssignmentMode = 'manual' | 'rotate_daily' | 'shuffle_interval';
+type AssignmentMode = 'manual' | 'staff_managed' | 'rotate_daily' | 'shuffle_interval';
+const isAutomatic = (value: AssignmentMode) =>
+  value === 'rotate_daily' || value === 'shuffle_interval';
 
 interface AssignmentSettings {
   mode: AssignmentMode;
@@ -105,7 +107,7 @@ export default function TableStaffAssignment() {
   const modeDirty =
     mode !== saved.mode || (mode === 'shuffle_interval' && parsedDays !== saved.shuffle_days);
   const rosterDirty = !sameSet(present, savedPresent) || parsedTables !== roster.table_count;
-  const automatic = saved.mode !== 'manual';
+  const automatic = isAutomatic(saved.mode);
   const canSave =
     (modeDirty || rosterDirty) &&
     !saving &&
@@ -156,7 +158,7 @@ export default function TableStaffAssignment() {
       const refreshed = await api.get<StaffRoster>('/tables/staff-roster');
       setRoster(refreshed.data);
       toast.success(
-        value === 'manual'
+        !isAutomatic(value)
           ? t('staffAssignmentSaved')
           : t('staffAssignmentApplied', { count: data.changes }),
       );
@@ -196,7 +198,7 @@ export default function TableStaffAssignment() {
       setMode(value);
       return;
     }
-    if (value === 'manual') {
+    if (!isAutomatic(value)) {
       void switchMode(value);
       return;
     }
@@ -241,6 +243,12 @@ export default function TableStaffAssignment() {
       icon: Hand,
       title: t('staffAssignmentManual'),
       description: t('staffAssignmentManualHint'),
+    },
+    {
+      value: 'staff_managed',
+      icon: UserCheck,
+      title: t('staffAssignmentStaffManaged'),
+      description: t('staffAssignmentStaffManagedHint'),
     },
     {
       value: 'rotate_daily',
@@ -560,7 +568,11 @@ export default function TableStaffAssignment() {
         </p>
       )}
       <p className="mt-4 text-xs text-muted-foreground">
-        {mode === 'manual' ? t('staffAssignmentManualNote') : t('staffAssignmentAutoNote')}
+        {mode === 'manual'
+          ? t('staffAssignmentManualNote')
+          : mode === 'staff_managed'
+            ? t('staffAssignmentStaffManagedNote')
+            : t('staffAssignmentAutoNote')}
       </p>
       {automatic && saved.last_run && (
         <p className="mt-1 text-xs text-muted-foreground">

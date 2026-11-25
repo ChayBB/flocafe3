@@ -469,12 +469,11 @@ test.describe('Server App guest from a table QR', () => {
     await expect(profile).toContainText('E2E server');
     await expect(profile).toContainText('Clocked in');
     await profile.getByRole('button', { name: /Preferences/ }).click();
-    await profile.getByRole('button', { name: 'Large', exact: true }).click();
-    await expect(profile.getByRole('button', { name: 'Large', exact: true })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await profile.getByRole('button', { name: 'Normal', exact: true }).click();
+    await profile.getByTestId('staff-font-larger').click();
+    await expect(profile.getByTestId('staff-font-scale-value')).toHaveText('110%');
+    expect(await page.evaluate(() => document.documentElement.style.fontSize)).toBe('110%');
+    await profile.getByTestId('staff-font-smaller').click();
+    await expect(profile.getByTestId('staff-font-scale-value')).toHaveText('100%');
     await profile.getByRole('button', { name: 'Back', exact: true }).click();
     await profile.getByRole('button', { name: 'Back', exact: true }).click();
 

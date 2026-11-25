@@ -40,7 +40,13 @@ import {
   HEADER_WHITE_ACTION,
   ServerAppHeader,
 } from '@/components/server-app/ServerAppHeader';
-import { StaffProfile, type StaffFontSize } from '@/components/server-app/StaffProfile';
+import { StaffProfile } from '@/components/server-app/StaffProfile';
+import {
+  clampFontScale,
+  readStoredFontScale,
+  storeFontScale,
+  useRootFontScale,
+} from '@/lib/font-scale';
 import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/GuestOrderHistory';
 import type { GuestBillRequestFailure } from '@/components/server-app/GuestBill';
 import { useReloadOnNewBuild } from '@/hooks/useReloadOnNewBuild';
@@ -295,6 +301,25 @@ function awaitingPayment(order: Order | null | undefined): boolean {
   return Boolean(order?.bill_requested_at && !order.bill_payment_received_at);
 }
 
+const SERVER_APP_FONT_SCALE_KEY = 'flocafe:server-app-font-scale';
+const LEGACY_FONT_SIZE_KEY = 'flocafe:server-app-font-size';
+const LEGACY_FONT_SCALES: Record<string, number> = { small: 90, normal: 100, large: 120 };
+
+/** Staff text size in percent; the old small/normal/large choice carries over once. */
+function readServerAppFontScale(): number {
+  const stored = readStoredFontScale(SERVER_APP_FONT_SCALE_KEY);
+  if (stored !== null || typeof window === 'undefined') return stored ?? 100;
+  try {
+    const legacy = LEGACY_FONT_SCALES[localStorage.getItem(LEGACY_FONT_SIZE_KEY) ?? ''];
+    localStorage.removeItem(LEGACY_FONT_SIZE_KEY);
+    if (legacy) {
+      storeFontScale(SERVER_APP_FONT_SCALE_KEY, legacy);
+      return legacy;
+    }
+  } catch {}
+  return 100;
+}
+
 function ownedOrAllTables<T extends { owner_user_id?: string | null }>(
   tables: T[],
   userId: string | undefined,
@@ -427,11 +452,7 @@ export default function ServerStandalonePage() {
   const [tableQrOpen, setTableQrOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [staffMenuOpen, setStaffMenuOpen] = useState(false);
-  const [profileFontSize, setProfileFontSize] = useState<StaffFontSize>(() => {
-    if (typeof window === 'undefined') return 'normal';
-    const value = localStorage.getItem('flocafe:server-app-font-size');
-    return value === 'small' || value === 'large' ? value : 'normal';
-  });
+  const [fontScale, setFontScale] = useState(readServerAppFontScale);
   const [showLogin, setShowLogin] = useState(false);
   const guestAttemptRef = useRef<{ signature: string; key: string } | null>(null);
   const [guestDeliveryStatus, setGuestDeliveryStatus] = useState<
@@ -2339,15 +2360,7 @@ export default function ServerStandalonePage() {
     if (customerFacing) return holdDarkClass(false);
     return staffDark === null ? undefined : holdDarkClass(staffDark);
   }, [customerFacing, staffDark]);
-  useEffect(() => {
-    if (!user || profileFontSize === 'normal') return;
-    const root = document.documentElement;
-    const previous = root.style.fontSize;
-    root.style.fontSize = profileFontSize === 'small' ? '90%' : '112.5%';
-    return () => {
-      root.style.fontSize = previous;
-    };
-  }, [user, profileFontSize]);
+  useRootFontScale(fontScale, Boolean(user));
   const waitingForGuest =
     !user && (guestTableId === undefined || (!!guestTableId && !guestChecked));
 
@@ -2755,14 +2768,17 @@ export default function ServerStandalonePage() {
         tables={tables.filter(
           (table) => table.owner_user_id === user.id || table.backup_user_id === user.id,
         )}
+        allTables={tables}
+        onTablesChanged={() => void refreshLive()}
         language={language}
         onLanguage={chooseLanguage}
         dark={staffSeesDark}
         onDark={toggleStaffDark}
-        fontSize={profileFontSize}
-        onFontSize={(size) => {
-          localStorage.setItem('flocafe:server-app-font-size', size);
-          setProfileFontSize(size);
+        fontScale={fontScale}
+        onFontScale={(next) => {
+          const scale = clampFontScale(next);
+          storeFontScale(SERVER_APP_FONT_SCALE_KEY, scale);
+          setFontScale(scale);
         }}
         formatMoney={(amount) => money(amount, regional)}
         onClose={() => setProfileOpen(false)}

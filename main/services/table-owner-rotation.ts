@@ -4,9 +4,18 @@ import { currentBusinessDate } from './attendance';
 
 type Db = ReturnType<typeof getDatabase>;
 
-export const TABLE_OWNER_ASSIGNMENT_MODES = ['manual', 'rotate_daily', 'shuffle_interval'] as const;
+export const TABLE_OWNER_ASSIGNMENT_MODES = [
+  'manual',
+  'staff_managed',
+  'rotate_daily',
+  'shuffle_interval',
+] as const;
 export type TableOwnerAssignmentMode = (typeof TABLE_OWNER_ASSIGNMENT_MODES)[number];
-type AutomaticMode = Exclude<TableOwnerAssignmentMode, 'manual'>;
+type AutomaticMode = Extract<TableOwnerAssignmentMode, 'rotate_daily' | 'shuffle_interval'>;
+
+function isAutomaticMode(mode: TableOwnerAssignmentMode): mode is AutomaticMode {
+  return mode === 'rotate_daily' || mode === 'shuffle_interval';
+}
 
 export const SHUFFLE_DAYS_MIN = 1;
 export const SHUFFLE_DAYS_MAX = 365;
@@ -385,7 +394,7 @@ function applyAssignment(
   settings: TableOwnerAssignmentSettings,
   audit: { action: string; actorUserId: string | null },
 ): TableAssignmentChange[] {
-  if (settings.mode === 'manual') return [];
+  if (!isAutomaticMode(settings.mode)) return [];
   const plan = plannedOwners(db, businessDate, settings.mode, settings.last_run ?? businessDate);
   if (!plan) return [];
   return activeTablesInOrder(db).flatMap((table) =>
@@ -558,6 +567,85 @@ export function editStaffTables(
   )();
 }
 
+export type OwnTablesClaim =
+  | { ok: true; changes: TableAssignmentChange[] }
+  | { ok: false; status: number; code: string; error: string };
+
+/**
+ * In staff-managed mode a signed-in staff member sets which tables they look after. They can take
+ * free tables and drop their own, but never take or clear a table another person owns.
+ */
+export function claimOwnTables(db: Db, userId: string, body: unknown): OwnTablesClaim {
+  if (readTableOwnerAssignmentSettings(db).mode !== 'staff_managed') {
+    return {
+      ok: false,
+      status: 403,
+      code: 'STAFF_MANAGED_MODE_OFF',
+      error: 'Staff can choose their own tables only when the store lets staff manage tables',
+    };
+  }
+  if (!assignableStaff(db).some((member) => member.id === userId)) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'ROSTER_STAFF_UNKNOWN',
+      error: 'Staff member was not found or is inactive',
+    };
+  }
+  const ids = (body as { table_ids?: unknown } | null)?.table_ids;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'STAFF_TABLES_INVALID',
+      error: 'table_ids must be a list of table ids',
+    };
+  }
+  const wanted = new Set(ids as string[]);
+  const tables = activeTablesInOrder(db);
+  const active = new Map(tables.map((table) => [table.id, table]));
+  if ([...wanted].some((id) => !active.has(id))) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'TABLE_NOT_FOUND',
+      error: 'Table not found or inactive',
+    };
+  }
+  if (
+    [...wanted].some((id) => {
+      const owner = active.get(id)?.owner_user_id;
+      return owner != null && owner !== userId;
+    })
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'TABLE_OWNED_BY_OTHER',
+      error: 'Another staff member already looks after this table',
+    };
+  }
+  const businessDate = currentBusinessDate(db);
+  const changes = db.transaction(() =>
+    tables.flatMap((table) => {
+      const mine = table.owner_user_id === userId;
+      if (wanted.has(table.id) === mine) return [];
+      const next = wanted.has(table.id)
+        ? {
+            owner: userId,
+            backup: table.backup_user_id === userId ? null : table.backup_user_id,
+          }
+        : { owner: null, backup: table.backup_user_id };
+      return setTableStaff(db, table, next, {
+        action: 'staff_claim',
+        actorUserId: userId,
+        businessDate,
+      });
+    }),
+  )();
+  return { ok: true, changes };
+}
+
 /**
  * Switching to an automatic mode runs today's assignment at once and counts it as today's run.
  * Turning backup tables on or off in an automatic mode reruns today's plan so backups follow at once.
@@ -649,7 +737,7 @@ export function runTableOwnerAssignmentIfDue(
   const settings = readTableOwnerAssignmentSettings(db);
   const businessDate = options.businessDate ?? currentBusinessDate(db);
   const idle: TableOwnerAssignmentRun = { ran: false, business_date: businessDate, changes: [] };
-  if (settings.mode === 'manual') return idle;
+  if (!isAutomaticMode(settings.mode)) return idle;
   if (!settings.last_run) {
     writeSetting(db, LAST_RUN_KEY, businessDate);
     return idle;

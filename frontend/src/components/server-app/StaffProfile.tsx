@@ -2,26 +2,31 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import type { AxiosInstance } from 'axios';
+import toast from 'react-hot-toast';
 import {
   ArrowLeft,
   BarChart3,
+  Check,
   ChevronRight,
   Clock,
   Home,
+  LayoutGrid,
   LogOut,
+  Minus,
+  Plus,
   ReceiptText,
   RefreshCw,
   Settings,
   ShoppingBag,
+  SlidersHorizontal,
   Utensils,
   UserRound,
   Users,
 } from 'lucide-react';
 import { useLocale, useTranslations } from 'use-intl';
+import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP } from '@/lib/font-scale';
 import type { Language } from '@/lib/i18n/languages';
 import { parseDbTimestamp } from '@/lib/utils';
-
-export type StaffFontSize = 'small' | 'normal' | 'large';
 
 type ProfileData = {
   business_date: string;
@@ -32,28 +37,57 @@ type ProfileData = {
     clock_out_at: string | null;
   }[];
   summary: { sales: number; bills: number; guests: number };
+  assignment_mode?: string;
 };
+
+type ProfileTable = {
+  id: string;
+  name?: string;
+  number?: string;
+  status?: string;
+  floor?: string | null;
+  owner_user_id?: string | null;
+  backup_user_id?: string | null;
+};
+
+const tableLabel = (table: ProfileTable) => String(table.name ?? table.number ?? '');
+const byTableName = (a: ProfileTable, b: ProfileTable) =>
+  tableLabel(a).localeCompare(tableLabel(b), undefined, { numeric: true });
 
 type Panel = 'profile' | 'personal' | 'tables' | 'sales' | 'preferences' | 'history';
 
-const card = 'rounded-2xl border-2 border-border bg-card p-4';
+const card = 'rounded-2xl border border-border bg-card p-4';
 const action =
   'flex min-h-12 min-w-12 items-center justify-center gap-2 rounded-xl px-3 text-base font-semibold';
-const accentText = 'text-blue-800 dark:text-blue-300';
-const accentSoft = 'bg-blue-50 dark:bg-blue-950/50';
+const accentText = 'text-orange-600 dark:text-orange-400';
+const accentSoft = 'bg-orange-50 dark:bg-orange-950/40';
+const accentBorder = 'border-orange-600 dark:border-orange-400';
 const choice = (selected: boolean) =>
-  `${action} border-2 text-lg ${selected ? `border-blue-800 dark:border-blue-300 ${accentSoft} ${accentText}` : 'border-border bg-background'}`;
+  `${action} border-2 text-lg ${selected ? `${accentBorder} ${accentSoft} ${accentText}` : 'border-border bg-background'}`;
+const tableTone = {
+  primary: {
+    card: 'border-green-600 bg-[#EEF8F1] dark:border-green-500 dark:bg-green-950/40',
+    icon: 'text-green-700 dark:text-green-400',
+  },
+  backup: {
+    card: 'border-amber-500 bg-amber-50 dark:border-amber-500 dark:bg-amber-950/40',
+    icon: 'text-amber-600 dark:text-amber-400',
+  },
+} as const;
+const stepButton = `${action} size-14 rounded-full border-2 border-border bg-background disabled:opacity-40`;
 
 export function StaffProfile({
   api,
   user,
   tables,
+  allTables,
+  onTablesChanged,
   language,
   onLanguage,
   dark,
   onDark,
-  fontSize,
-  onFontSize,
+  fontScale,
+  onFontScale,
   formatMoney,
   onClose,
   onOrders,
@@ -62,19 +96,15 @@ export function StaffProfile({
 }: {
   api: AxiosInstance | null;
   user: { id: string; name: string; role: string; email: string };
-  tables: {
-    id: string;
-    name?: string;
-    number?: string;
-    status?: string;
-    backup_user_id?: string | null;
-  }[];
+  tables: ProfileTable[];
+  allTables: ProfileTable[];
+  onTablesChanged: () => void;
   language: Language;
   onLanguage: (language: Language) => void;
   dark: boolean;
   onDark: () => void;
-  fontSize: StaffFontSize;
-  onFontSize: (size: StaffFontSize) => void;
+  fontScale: number;
+  onFontScale: (scale: number) => void;
   formatMoney: (amount: number) => string;
   onClose: () => void;
   onOrders: () => void;
@@ -83,12 +113,15 @@ export function StaffProfile({
 }) {
   const t = useTranslations('staffProfile');
   const staff = useTranslations('staff');
+  const kds = useTranslations('kds');
   const locale = useLocale();
   const [panel, setPanel] = useState<Panel>('profile');
   const [snapshot, setSnapshot] = useState<ProfileData | null>(null);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [failed, setFailed] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [picking, setPicking] = useState<Set<string> | null>(null);
+  const [savingTables, setSavingTables] = useState(false);
   useEffect(() => {
     if (!api) return;
     let cancelled = false;
@@ -130,13 +163,15 @@ export function StaffProfile({
     chef: 'roleChef',
   };
   const role = roles[user.role] ? staff(roles[user.role]) : user.role;
+  const primaryTables = tables.filter((table) => table.owner_user_id === user.id).sort(byTableName);
+  const backupTables = tables
+    .filter((table) => table.owner_user_id !== user.id && table.backup_user_id === user.id)
+    .sort(byTableName);
+  const zones = [
+    ...new Set(primaryTables.map((table) => table.floor?.trim()).filter(Boolean)),
+  ].join(', ');
+  const roleLine = zones ? `${role} · ${t('zone', { zone: zones })}` : role;
   const tiles = [
-    { id: 'personal', icon: UserRound, detail: t('personalHint') },
-    {
-      id: 'tables',
-      icon: Utensils,
-      detail: t('tableCount', { count: tables.length }),
-    },
     {
       id: 'sales',
       icon: BarChart3,
@@ -210,55 +245,164 @@ export function StaffProfile({
       </div>
     </section>
   );
-  const tableList = (
-    <section className={card}>
-      {sectionHeader(
-        `${t('tables')} (${t('tableCount', { count: tables.length })})`,
-        viewAll('tables'),
-      )}
+  const staffManaged = snapshot?.assignment_mode === 'staff_managed';
+  const startPicking = () =>
+    setPicking(
+      new Set(
+        allTables.filter((table) => table.owner_user_id === user.id).map((table) => table.id),
+      ),
+    );
+  const togglePick = (id: string) =>
+    setPicking((current) => {
+      if (!current) return current;
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const saveTables = async () => {
+    if (!api || !picking || savingTables) return;
+    setSavingTables(true);
+    try {
+      await api.put('/api/staff-profile/tables', { table_ids: [...picking] });
+      toast.success(t('tablesSaved'));
+      setPicking(null);
+      onTablesChanged();
+    } catch (error: unknown) {
+      const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code;
+      const stale = code === 'TABLE_OWNED_BY_OTHER' || code === 'STAFF_MANAGED_MODE_OFF';
+      toast.error(
+        code === 'TABLE_OWNED_BY_OTHER'
+          ? t('tablesTaken')
+          : code === 'STAFF_MANAGED_MODE_OFF'
+            ? t('tablesModeOff')
+            : t('tablesSaveFailed'),
+      );
+      if (stale) {
+        setPicking(null);
+        onTablesChanged();
+        setRefresh((value) => value + 1);
+      }
+    } finally {
+      setSavingTables(false);
+    }
+  };
+  const tablePicker = picking && (
+    <section className={card} data-testid="staff-table-picker">
+      {sectionHeader(t('chooseTables'))}
+      <p className="mb-3 text-lg text-muted-foreground">{t('chooseTablesHint')}</p>
+      <div className="grid grid-cols-3 gap-2">
+        {[...allTables].sort(byTableName).map((table) => {
+          const taken = Boolean(table.owner_user_id && table.owner_user_id !== user.id);
+          const selected = picking.has(table.id);
+          return (
+            <button
+              key={table.id}
+              type="button"
+              role="checkbox"
+              aria-checked={selected}
+              disabled={taken}
+              onClick={() => togglePick(table.id)}
+              className={`flex min-h-20 flex-col items-center justify-center rounded-xl border-2 px-1 text-lg font-bold disabled:opacity-50 ${selected ? `${accentBorder} ${accentSoft} ${accentText}` : 'border-border bg-background'}`}
+            >
+              <span className="flex items-center gap-1">
+                {selected && <Check size={20} aria-hidden="true" />}
+                <span className="break-words text-center leading-tight">
+                  {t('tableName', { name: tableLabel(table) })}
+                </span>
+              </span>
+              {taken && <span className="text-sm font-normal">{t('tableTaken')}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setPicking(null)}
+          className={`${action} border-2 border-border`}
+        >
+          {t('cancel')}
+        </button>
+        <button
+          type="button"
+          disabled={savingTables}
+          onClick={() => void saveTables()}
+          className={`${action} bg-orange-600 text-white disabled:opacity-60 dark:bg-orange-500 dark:text-orange-950`}
+        >
+          {t('save')}
+        </button>
+      </div>
+    </section>
+  );
+  const openPicker = () => {
+    setPanel('tables');
+    startPicking();
+  };
+  const tableCard = (table: ProfileTable, tone: keyof typeof tableTone) => {
+    const busy = Boolean(table.status && table.status !== 'available');
+    return (
+      <button
+        key={table.id}
+        type="button"
+        onClick={() => onTable(table.id)}
+        className={`flex min-h-20 min-w-0 flex-col items-center justify-center gap-1 rounded-xl border-2 px-1 py-2 ${tableTone[tone].card}`}
+      >
+        <Utensils size={22} className={tableTone[tone].icon} aria-hidden="true" />
+        <span className="max-w-full break-words text-center text-lg font-bold leading-tight">
+          {t('tableName', { name: tableLabel(table) })}
+        </span>
+        {busy ? (
+          <span className="text-sm text-muted-foreground">{t('tableBusy')}</span>
+        ) : (
+          <span className="sr-only">{t('tableAvailable')}</span>
+        )}
+      </button>
+    );
+  };
+  const tableGroup = (caption: string, list: ProfileTable[], tone: keyof typeof tableTone) =>
+    list.length > 0 && (
+      <div>
+        <p className="mb-2 text-base text-muted-foreground">{caption}</p>
+        <div className="grid grid-cols-3 gap-2">{list.map((table) => tableCard(table, tone))}</div>
+      </div>
+    );
+  const myTables = (
+    <div className="space-y-4">
+      <button
+        type="button"
+        onClick={() => setPanel('tables')}
+        disabled={panel === 'tables'}
+        className="flex min-h-12 w-full items-center gap-3 text-start disabled:cursor-default"
+      >
+        <LayoutGrid size={24} className={accentText} aria-hidden="true" />
+        <span className="min-w-0 flex-1 text-xl font-bold">{t('myTables')}</span>
+        <span className="text-base text-muted-foreground">
+          {t('tableCount', { count: tables.length })}
+        </span>
+        {panel !== 'tables' && (
+          <ChevronRight size={22} className="text-muted-foreground" aria-hidden="true" />
+        )}
+      </button>
       {tables.length === 0 ? (
         <p className="text-lg text-muted-foreground">{t('noTables')}</p>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-2 min-[400px]:grid-cols-4">
-            {[...tables]
-              .sort((a, b) =>
-                String(a.name ?? a.number).localeCompare(String(b.name ?? b.number), undefined, {
-                  numeric: true,
-                }),
-              )
-              .map((table) => {
-                const available = table.status === 'available';
-                return (
-                  <button
-                    key={table.id}
-                    type="button"
-                    onClick={() => onTable(table.id)}
-                    className={`flex min-h-14 items-center justify-center gap-2 rounded-xl border-2 px-1 text-xl font-bold ${available ? 'border-green-700 bg-background dark:border-green-400' : 'border-border bg-muted'}`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`size-3 shrink-0 rounded-full ${available ? 'bg-green-700 dark:bg-green-400' : 'bg-muted-foreground'}`}
-                    />
-                    <span className="truncate">{table.name ?? table.number}</span>
-                    <span className="sr-only">{t(available ? 'tableAvailable' : 'tableBusy')}</span>
-                  </button>
-                );
-              })}
-          </div>
-          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-base" aria-hidden="true">
-            <span className="flex items-center gap-2">
-              <span className="size-3 rounded-full bg-green-700 dark:bg-green-400" />
-              {t('tableAvailable')}
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="size-3 rounded-full bg-muted-foreground" />
-              {t('tableBusy')}
-            </span>
-          </div>
+          {tableGroup(t('primaryTables'), primaryTables, 'primary')}
+          {tableGroup(t('backupTables'), backupTables, 'backup')}
         </>
       )}
-    </section>
+      {staffManaged && (
+        <button
+          type="button"
+          onClick={openPicker}
+          className={`${action} w-full border border-border bg-card text-lg`}
+        >
+          <SlidersHorizontal size={22} aria-hidden="true" />
+          {t('manageTables')}
+        </button>
+      )}
+    </div>
   );
   const history = (
     <section className={card}>
@@ -313,23 +457,34 @@ export function StaffProfile({
         <main className={`space-y-4 px-3 pt-4 ${panel === 'profile' ? 'pb-28' : 'pb-8'}`}>
           {panel === 'profile' && (
             <>
-              <section className={`flex items-center gap-4 ${card}`}>
-                <div
-                  className={`grid size-20 shrink-0 place-items-center rounded-full text-3xl font-bold ${accentSoft} ${accentText}`}
-                  aria-hidden="true"
+              <section className={card}>
+                <button
+                  type="button"
+                  onClick={() => setPanel('personal')}
+                  className="flex min-h-16 w-full items-center gap-4 text-start"
                 >
-                  {Array.from(user.name.trim()).slice(0, 2).join('')}
-                </div>
-                <div className="min-w-0">
-                  <h2 className="break-words text-2xl font-bold">{user.name}</h2>
-                  <p className="text-lg text-muted-foreground">{role}</p>
-                  {active && (
-                    <p className="mt-2 inline-flex items-center gap-2 rounded-full border-2 border-green-700 px-3 py-1 text-base font-semibold text-green-800 dark:border-green-400 dark:text-green-300">
-                      <span className="size-3 rounded-full bg-green-700 dark:bg-green-400" />
-                      {t('working')}
-                    </p>
-                  )}
-                </div>
+                  <span
+                    className="grid size-16 shrink-0 place-items-center rounded-full bg-muted"
+                    aria-hidden="true"
+                  >
+                    <UserRound size={32} className="text-muted-foreground" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block break-words text-2xl font-bold">{user.name}</span>
+                    <span className="block text-lg text-muted-foreground" dir="auto">
+                      {roleLine}
+                    </span>
+                    {active && (
+                      <span className="mt-1 inline-flex items-center gap-2 rounded-full border-2 border-green-700 px-3 py-0.5 text-base font-semibold text-green-800 dark:border-green-400 dark:text-green-300">
+                        <span className="size-3 rounded-full bg-green-700 dark:bg-green-400" />
+                        {t('working')}
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight size={24} className="text-muted-foreground" aria-hidden="true" />
+                </button>
+                <div className="my-4 border-t border-border" />
+                {myTables}
               </section>
               <div className="grid grid-cols-2 gap-3">
                 {tiles.map(({ id, icon: Icon, detail }, index) => (
@@ -358,7 +513,6 @@ export function StaffProfile({
                 ))}
               </div>
               {summary}
-              {tableList}
               {history}
             </>
           )}
@@ -380,37 +534,45 @@ export function StaffProfile({
               </dl>
             </section>
           )}
-          {panel === 'tables' && tableList}
+          {panel === 'tables' && (tablePicker || <section className={card}>{myTables}</section>)}
           {panel === 'sales' && summary}
           {panel === 'history' && history}
           {panel === 'preferences' && (
             <section className={`space-y-6 ${card}`}>
               <div>
                 <p className="mb-2 text-lg font-bold">{t('fontSize')}</p>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['small', 'normal', 'large'] as const).map((size) => (
-                    <button
-                      type="button"
-                      key={size}
-                      aria-pressed={fontSize === size}
-                      onClick={() => onFontSize(size)}
-                      className={choice(fontSize === size)}
-                    >
-                      {t(size)}
-                      <span
-                        aria-hidden="true"
-                        className={
-                          size === 'small'
-                            ? 'text-base'
-                            : size === 'normal'
-                              ? 'text-xl'
-                              : 'text-2xl'
-                        }
-                      >
-                        A
-                      </span>
-                    </button>
-                  ))}
+                <div
+                  role="group"
+                  aria-label={t('fontSize')}
+                  className="flex items-center justify-between gap-3"
+                >
+                  <button
+                    type="button"
+                    data-testid="staff-font-smaller"
+                    aria-label={kds('fontSizeSmaller')}
+                    disabled={fontScale <= FONT_SCALE_MIN}
+                    onClick={() => onFontScale(fontScale - FONT_SCALE_STEP)}
+                    className={stepButton}
+                  >
+                    <Minus size={26} aria-hidden="true" />
+                  </button>
+                  <span
+                    data-testid="staff-font-scale-value"
+                    aria-live="polite"
+                    className="flex-1 text-center text-2xl font-bold tabular-nums"
+                  >
+                    {fontScale}%
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="staff-font-larger"
+                    aria-label={kds('fontSizeLarger')}
+                    disabled={fontScale >= FONT_SCALE_MAX}
+                    onClick={() => onFontScale(fontScale + FONT_SCALE_STEP)}
+                    className={stepButton}
+                  >
+                    <Plus size={26} aria-hidden="true" />
+                  </button>
                 </div>
               </div>
               <div>
