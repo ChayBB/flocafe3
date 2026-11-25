@@ -33,7 +33,7 @@ async function openProfile(page: Page) {
 
 test.describe('Staff profile My tables row', () => {
   test.afterEach(async ({ page }) => {
-    await setMode(page, 'manual');
+    await setMode(page, 'manual', true);
   });
 
   test('shows the table count when the manager assigns tables', async ({ page }) => {

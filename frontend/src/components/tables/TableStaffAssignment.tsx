@@ -11,6 +11,7 @@ import { Toggle } from '@/components/settings/Toggle';
 import { formatTableRanges } from '@/lib/table-ranges';
 import StaffTablesDialog, { type StaffTablesDialogTable } from './StaffTablesDialog';
 import StaffTablesEditDialog from './StaffTablesEditDialog';
+import TableRezone from './TableRezone';
 
 type AssignmentMode = 'manual' | 'staff_managed' | 'rotate_daily' | 'shuffle_interval';
 const isAutomatic = (value: AssignmentMode) =>
@@ -500,6 +501,17 @@ export default function TableStaffAssignment() {
                   })}
           </p>
         </div>
+        <TableRezone
+          key={present.size}
+          tables={roster.tables}
+          defaultStaff={present.size}
+          onRezoned={() =>
+            void api
+              .get<StaffRoster>('/tables/staff-roster')
+              .then((res) => applyRoster(res.data))
+              .catch(() => toast.error(t('staffAssignmentLoadFailed')))
+          }
+        />
       </section>
 
       <h3 className="text-sm font-semibold text-foreground mb-3">

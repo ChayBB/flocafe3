@@ -843,6 +843,66 @@ router.put('/staff-tables', requirePermission('tables.manage'), (req: Request, r
   }
 });
 
+/** Re-zones the floor plan: each listed table moves to the named zone; unlisted tables keep theirs. */
+router.put('/zones', requirePermission('tables.manage'), (req: Request, res: Response) => {
+  try {
+    const zones = req.body?.zones;
+    if (!Array.isArray(zones) || zones.length === 0) {
+      return res
+        .status(400)
+        .json({ code: 'ZONES_INVALID', error: 'zones must be a non-empty list' });
+    }
+    const db = getDatabase();
+    const active = new Map(
+      (
+        db.prepare('SELECT id, floor FROM tables WHERE is_active = 1').all() as {
+          id: string;
+          floor: string | null;
+        }[]
+      ).map((table) => [table.id, table.floor]),
+    );
+    const names = new Set<string>();
+    const seen = new Set<string>();
+    const moves: { id: string; floor: string }[] = [];
+    for (const zone of zones) {
+      const name = normalizeOptionalTableLabel(zone?.name);
+      const ids = zone?.table_ids;
+      if (!name || names.has(name.toLowerCase())) {
+        return res
+          .status(400)
+          .json({ code: 'ZONE_NAME_INVALID', error: 'Zone names must be unique and not empty' });
+      }
+      names.add(name.toLowerCase());
+      if (!Array.isArray(ids) || ids.length === 0 || ids.some((id) => typeof id !== 'string')) {
+        return res
+          .status(400)
+          .json({ code: 'ZONES_INVALID', error: 'Each zone needs a list of table ids' });
+      }
+      for (const id of ids as string[]) {
+        if (!active.has(id) || seen.has(id)) {
+          return res
+            .status(400)
+            .json({ code: 'TABLE_NOT_FOUND', error: 'Table not found, inactive or listed twice' });
+        }
+        seen.add(id);
+        moves.push({ id, floor: name });
+      }
+    }
+    const changed = moves.filter((move) => active.get(move.id) !== move.floor);
+    withTxn(() => {
+      const update = db.prepare(
+        'UPDATE tables SET floor = ?, position_x = NULL, position_y = NULL, updated_at = ? WHERE id = ?',
+      );
+      for (const move of changed) update.run(move.floor, now(), move.id);
+    });
+    res.json({ affected: changed.length });
+  } catch (error: any) {
+    res.locals.postHogError = error;
+    console.error('[API] Re-zone failed:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.put('/zone-owner', requirePermission('tables.manage'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();

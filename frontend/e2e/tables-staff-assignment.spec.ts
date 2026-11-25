@@ -170,15 +170,29 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     expect(backupTable.backup_user_id).toBe(first.id);
 
     const editDialog = page.getByTestId('staff-tables-edit-dialog');
+    const rangeRow = (kind: 'primary' | 'backup', row: number) =>
+      editDialog
+        .getByTestId(`staff-range-${kind}`)
+        .getByRole('textbox')
+        .nth(row * 2);
+    const fillRange = async (kind: 'primary' | 'backup', row: number, name: string) => {
+      const from = rangeRow(kind, row);
+      await from.fill(name);
+      await editDialog
+        .getByTestId(`staff-range-${kind}`)
+        .getByRole('textbox')
+        .nth(row * 2 + 1)
+        .fill(name);
+    };
+
+    // The manager types ranges: A drops to a backup table and B becomes a main table.
     await page.getByTestId(`staff-roster-edit-${second.id}`).click();
-    await expect(page.getByTestId(`staff-tables-edit-owner-${tableA}`)).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await page.getByTestId(`staff-tables-edit-backup-${tableA}`).click();
-    await expect(page.getByTestId(`staff-tables-edit-holder-${tableA}`)).toHaveText('No one yet');
-    await page.getByTestId(`staff-tables-edit-owner-${tableB}`).click();
-    await page.getByTestId('staff-tables-edit-submit').click();
+    await expect(editDialog).toContainText(`Edit tables for ${second.name}`);
+    await expect(rangeRow('primary', 0)).toHaveValue(nameA);
+    await fillRange('primary', 0, nameB);
+    await fillRange('backup', 0, nameA);
+    await expect(editDialog.getByTestId('staff-range-unassigned')).toBeVisible();
+    await editDialog.getByTestId('staff-range-save').click();
     await expect(editDialog).toBeHidden();
     await expect(page.getByTestId(`staff-roster-backup-${second.id}`)).toContainText(nameA);
     await expect(page.getByTestId(`staff-roster-tables-${second.id}`)).toContainText(nameB);
@@ -195,17 +209,27 @@ test('manager picks a table staff assignment mode from the Tables page tab', asy
     expect(byId(tableB).owner_user_id).toBe(second.id);
     expect(byId(tableB).backup_user_id).toBe(first.id);
 
+    // Taking a table another staff member looks after shows who holds it and asks first.
     await page.getByTestId(`staff-roster-edit-${first.id}`).click();
-    await expect(page.getByTestId(`staff-tables-edit-backup-${tableB}`)).toHaveAttribute(
-      'aria-pressed',
-      'true',
+    await expect(rangeRow('backup', 0)).toHaveValue(nameB);
+    await expect(editDialog.getByTestId('staff-range-backup-holder').first()).toHaveText(
+      `Main staff: ${second.name}`,
     );
-    await page.getByTestId(`staff-tables-edit-owner-${tableB}`).click();
-    await page.getByTestId('staff-tables-edit-submit').click();
-    await expect(page.getByTestId('staff-tables-edit-confirm')).toHaveText(
+    await editDialog
+      .getByTestId('staff-range-backup')
+      .getByRole('button', { name: 'Remove this range' })
+      .first()
+      .click();
+    await editDialog.getByRole('button', { name: 'Add main tables' }).click();
+    const newRow =
+      (await editDialog.getByTestId('staff-range-primary').getByRole('textbox').count()) / 2 - 1;
+    await fillRange('primary', newRow, nameB);
+    await editDialog.getByTestId('staff-range-save').click();
+    await editDialog.screenshot({ path: test.info().outputPath('manager-range-form.png') });
+    await expect(editDialog.getByTestId('staff-range-move-confirm')).toHaveText(
       `Move tables ${nameB} from ${second.name} to ${first.name}?`,
     );
-    await page.getByTestId('staff-tables-edit-submit').click();
+    await editDialog.getByTestId('staff-range-save').click();
     await expect(editDialog).toBeHidden();
     edited = await (
       await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
@@ -459,5 +483,59 @@ test('add-tables dialog uses the brand colour and the backup switch hides backup
     await page.request
       .delete(`${BASE}/api/tables/${tableId}`, { headers: authHeaders })
       .catch(() => {});
+  }
+});
+
+test('re-zone previews one run of neighbouring tables per staff member', async ({ page }) => {
+  const authHeaders = {
+    Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+  };
+  const created: string[] = [];
+  for (const offset of [1, 2, 3]) {
+    const res = await page.request.post(`${BASE}/api/tables`, {
+      headers: authHeaders,
+      data: { number: `E2E-ZONE-${Date.now()}-${offset}`, capacity: 2 },
+    });
+    expect(res.ok()).toBeTruthy();
+    created.push((await res.json()).table.id);
+  }
+  try {
+    await page.goto(`${BASE}/auth/login`);
+    await page.locator('#email').fill('manager@flo.local');
+    await page.locator('#password').fill(E2E_PASSWORD);
+    await page.locator('button[type="submit"]').click();
+    await page.waitForURL('**/pos/**', { timeout: 20_000 });
+    await setLanguage(page, 'en');
+    await page.goto(`${BASE}/tables`);
+    await page.getByTestId('tables-view-staff').click();
+
+    const roster = await (
+      await page.request.get(`${BASE}/api/tables/staff-roster`, { headers: authHeaders })
+    ).json();
+    const total = (roster.tables as unknown[]).length;
+    const panel = page.getByTestId('table-rezone');
+    await expect(panel).toContainText('Re-zone tables');
+    await expect(panel.getByTestId('table-rezone-current').first()).toBeVisible();
+
+    await panel.getByTestId('table-rezone-staff').fill('2');
+    const per = Math.ceil(total / 2);
+    await expect(panel.getByTestId('table-rezone-per-staff')).toHaveAttribute(
+      'placeholder',
+      String(per),
+    );
+    await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(Math.ceil(total / per));
+    await panel.getByTestId('table-rezone-per-staff').fill('1');
+    await expect(panel.getByTestId('table-rezone-proposed')).toHaveCount(total);
+
+    await panel.getByTestId('table-rezone-apply').click();
+    await expect(panel.getByTestId('table-rezone-confirm')).toContainText(
+      `Rename the Floor Plan zones into ${total} zones?`,
+    );
+    await panel.getByRole('button', { name: 'Cancel' }).click();
+    await expect(panel.getByTestId('table-rezone-confirm')).toHaveCount(0);
+  } finally {
+    for (const id of created) {
+      await page.request.delete(`${BASE}/api/tables/${id}`, { headers: authHeaders });
+    }
   }
 });

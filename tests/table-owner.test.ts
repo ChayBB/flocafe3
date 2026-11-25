@@ -344,6 +344,45 @@ async function main() {
       null,
       'removing the staff member clears the owner',
     );
+    db.prepare(
+      `UPDATE tables SET floor = 'Old', position_x = 10, position_y = 20 WHERE id IN ('tb-own', 'tb-other')`,
+    ).run();
+    const rezone = (zones: unknown) =>
+      api(baseUrl, '/api/tables/zones', {
+        method: 'PUT',
+        headers: owner.authHeader,
+        body: { zones },
+      });
+    assertEqualOrThrow((await rezone([])).status, 400, 'an empty re-zone is rejected');
+    assertEqualOrThrow(
+      (
+        await rezone([
+          { name: 'A', table_ids: ['tb-own'] },
+          { name: 'a', table_ids: ['tb-other'] },
+        ])
+      ).status,
+      400,
+      'zone names must be unique',
+    );
+    assertEqualOrThrow(
+      (await rezone([{ name: 'A', table_ids: ['tb-own', 'tb-own'] }])).status,
+      400,
+      'a table cannot be listed twice',
+    );
+    const rezoned = await rezone([
+      { name: '1-1', table_ids: ['tb-own'] },
+      { name: 'Old', table_ids: ['tb-other'] },
+    ]);
+    assertEqualOrThrow(rezoned.status, 200, 're-zone succeeds');
+    assertEqualOrThrow(rezoned.data.affected, 1, 'only the table whose zone changed is updated');
+    const zoned = (id: string) =>
+      db.prepare('SELECT floor, position_x FROM tables WHERE id = ?').get(id) as {
+        floor: string;
+        position_x: number | null;
+      };
+    assertEqualOrThrow(zoned('tb-own').floor, '1-1', 'the table moves to its new zone');
+    assertEqualOrThrow(zoned('tb-own').position_x, null, 'a moved table leaves the old floor plan');
+    assertEqualOrThrow(zoned('tb-other').position_x, 10, 'an unmoved table keeps its position');
     console.log('\nAll table owner checks passed');
   } finally {
     server.close();

@@ -289,10 +289,13 @@ export function StaffProfile({
       tables={allTables.map((table) => ({
         id: table.id,
         label: tableLabel(table),
+        floor: table.floor,
         owner_user_id: table.owner_user_id,
+        owner_name: table.owner_name,
         backup_user_id: table.backup_user_id,
       }))}
       userId={user.id}
+      userName={user.name}
       backupEnabled={Boolean(snapshot?.backup_enabled)}
       saving={savingTables}
       onSave={(tableIds, backupTableIds) => void saveTables(tableIds, backupTableIds)}
