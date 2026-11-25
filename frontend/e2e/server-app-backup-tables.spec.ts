@@ -3,179 +3,121 @@ import { E2E_BASE_URL, E2E_SERVER_APP_BASE_URL } from './helpers/urls';
 import { getE2eToken } from './helpers/test-auth';
 
 const TOKEN_KEY = 'flocafe:server-app-token';
+const headers = {
+  Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
+};
 
-async function holdTablesButton(page: Page): Promise<void> {
-  const button = page.getByTestId('server-app-table-button');
-  // Select Table scrolls the list into view; wait for the page to settle before pressing.
-  await expect
-    .poll(async () => {
-      const before = await page.evaluate(() => window.scrollY);
-      await page.waitForTimeout(150);
-      return (await page.evaluate(() => window.scrollY)) === before;
-    })
-    .toBe(true);
-  await button.scrollIntoViewIfNeeded();
-  const box = (await button.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(2300);
-  await page.mouse.up();
+async function createTables(page: Page, numbers: number[]) {
+  const ids: Record<number, string> = {};
+  for (const number of numbers) {
+    const created = await page.request.post(`${E2E_BASE_URL}/api/tables`, {
+      headers,
+      data: { number: String(number), capacity: 2 },
+    });
+    expect(created.ok()).toBeTruthy();
+    ids[number] = (await created.json()).table.id;
+  }
+  return ids;
 }
 
-test('holding Select Table switches between own tables and orange backup tables', async ({
-  page,
-}) => {
-  const headers = {
-    Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
-  };
-  const suffix = Math.random().toString(36).slice(2, 7);
-  const create = async (name: string) =>
-    (
-      await (
-        await page.request.post(`${E2E_BASE_URL}/api/tables`, {
-          headers,
-          data: { number: name, capacity: 2 },
-        })
-      ).json()
-    ).table as { id: string };
-  const own = await create(`Own ${suffix}`);
-  const backup = await create(`Spare ${suffix}`);
+async function assign(page: Page, kind: 'owner' | 'backup', tableIds: string[]) {
+  const assigned = await page.request.put(`${E2E_BASE_URL}/api/tables/staff-tables`, {
+    headers,
+    data: { user_id: 'e2e-server', table_ids: tableIds, kind },
+  });
+  expect(assigned.ok()).toBeTruthy();
+}
+
+async function openAsServer(page: Page) {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone`);
+  await page.evaluate(
+    ([key, token]) => {
+      localStorage.setItem(key, token);
+      const raw = localStorage.getItem('pos-settings');
+      const parsed = raw ? JSON.parse(raw) : { state: {} };
+      parsed.state = { ...parsed.state, language: 'en' };
+      localStorage.setItem('pos-settings', JSON.stringify(parsed));
+    },
+    [TOKEN_KEY, getE2eToken('e2e-server', 'server@flo.local', 'server')],
+  );
+  await page.reload();
+  return page.getByTestId('server-app-table-picker');
+}
+
+const card = (picker: ReturnType<Page['getByTestId']>, number: number) =>
+  picker.getByRole('button', { name: new RegExp(`^${number}(?!\d)`) });
+
+test('Select Table files main tables first, then a folder per backup run', async ({ page }) => {
+  const base = 9000 + Math.floor(Math.random() * 90) * 10;
+  const numbers = [1, 2, 3, 4, 5, 6, 7].map((offset) => base + offset);
+  const ids = await createTables(page, numbers);
   try {
-    for (const [kind, table] of [
-      ['owner', own],
-      ['backup', backup],
-    ] as const) {
-      const assigned = await page.request.put(`${E2E_BASE_URL}/api/tables/staff-tables`, {
-        headers,
-        data: { user_id: 'e2e-server', table_ids: [table.id], kind },
-      });
-      expect(assigned.ok()).toBeTruthy();
+    await assign(page, 'owner', [ids[base + 5], ids[base + 6]]);
+    await assign(page, 'backup', [ids[base + 1], ids[base + 4], ids[base + 7]]);
+
+    const picker = await openAsServer(page);
+    const tabs = picker.getByTestId('server-app-table-tabs');
+    const mainTab = tabs.getByRole('tab', { name: 'Main tables' });
+    const beforeTab = tabs.getByRole('tab', { name: `${base + 1}–${base + 4}`, exact: true });
+    const afterTab = tabs.getByRole('tab', { name: String(base + 7), exact: true });
+    await expect(mainTab).toHaveAttribute('aria-selected', 'true');
+    await expect(mainTab).toHaveAttribute('data-table-tab', 'main');
+    await expect(card(picker, base + 5)).toBeVisible();
+    await expect(card(picker, base + 6)).toBeVisible();
+    await expect(card(picker, base + 1)).toHaveCount(0);
+    await expect(beforeTab).toHaveAttribute('data-table-tab', 'backup');
+    await expect(afterTab).toHaveAttribute('data-table-tab', 'backup');
+
+    // A backup folder lists every table in its run, including the ones between the backups.
+    await beforeTab.click();
+    await expect(beforeTab).toHaveAttribute('aria-selected', 'true');
+    for (const offset of [1, 2, 3, 4]) {
+      await expect(card(picker, base + offset)).toHaveAttribute('data-backup-table', 'true');
     }
+    await expect(card(picker, base + 5)).toHaveCount(0);
+    await picker.screenshot({ path: test.info().outputPath('table-tabs.png') });
 
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone`);
-    await page.evaluate(
-      ([key, token]) => {
-        localStorage.setItem(key, token);
-        const raw = localStorage.getItem('pos-settings');
-        const parsed = raw ? JSON.parse(raw) : { state: {} };
-        parsed.state = { ...parsed.state, language: 'en' };
-        localStorage.setItem('pos-settings', JSON.stringify(parsed));
-      },
-      [TOKEN_KEY, getE2eToken('e2e-server', 'server@flo.local', 'server')],
-    );
-    await page.reload();
+    await afterTab.click();
+    await expect(card(picker, base + 7)).toBeVisible();
+    await expect(card(picker, base + 4)).toHaveCount(0);
 
-    const picker = page.getByTestId('server-app-table-picker');
-    const button = page.getByTestId('server-app-table-button');
-    const heading = page.getByTestId('server-app-table-picker-heading');
-    const ownCard = picker.getByRole('button', { name: new RegExp(`Own ${suffix}`) });
-    const backupCard = picker.getByRole('button', { name: new RegExp(`Spare ${suffix}`) });
-    await expect(heading).toHaveText('Tables');
-    await expect(ownCard).toBeVisible();
-    await expect(backupCard).toHaveCount(0);
-
-    // A short tap keeps its usual job; holding switches to the backup tables, on orange cards.
-    await holdTablesButton(page);
-    await expect(heading).toHaveText('Backup tables');
-    await expect(button).toHaveAttribute('data-backup-tables', 'true');
-    await expect(button).toContainText('Backup tables');
-    await expect(backupCard).toHaveAttribute('data-backup-table', 'true');
-    await expect(backupCard).toHaveCSS('background-color', /oklch|rgb\(255, 237, 213\)/);
-    await expect(ownCard).toHaveCount(0);
-
-    // A backup table can be picked like an own table.
-    await backupCard.click();
-    await expect(button.getByTestId('server-app-table-button-name')).toHaveText(`Spare ${suffix}`);
-
-    // Holding again returns to the staff member's own tables.
-    await button.click();
-    await expect(picker).toBeVisible();
-    await holdTablesButton(page);
-    await expect(heading).toHaveText('Tables');
-    await expect(button).not.toHaveAttribute('data-backup-tables', 'true');
-    await expect(ownCard).toBeVisible();
-    await expect(backupCard).toHaveCount(0);
+    // A backup table can be picked like a main table.
+    await card(picker, base + 7).click();
+    await expect(
+      page.getByTestId('server-app-table-button').getByTestId('server-app-table-button-name'),
+    ).toHaveText(String(base + 7));
   } finally {
-    for (const table of [own, backup]) {
-      await page.request.delete(`${E2E_BASE_URL}/api/tables/${table.id}`, { headers });
+    for (const id of Object.values(ids)) {
+      await page.request.delete(`${E2E_BASE_URL}/api/tables/${id}`, { headers });
     }
   }
 });
 
-test('with backup tables turned off, holding Select Table keeps the own tables', async ({
-  page,
-}) => {
-  const headers = {
-    Authorization: `Bearer ${getE2eToken('e2e-manager', 'manager@flo.local', 'manager')}`,
-  };
-  const suffix = Math.random().toString(36).slice(2, 7);
-  const create = async (name: string) =>
-    (
-      await (
-        await page.request.post(`${E2E_BASE_URL}/api/tables`, {
-          headers,
-          data: { number: name, capacity: 2 },
-        })
-      ).json()
-    ).table as { id: string };
-  const own = await create(`Own ${suffix}`);
-  const backup = await create(`Spare ${suffix}`);
+test('with backup tables turned off, Select Table shows only the main tables', async ({ page }) => {
+  const base = 9000 + Math.floor(Math.random() * 90) * 10;
+  const ids = await createTables(page, [base + 1, base + 2]);
   try {
-    for (const [kind, table] of [
-      ['owner', own],
-      ['backup', backup],
-    ] as const) {
-      const assigned = await page.request.put(`${E2E_BASE_URL}/api/tables/staff-tables`, {
-        headers,
-        data: { user_id: 'e2e-server', table_ids: [table.id], kind },
-      });
-      expect(assigned.ok()).toBeTruthy();
-    }
+    await assign(page, 'owner', [ids[base + 2]]);
+    await assign(page, 'backup', [ids[base + 1]]);
     const off = await page.request.put(`${E2E_BASE_URL}/api/tables/owner-assignment`, {
       headers,
       data: { backup_enabled: false },
     });
     expect(off.ok()).toBeTruthy();
 
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${E2E_SERVER_APP_BASE_URL}/server-standalone`);
-    await page.evaluate(
-      ([key, token]) => {
-        localStorage.setItem(key, token);
-        const raw = localStorage.getItem('pos-settings');
-        const parsed = raw ? JSON.parse(raw) : { state: {} };
-        parsed.state = { ...parsed.state, language: 'en' };
-        localStorage.setItem('pos-settings', JSON.stringify(parsed));
-      },
-      [TOKEN_KEY, getE2eToken('e2e-server', 'server@flo.local', 'server')],
-    );
-    await page.reload();
-
-    const picker = page.getByTestId('server-app-table-picker');
-    const heading = page.getByTestId('server-app-table-picker-heading');
-    await expect(heading).toHaveText('Tables');
-    await expect(picker.getByRole('button', { name: new RegExp(`Own ${suffix}`) })).toBeVisible();
-
-    await holdTablesButton(page);
-    await expect(page.getByTestId('server-app-table-button')).not.toHaveAttribute(
-      'data-backup-tables',
-      'true',
-    );
-    // Without backups a hold is just a tap, so the list folds away; tap again to bring it back.
-    if (!(await picker.isVisible())) await page.getByTestId('server-app-table-button').click();
-    await expect(heading).toHaveText('Tables');
-    await expect(picker.getByRole('button', { name: new RegExp(`Own ${suffix}`) })).toBeVisible();
-    await expect(picker.getByRole('button', { name: new RegExp(`Spare ${suffix}`) })).toHaveCount(
-      0,
-    );
+    const picker = await openAsServer(page);
+    await expect(page.getByTestId('server-app-table-picker-heading')).toHaveText('Tables');
+    await expect(picker.getByTestId('server-app-table-tabs')).toHaveCount(0);
+    await expect(card(picker, base + 2)).toBeVisible();
+    await expect(card(picker, base + 1)).toHaveCount(0);
   } finally {
     await page.request.put(`${E2E_BASE_URL}/api/tables/owner-assignment`, {
       headers,
       data: { backup_enabled: true },
     });
-    for (const table of [own, backup]) {
-      await page.request.delete(`${E2E_BASE_URL}/api/tables/${table.id}`, { headers });
+    for (const id of Object.values(ids)) {
+      await page.request.delete(`${E2E_BASE_URL}/api/tables/${id}`, { headers });
     }
   }
 });

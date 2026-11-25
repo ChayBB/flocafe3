@@ -51,6 +51,7 @@ import { GuestOrderHistory, type GuestOrder } from '@/components/server-app/Gues
 import type { GuestBillRequestFailure } from '@/components/server-app/GuestBill';
 import { useReloadOnNewBuild } from '@/hooks/useReloadOnNewBuild';
 import { holdDarkClass } from '@/lib/kds-screen-mode';
+import { backupTableGroups } from '@/lib/table-ranges';
 import { useTranslations } from 'use-intl';
 import { Ltr } from '@/components/layout/Ltr';
 import { StoreClock } from '@/components/layout/StoreClock';
@@ -404,7 +405,7 @@ export default function ServerStandalonePage() {
   const [user, setUser] = useState<User | null>(null);
   const [disabled, setDisabled] = useState(false);
   const [tablePickerOpen, setTablePickerOpen] = useState(true);
-  const [showBackupTables, setShowBackupTables] = useState(false);
+  const [tableTab, setTableTab] = useState(0);
   const [backupEnabled, setBackupEnabled] = useState(true);
   const [orderedItemsOpen, setOrderedItemsOpen] = useState(false);
   const [summaryHiddenTable, setSummaryHiddenTable] = useState<string | null>(null);
@@ -537,8 +538,25 @@ export default function ServerStandalonePage() {
     : [];
   const backupTableIds = new Set(backupTables.map((table) => table.id));
   const alertTables = backupTables.length > 0 ? [...staffTables, ...backupTables] : staffTables;
-  const backupMode = Boolean(user) && backupEnabled && showBackupTables;
-  const pickerTables = backupMode ? backupTables : staffTables;
+  // The picker files the main tables first, then each run of backup tables on either side of them.
+  const asRangeTable = (table: Table) => ({
+    id: table.id,
+    label: String(table.name || table.number || ''),
+    table,
+  });
+  const backupGroups =
+    user && backupEnabled
+      ? backupTableGroups(
+          staffTables.map(asRangeTable),
+          backupTables.map(asRangeTable),
+          tables.map(asRangeTable),
+        )
+      : [];
+  const activeTableTab = tableTab <= backupGroups.length ? tableTab : 0;
+  const backupMode = activeTableTab > 0;
+  const pickerTables = backupMode
+    ? backupGroups[activeTableTab - 1].map((entry) => entry.table)
+    : staffTables;
   // Tables whose bill the cashier could not print yet: every item must be confirmed served first.
   const serveConfirmTables = user
     ? alertTables.filter(
@@ -1110,7 +1128,7 @@ export default function ServerStandalonePage() {
       orderLoadedTableIdRef.current = '';
       activeUserIdRef.current = null;
       setUser(null);
-      setShowBackupTables(false);
+      setTableTab(0);
       setPassword('');
       setDraft([]);
       setOrderNotes('');
@@ -2874,15 +2892,6 @@ export default function ServerStandalonePage() {
               }
             : undefined
         }
-        onHoldTables={
-          user && backupEnabled
-            ? () => {
-                setShowBackupTables((backup) => !backup);
-                setTablePickerOpen(true);
-              }
-            : undefined
-        }
-        backupTables={backupMode}
         tableSelectionDisabled={sending}
         dark={staffSeesDark}
         onDark={user ? toggleStaffDark : undefined}
@@ -3053,12 +3062,47 @@ export default function ServerStandalonePage() {
               data-testid="server-app-table-picker"
               className="min-w-0 scroll-mt-20 md:rounded-lg md:border md:border-border md:bg-card md:p-3"
             >
-              <h2
-                data-testid="server-app-table-picker-heading"
-                className={`mb-2 text-xs font-semibold uppercase ${backupMode ? 'text-orange-700' : 'text-muted-foreground'}`}
-              >
-                {backupMode ? t('backupTablesHeading') : t('tables')}
-              </h2>
+              {backupGroups.length > 0 ? (
+                <div
+                  role="tablist"
+                  data-testid="server-app-table-tabs"
+                  className={`-mx-px mb-2 flex gap-1 overflow-x-auto border-b-2 ${backupMode ? 'border-orange-500' : 'border-green-600'}`}
+                >
+                  {[null, ...backupGroups].map((group, index) => {
+                    const active = index === activeTableTab;
+                    const label = group
+                      ? [...new Set([group[0].label, group[group.length - 1].label])].join('–')
+                      : t('mainTablesTab');
+                    const tone = group
+                      ? active
+                        ? 'border-orange-500 bg-orange-500 text-white'
+                        : 'border-orange-200 bg-orange-50 text-orange-800'
+                      : active
+                        ? 'border-green-600 bg-green-600 text-white'
+                        : 'border-green-200 bg-green-50 text-green-800';
+                    return (
+                      <button
+                        key={index}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        data-table-tab={group ? 'backup' : 'main'}
+                        onClick={() => setTableTab(index)}
+                        className={`shrink-0 rounded-t-lg border border-b-0 px-4 py-2 text-sm font-semibold ${tone}`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <h2
+                  data-testid="server-app-table-picker-heading"
+                  className="mb-2 text-xs font-semibold uppercase text-muted-foreground"
+                >
+                  {t('tables')}
+                </h2>
+              )}
               {tablePriceAlerts
                 .filter((alert) => priceFlashKeys.has(alert.key))
                 .map(({ table, item, message }) => (
@@ -3078,9 +3122,6 @@ export default function ServerStandalonePage() {
                   </button>
                 ))}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
-                {backupMode && tablesLoaded && backupTables.length === 0 && (
-                  <p className="text-sm text-muted-foreground">{t('noBackupTables')}</p>
-                )}
                 {!backupMode && staffAreaOnly && tablesLoaded && staffTables.length === 0 && (
                   <p className="text-sm text-muted-foreground">{tPos('noTablesFound')}</p>
                 )}

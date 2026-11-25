@@ -96,3 +96,27 @@ export function neighbourRanges(
     after: asRange(sorted.slice(last + 1, last + 1 + size)),
   };
 }
+
+/** Backup tables split at the main tables; each group spans every non-main table from its first backup to its last. */
+export function backupTableGroups<T extends RangeTable>(
+  main: readonly RangeTable[],
+  backup: readonly RangeTable[],
+  all: readonly T[],
+): T[][] {
+  const mainIds = new Set(main.map((table) => table.id));
+  const backupIds = new Set(backup.map((table) => table.id));
+  const groups: T[][] = [];
+  let run: T[] = [];
+  const flush = () => {
+    const first = run.findIndex((table) => backupIds.has(table.id));
+    const last = run.findLastIndex((table) => backupIds.has(table.id));
+    if (first >= 0) groups.push(run.slice(first, last + 1));
+    run = [];
+  };
+  for (const table of [...all].sort(byLabel)) {
+    if (mainIds.has(table.id)) flush();
+    else run.push(table);
+  }
+  flush();
+  return groups;
+}

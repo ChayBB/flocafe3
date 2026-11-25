@@ -1,6 +1,7 @@
 /** Typed table ranges on the staff profile: numbered runs, exact names, and ranges rebuilt from choices. */
 import assert from 'node:assert/strict';
 import {
+  backupTableGroups,
   neighbourRanges,
   resolveTableRange,
   tablesToRanges,
@@ -48,3 +49,13 @@ assert.deepEqual(neighbourRanges(pick('9'), tables), {
 assert.deepEqual(neighbourRanges([], tables), { before: null, after: null });
 
 console.log('table-ranges: ok');
+
+const numbered = Array.from({ length: 20 }, (_, i) => ({ id: `n-${i + 1}`, label: String(i + 1) }));
+const named = (...names: number[]) =>
+  numbered.filter((table) => names.includes(Number(table.label)));
+assert.deepEqual(backupTableGroups(named(15, 16), named(11, 14, 17, 18), numbered).map(labels), [
+  ['11', '12', '13', '14'],
+  ['17', '18'],
+]);
+assert.deepEqual(backupTableGroups([], named(3, 5), numbered).map(labels), [['3', '4', '5']]);
+assert.deepEqual(backupTableGroups(named(1, 2), [], numbered), []);
