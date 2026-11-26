@@ -1524,7 +1524,8 @@
     "loyaltyDiscountLimit": "ส่วนลดเกินมูลค่าคะแนนคงเหลือของสมาชิก",
     "localPhonePlaceholder": "เช่น 0812345678",
     "tableFilter": "กรองโต๊ะ",
-    "tableFilterAll": "ทั้งหมด"
+    "tableFilterAll": "ทั้งหมด",
+    "tableSeatsAtLeast": "{count}+ ที่นั่ง"
   },
   "printTest": {
     "amt": "จำนวนเงิน",

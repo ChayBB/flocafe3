@@ -1524,7 +1524,8 @@
     "tagPromotion": "Promotion",
     "localPhonePlaceholder": "e.g. 0812345678",
     "tableFilter": "Filter tables",
-    "tableFilterAll": "All"
+    "tableFilterAll": "All",
+    "tableSeatsAtLeast": "{count}+ seats"
   },
   "printTest": {
     "amt": "Amt",

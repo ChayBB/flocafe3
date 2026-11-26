@@ -23,6 +23,8 @@ interface Props {
 
 type PosKey = keyof AppConfig['Messages']['pos'];
 
+const PARTY_SIZES = [4, 6, 8];
+
 const statusStyles: Record<string, { border: string; badge: string; badgeKey: PosKey | null }> = {
   available: { border: 'border-border hover:border-brand/40', badge: '', badgeKey: null },
   occupied: {
@@ -59,18 +61,15 @@ export default function TablePickerModal({
 }: Props) {
   const heldOrders = useHeldOrdersStore();
   const t = useTranslations('pos');
-  // Quick filters by seat count and by the zone set on each table (Section), e.g. "by the stage".
+  // Quick filters: tables that seat at least N guests, and the zone set on each table (Section).
   const [filter, setFilter] = useState<string>('all');
-  const seatCounts = [...new Set(tables.map((table) => table.capacity).filter((n) => n > 0))].sort(
-    (a, b) => a - b,
-  );
   const zones = [
     ...new Set(tables.map((table) => table.section?.trim() ?? '').filter(Boolean)),
   ].sort((a, b) => a.localeCompare(b));
   const filters = [
-    ...seatCounts.map((count) => ({
+    ...PARTY_SIZES.map((count) => ({
       key: `seats:${count}`,
-      label: t('tableSeats', { count }),
+      label: t('tableSeatsAtLeast', { count }),
     })),
     ...zones.map((zone) => ({ key: `zone:${zone}`, label: zone })),
   ];
@@ -80,7 +79,7 @@ export default function TablePickerModal({
       ? tables
       : tables.filter((table) =>
           activeFilter.startsWith('seats:')
-            ? `seats:${table.capacity}` === activeFilter
+            ? table.capacity >= Number(activeFilter.slice('seats:'.length))
             : `zone:${table.section?.trim() ?? ''}` === activeFilter,
         );
 
@@ -113,31 +112,8 @@ export default function TablePickerModal({
         data-testid="pos-table-picker"
         className="bg-card rounded-2xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto"
       >
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center justify-between gap-3 mb-3">
           <h2 className="shrink-0 text-lg font-bold">{t('selectTable')}</h2>
-          <div
-            role="group"
-            aria-label={t('tableFilter')}
-            data-testid="table-picker-filters"
-            className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto [scrollbar-width:none]"
-          >
-            {filters.length > 1 &&
-              [{ key: 'all', label: t('tableFilterAll') }, ...filters].map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  aria-pressed={activeFilter === option.key}
-                  onClick={() => setFilter(option.key)}
-                  className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-                    activeFilter === option.key
-                      ? 'border-brand bg-brand text-white'
-                      : 'border-border bg-card text-foreground hover:bg-muted'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-          </div>
           <button
             onClick={onClose}
             className="touch-target shrink-0 rounded-full text-gray-400 hover:text-muted-foreground active:bg-muted"
@@ -145,6 +121,29 @@ export default function TablePickerModal({
           >
             <X size={20} />
           </button>
+        </div>
+
+        <div
+          role="group"
+          aria-label={t('tableFilter')}
+          data-testid="table-picker-filters"
+          className="mb-4 flex gap-1.5 overflow-x-auto [scrollbar-width:none]"
+        >
+          {[{ key: 'all', label: t('tableFilterAll') }, ...filters].map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              aria-pressed={activeFilter === option.key}
+              onClick={() => setFilter(option.key)}
+              className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+                activeFilter === option.key
+                  ? 'border-brand bg-brand text-white'
+                  : 'border-border bg-card text-foreground hover:bg-muted'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
 
         <div className="grid grid-cols-3 gap-3">

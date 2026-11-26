@@ -48,7 +48,9 @@ test('the POS table picker filters tables by seat count and by zone', async ({ p
     await expect(big).toBeVisible();
     await expect(staged).toBeVisible();
 
-    await filters.getByRole('button', { name: '37 seats' }).click();
+    await expect(filters.getByRole('button', { name: '4+ seats' })).toBeVisible();
+    await expect(filters.getByRole('button', { name: '6+ seats' })).toBeVisible();
+    await filters.getByRole('button', { name: '8+ seats' }).click();
     await expect(big).toBeVisible();
     await expect(staged).toHaveCount(0);
 
