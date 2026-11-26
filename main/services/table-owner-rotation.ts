@@ -298,10 +298,9 @@ function seededRandom(seed: string): () => number {
 }
 
 /**
- * The first `table_count` active tables, in zone then table order, are cut into contiguous runs:
- * floor(tables / staff) each, with the remainder adding one table to the last runs. Rotation shifts
- * which staff member takes which run by one every business day; shuffle draws a fresh order per interval.
- * Each person backs up the next person's run, so a busy neighbour always has someone to call.
+ * The first `table_count` active tables, in zone then table order, are cut into one contiguous run
+ * per staff member (see zoneRuns). Rotation shifts who takes which run by one every business day;
+ * shuffle draws a fresh order per interval. Backups come from the neighbouring zone's staff.
  */
 function plannedOwners(
   db: Db,
@@ -325,24 +324,89 @@ function plannedOwners(
     }
   }
   const tables = activeTablesInOrder(db);
-  const served = tables.slice(0, roster.table_count);
-  const base = Math.floor(served.length / order.length);
-  const extra = served.length % order.length;
   const plan = new Map<string, { owner: string | null; backup: string | null }>(
     tables.map((table) => [table.id, { owner: null, backup: null }]),
   );
-  const backupEnabled = roster.backup_enabled;
-  let cursor = 0;
-  order.forEach((userId, index) => {
-    const size = base + (index >= order.length - extra ? 1 : 0);
-    const backup =
-      backupEnabled && order.length > 1 ? order[(index - 1 + order.length) % order.length] : null;
-    for (const table of served.slice(cursor, cursor + size)) {
-      plan.set(table.id, { owner: userId, backup });
-    }
-    cursor += size;
+  const groups = zoneRuns(tables.slice(0, roster.table_count), order.length);
+  let next = 0;
+  const owned = groups.map((group) => group.map((run) => ({ run, owner: order[next++] })));
+  owned.forEach((group, index) => {
+    const previous = owned[(index - 1 + owned.length) % owned.length];
+    group.forEach(({ run, owner }, position) => {
+      let backup: string | null = null;
+      if (roster.backup_enabled && owned.length > 1) {
+        backup = previous[position % previous.length].owner;
+      } else if (roster.backup_enabled && group.length > 1) {
+        backup = group[(position - 1 + group.length) % group.length].owner;
+      }
+      for (const table of run) plan.set(table.id, { owner, backup });
+    });
   });
   return plan;
+}
+
+function splitEvenly<T>(items: T[], parts: number): T[][] {
+  const base = Math.floor(items.length / parts);
+  const extra = items.length % parts;
+  const runs: T[][] = [];
+  let cursor = 0;
+  for (let index = 0; index < parts; index += 1) {
+    const size = base + (index >= parts - extra ? 1 : 0);
+    runs.push(items.slice(cursor, cursor + size));
+    cursor += size;
+  }
+  return runs.filter((run) => run.length > 0);
+}
+
+/**
+ * Cuts the served tables into one run per staff member, grouped so that backups come from another
+ * group. With at least as many staff as zones, every zone gets one person before any zone gets a
+ * second (extra staff go to the zones with the most tables per person). With fewer staff than
+ * zones, each person takes whole neighbouring zones, balanced by table count, and no zone is split.
+ */
+function zoneRuns(served: ActiveTable[], staffCount: number): ActiveTable[][][] {
+  const zones: ActiveTable[][] = [];
+  for (const table of served) {
+    const last = zones[zones.length - 1];
+    if (last && (last[0].floor ?? '').trim() === (table.floor ?? '').trim()) last.push(table);
+    else zones.push([table]);
+  }
+  if (zones.length === 0) return [];
+  if (staffCount >= zones.length) {
+    const people = zones.map(() => 1);
+    for (let spare = staffCount - zones.length; spare > 0; spare -= 1) {
+      let best = -1;
+      zones.forEach((zone, index) => {
+        if (people[index] >= zone.length) return;
+        if (best < 0 || zone.length / people[index] > zones[best].length / people[best]) {
+          best = index;
+        }
+      });
+      if (best < 0) break;
+      people[best] += 1;
+    }
+    return zones.map((zone, index) => splitEvenly(zone, people[index]));
+  }
+  const total = served.length;
+  const groups: ActiveTable[][][] = [];
+  let zoneIndex = 0;
+  let taken = 0;
+  for (let person = 0; person < staffCount; person += 1) {
+    const run: ActiveTable[] = [];
+    const target = (total * (person + 1)) / staffCount;
+    const mustLeave = staffCount - person - 1;
+    while (zoneIndex < zones.length - mustLeave) {
+      const zone = zones[zoneIndex];
+      const overshoot = taken + zone.length - target;
+      if (run.length > 0 && overshoot > target - taken) break;
+      run.push(...zone);
+      taken += zone.length;
+      zoneIndex += 1;
+      if (taken >= target) break;
+    }
+    groups.push([run]);
+  }
+  return groups;
 }
 
 function setTableStaff(
