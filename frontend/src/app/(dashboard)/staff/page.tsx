@@ -97,6 +97,7 @@ export default function StaffPage() {
     pin: '',
     staff_code: '',
     station_ids: [] as string[],
+    part_time: false,
   });
   const requiresPassword =
     !editingStaff || (isOperationalRole(editingStaff.role) && !isOperationalRole(form.role));
@@ -151,6 +152,7 @@ export default function StaffPage() {
       pin: '',
       staff_code: '',
       station_ids: [],
+      part_time: false,
     });
     setShowPassword(false);
     setShowPin(false);
@@ -169,6 +171,7 @@ export default function StaffPage() {
       pin: '',
       staff_code: '',
       station_ids: [],
+      part_time: Boolean(s.part_time),
     });
     setShowPassword(false);
     setShowPin(false);
@@ -204,6 +207,7 @@ export default function StaffPage() {
           name: form.name,
           email: form.email,
           role: form.role,
+          part_time: form.part_time,
           ...(form.password ? { password: form.password } : {}),
           ...(form.pin ? { pin: form.pin } : {}),
           ...(form.staff_code ? { staff_code: form.staff_code } : {}),
@@ -215,6 +219,7 @@ export default function StaffPage() {
           email: form.email,
           password: form.password,
           role: form.role,
+          part_time: form.part_time,
           ...(form.pin ? { pin: form.pin } : {}),
           ...(form.staff_code ? { staff_code: form.staff_code } : {}),
           ...(form.role === 'chef' ? { station_ids: form.station_ids } : {}),
@@ -339,6 +344,11 @@ export default function StaffPage() {
                     )}
                     {Boolean(s.has_staff_code) && (
                       <p className="text-xs text-green-600 mt-1">{t('staffCodeSet')}</p>
+                    )}
+                    {Boolean(s.part_time) && (
+                      <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-950/50 dark:text-violet-200">
+                        {t('partTime')}
+                      </span>
                     )}
                   </div>
                   <span
@@ -542,6 +552,16 @@ export default function StaffPage() {
                   </option>
                 ))}
               </select>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  data-testid="staff-form-part-time"
+                  checked={form.part_time}
+                  onChange={(e) => setForm({ ...form, part_time: e.target.checked })}
+                  className="rounded border-gray-300 dark:border-border text-brand focus:ring-brand"
+                />
+                {t('partTime')}
+              </label>
               {!editingStaff && form.role === 'chef' && (
                 <div>
                   <p className="text-sm font-medium text-foreground mb-1">

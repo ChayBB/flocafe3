@@ -10628,6 +10628,40 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 148,
+    name: 'add_table_staff_plans',
+    up: () => {
+      if (!getColumns(db, 'users').includes('part_time')) {
+        db.exec(
+          'ALTER TABLE users ADD COLUMN part_time INTEGER NOT NULL DEFAULT 0 CHECK (part_time IN (0, 1))',
+        );
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS table_staff_plans (
+          id TEXT PRIMARY KEY,
+          letter TEXT NOT NULL,
+          name TEXT NOT NULL,
+          staff_min INTEGER CHECK (staff_min IS NULL OR staff_min >= 0),
+          staff_max INTEGER CHECK (staff_max IS NULL OR staff_max >= 0),
+          condition_note TEXT,
+          auto_assign INTEGER NOT NULL DEFAULT 0 CHECK (auto_assign IN (0, 1)),
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS table_staff_plan_tables (
+          plan_id TEXT NOT NULL REFERENCES table_staff_plans(id) ON DELETE CASCADE,
+          table_id TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+          owner_user_id TEXT,
+          backup_user_id TEXT,
+          PRIMARY KEY (plan_id, table_id)
+        );
+      `);
+    },
+  },
 ];
 
 const LEGACY_LOCAL_MIGRATIONS: typeof MIGRATIONS = [

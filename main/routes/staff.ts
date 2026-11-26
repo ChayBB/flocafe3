@@ -31,7 +31,7 @@ const requireStaffWrite = requireAnyPermission(
 
 const VALID_ROLES: readonly string[] = ROLE_KEYS;
 const STAFF_SELECT_FIELDS =
-  'id, name, email, role, (pin_hash IS NOT NULL) AS has_pin, (staff_code_hash IS NOT NULL) AS has_staff_code, is_active, created_at, updated_at';
+  'id, name, email, role, (pin_hash IS NOT NULL) AS has_pin, (staff_code_hash IS NOT NULL) AS has_staff_code, part_time, is_active, created_at, updated_at';
 
 function captureAdministrationAccessGuard(): void {
   const failure = serializeOperationFailure({
@@ -294,7 +294,10 @@ router.get('/:id', requirePermission('staff.view'), (req: Request, res: Response
 
 router.post('/', requireStaffWrite, authRateLimit(), (req: Request, res: Response) => {
   try {
-    const { name, email, password, role, pin, station_ids, staff_code } = req.body;
+    const { name, email, password, role, pin, station_ids, staff_code, part_time } = req.body;
+    if (part_time !== undefined && typeof part_time !== 'boolean') {
+      return res.status(400).json({ error: 'part_time must be a boolean' });
+    }
     const normalizedEmail = normalizeStaffEmail(email);
     const normalizedStationIds = normalizeStationIds(station_ids);
 
@@ -404,8 +407,8 @@ router.post('/', requireStaffWrite, authRateLimit(), (req: Request, res: Respons
 
     const createStaff = db.transaction(() => {
       db.prepare(`
-        INSERT INTO users (id, name, email, password, role, pin_hash, staff_code_hash, station_assignments_configured, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        INSERT INTO users (id, name, email, password, role, pin_hash, staff_code_hash, station_assignments_configured, part_time, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       `).run(
         id,
         name,
@@ -415,6 +418,7 @@ router.post('/', requireStaffWrite, authRateLimit(), (req: Request, res: Respons
         hashedPin,
         hashedStaffCode,
         normalizedStationIds.length > 0 ? 1 : 0,
+        part_time === true ? 1 : 0,
         now(),
         now(),
       );
@@ -447,7 +451,10 @@ router.post('/', requireStaffWrite, authRateLimit(), (req: Request, res: Respons
 
 router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Response) => {
   try {
-    const { name, email, password, role, pin, is_active, staff_code } = req.body;
+    const { name, email, password, role, pin, is_active, staff_code, part_time } = req.body;
+    if (part_time !== undefined && typeof part_time !== 'boolean') {
+      return res.status(400).json({ error: 'part_time must be a boolean' });
+    }
     const emailProvided = email !== undefined;
     const normalizedEmail = emailProvided ? normalizeStaffEmail(email) : undefined;
     const db = getDatabase();
@@ -635,6 +642,12 @@ router.put('/:id', requireStaffWrite, authRateLimit(), (req: Request, res: Respo
           db,
           member.role === 'owner' ? member.email : undefined,
           targetRole === 'owner' ? (emailProvided ? normalizedEmail : member.email) : undefined,
+        );
+      }
+      if (updateResult.changes > 0 && part_time !== undefined) {
+        db.prepare('UPDATE users SET part_time = ? WHERE id = ?').run(
+          part_time ? 1 : 0,
+          req.params.id,
         );
       }
       return updateResult;

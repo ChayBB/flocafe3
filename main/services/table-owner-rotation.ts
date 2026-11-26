@@ -54,6 +54,7 @@ export interface TableStaffRosterMember {
   id: string;
   name: string;
   role: string;
+  part_time: boolean;
   present: boolean;
   tables: { id: string; name: string }[];
   backup_tables: { id: string; name: string }[];
@@ -156,15 +157,17 @@ function recordAudit(
 const collator = new Intl.Collator('en', { numeric: true });
 
 /** Active staff the owner assignment can pick, in a stable order. */
-function assignableStaff(db: Db): { id: string; name: string; role: string }[] {
+export function assignableStaff(
+  db: Db,
+): { id: string; name: string; role: string; part_time: number }[] {
   return db
     .prepare(
-      'SELECT id, name, role FROM users WHERE is_active = 1 AND id != ? ORDER BY name COLLATE NOCASE, id',
+      'SELECT id, name, role, part_time FROM users WHERE is_active = 1 AND id != ? ORDER BY name COLLATE NOCASE, id',
     )
-    .all(GUEST_USER_ID) as { id: string; name: string; role: string }[];
+    .all(GUEST_USER_ID) as { id: string; name: string; role: string; part_time: number }[];
 }
 
-interface ActiveTable {
+export interface ActiveTable {
   id: string;
   number: string;
   floor: string | null;
@@ -172,7 +175,7 @@ interface ActiveTable {
   backup_user_id: string | null;
 }
 
-function activeTablesInOrder(db: Db): ActiveTable[] {
+export function activeTablesInOrder(db: Db): ActiveTable[] {
   const rows = db
     .prepare(
       'SELECT id, number, floor, owner_user_id, backup_user_id FROM tables WHERE is_active = 1',
@@ -209,8 +212,9 @@ export function readTableStaffRoster(
   const backupOf = (table: ActiveTable) => (backupEnabled ? table.backup_user_id : null);
   return {
     business_date: businessDate,
-    staff: staff.map((member) => ({
+    staff: staff.map(({ part_time, ...member }) => ({
       ...member,
+      part_time: part_time === 1,
       present: saved.get(member.id) ?? true,
       tables: tables.filter((table) => table.owner_user_id === member.id).map(shortTable),
       backup_tables: tables.filter((table) => backupOf(table) === member.id).map(shortTable),
@@ -367,7 +371,7 @@ function splitEvenly<T>(items: T[], parts: number): T[][] {
  * second (extra staff go to the zones with the most tables per person). With fewer staff than
  * zones, each person takes whole neighbouring zones, balanced by table count, and no zone is split.
  */
-function zoneRuns(served: ActiveTable[], staffCount: number): ActiveTable[][][] {
+export function zoneRuns(served: ActiveTable[], staffCount: number): ActiveTable[][][] {
   const zones: ActiveTable[][] = [];
   for (const table of served) {
     const last = zones[zones.length - 1];
@@ -412,7 +416,7 @@ function zoneRuns(served: ActiveTable[], staffCount: number): ActiveTable[][][] 
   return groups;
 }
 
-function setTableStaff(
+export function setTableStaff(
   db: Db,
   table: {
     id: string;

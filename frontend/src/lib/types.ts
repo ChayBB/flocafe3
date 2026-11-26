@@ -384,6 +384,7 @@ export interface Staff {
   role: string;
   has_pin?: boolean | number;
   has_staff_code?: boolean | number;
+  part_time?: boolean | number;
   is_active: number;
   created_at: string;
   updated_at: string;

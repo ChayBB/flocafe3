@@ -13,6 +13,7 @@ import type { StaffTablesDialogTable } from './StaffTablesDialog';
 import StaffTablesEditDialog from './StaffTablesEditDialog';
 import TableRezone, { resolveSkippedTables } from './TableRezone';
 import TableZoneBoard from './TableZoneBoard';
+import TableStaffPlans from './TableStaffPlans';
 
 type AssignmentMode = 'manual' | 'staff_managed' | 'rotate_daily' | 'shuffle_interval';
 const isAutomatic = (value: AssignmentMode) =>
@@ -31,6 +32,7 @@ interface StaffRoster {
     id: string;
     name: string;
     role: string;
+    part_time?: boolean;
     present: boolean;
     tables: { id: string; name: string }[];
     backup_tables: { id: string; name: string }[];
@@ -53,6 +55,7 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
 export default function TableStaffAssignment() {
   const t = useTranslations('tables');
   const tCommon = useTranslations('common');
+  const tStaff = useTranslations('staff');
   const locale = useLocale();
   const [saved, setSaved] = useState<AssignmentSettings | null>(null);
   const [roster, setRoster] = useState<StaffRoster | null>(null);
@@ -402,6 +405,11 @@ export default function TableStaffAssignment() {
                       <span className="block truncate text-sm font-medium text-foreground">
                         {member.name}
                       </span>
+                      {member.part_time && (
+                        <span className="inline-block rounded-full bg-violet-50 px-1.5 text-[11px] font-medium text-violet-800 dark:bg-violet-950/50 dark:text-violet-200">
+                          {tStaff('partTime')}
+                        </span>
+                      )}
                       <span
                         className={`flex items-center gap-1 text-xs ${
                           isPresent ? 'text-green-700 dark:text-green-300' : 'text-muted-foreground'
@@ -802,10 +810,28 @@ export default function TableStaffAssignment() {
           />
         )}
       </div>
-      <TableZoneBoard
-        tables={roster.tables}
-        staffNames={new Map(roster.staff.map((member) => [member.id, member.name]))}
-      />
+      <div className="flex w-full min-w-0 flex-1 flex-col gap-6">
+        <TableStaffPlans<StaffRoster>
+          attendanceKey={`${roster.business_date}:${roster.staff
+            .filter((member) => member.present)
+            .map((member) => member.id)
+            .join(',')}`}
+          onApplied={(result) => {
+            applyRoster(result.roster);
+            api
+              .get<AssignmentSettings>('/tables/owner-assignment')
+              .then((res) => {
+                setSaved(res.data);
+                setMode(res.data.mode);
+              })
+              .catch(() => undefined);
+          }}
+        />
+        <TableZoneBoard
+          tables={roster.tables}
+          staffNames={new Map(roster.staff.map((member) => [member.id, member.name]))}
+        />
+      </div>
     </div>
   );
 }

@@ -33,6 +33,16 @@ import { storeTimezone } from '../services/attendance';
 import { getHttpRequestSignal } from '../shutdown';
 import { TERMINAL_ITEM_STATUSES } from '../../shared/order-item-status';
 import { cloudTableQrActive, storedCloudTableQr } from '../services/qr-cloud/table-qr';
+import {
+  applyTableStaffPlan,
+  createTableStaffPlan,
+  deleteTableStaffPlan,
+  duplicateTableStaffPlan,
+  listTableStaffPlans,
+  suggestTableStaffPlan,
+  updateTableStaffPlan,
+  validatePlanInput,
+} from '../services/table-staff-plans';
 import { rememberDeletedPosTable } from '../services/qr-cloud/inbox';
 import {
   isValidShuffleDays,
@@ -823,6 +833,115 @@ router.post(
         ...result.roster,
         store_timezone: storeTimezone(db),
         changes: result.changes.length,
+      });
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+function staffPlansResponse(db: ReturnType<typeof getDatabase>) {
+  const plans = listTableStaffPlans(db);
+  const presentCount = readTableStaffRoster(db).staff.filter((member) => member.present).length;
+  return {
+    plans,
+    present_count: presentCount,
+    suggested_plan_id: suggestTableStaffPlan(plans, presentCount),
+  };
+}
+
+function actorOf(req: Request): string {
+  return (req as Request & { user?: { userId?: string } }).user?.userId ?? '';
+}
+
+router.get('/staff-plans', requirePermission('tables.manage'), (_req: Request, res: Response) => {
+  try {
+    res.json(staffPlansResponse(getDatabase()));
+  } catch (error: unknown) {
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/staff-plans', requirePermission('tables.manage'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const input = validatePlanInput(req.body);
+    if (!input.ok) return res.status(400).json({ code: input.code, error: input.error });
+    const id = createTableStaffPlan(db, input, actorOf(req));
+    res.status(201).json({ ...staffPlansResponse(db), plan_id: id });
+  } catch (error: unknown) {
+    console.error('[API] Internal error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put(
+  '/staff-plans/:id',
+  requirePermission('tables.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const db = getDatabase();
+      const input = validatePlanInput(req.body);
+      if (!input.ok) return res.status(400).json({ code: input.code, error: input.error });
+      const resnapshot = (req.body ?? {}).resnapshot === true;
+      if (!updateTableStaffPlan(db, String(req.params.id), { ...input, resnapshot })) {
+        return res.status(404).json({ code: 'PLAN_NOT_FOUND', error: 'Plan not found' });
+      }
+      res.json(staffPlansResponse(db));
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.post(
+  '/staff-plans/:id/duplicate',
+  requirePermission('tables.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const db = getDatabase();
+      const id = duplicateTableStaffPlan(db, String(req.params.id), actorOf(req));
+      if (!id) return res.status(404).json({ code: 'PLAN_NOT_FOUND', error: 'Plan not found' });
+      res.status(201).json({ ...staffPlansResponse(db), plan_id: id });
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.delete(
+  '/staff-plans/:id',
+  requirePermission('tables.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const db = getDatabase();
+      if (!deleteTableStaffPlan(db, String(req.params.id))) {
+        return res.status(404).json({ code: 'PLAN_NOT_FOUND', error: 'Plan not found' });
+      }
+      res.json(staffPlansResponse(db));
+    } catch (error: unknown) {
+      console.error('[API] Internal error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.post(
+  '/staff-plans/:id/apply',
+  requirePermission('tables.manage'),
+  (req: Request, res: Response) => {
+    try {
+      const db = getDatabase();
+      const result = applyTableStaffPlan(db, String(req.params.id), actorOf(req));
+      if (!result) return res.status(404).json({ code: 'PLAN_NOT_FOUND', error: 'Plan not found' });
+      res.json({
+        ...result,
+        roster: { ...readTableStaffRoster(db), store_timezone: storeTimezone(db) },
+        ...staffPlansResponse(db),
       });
     } catch (error: unknown) {
       console.error('[API] Internal error:', error);
