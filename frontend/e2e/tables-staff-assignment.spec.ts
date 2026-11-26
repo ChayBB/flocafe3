@@ -503,7 +503,11 @@ test('re-zone previews one run of neighbouring tables per staff member', async (
     const board = page.getByTestId('table-zone-board');
     await expect(board).toContainText('All tables by zone');
     const freeCard = board.getByTestId(`table-zone-board-table-E2E-ZONE-${stamp}-1`);
-    await expect(freeCard).toContainText('Unassigned');
+    await expect(
+      board
+        .getByTestId('table-zone-board-run')
+        .filter({ has: page.getByTestId(`table-zone-board-table-E2E-ZONE-${stamp}-1`) }),
+    ).toContainText('Unassigned');
     await expect(freeCard).not.toHaveAttribute('data-table-owner');
     await board.getByTestId('table-zone-board-toggle').click();
     await expect(freeCard).toHaveCount(0);

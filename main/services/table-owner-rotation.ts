@@ -330,6 +330,7 @@ function plannedOwners(
   const groups = zoneRuns(tables.slice(0, roster.table_count), order.length);
   let next = 0;
   const owned = groups.map((group) => group.map((run) => ({ run, owner: order[next++] })));
+  const spare = order[next] ?? null;
   owned.forEach((group, index) => {
     const previous = owned[(index - 1 + owned.length) % owned.length];
     group.forEach(({ run, owner }, position) => {
@@ -338,6 +339,8 @@ function plannedOwners(
         backup = previous[position % previous.length].owner;
       } else if (roster.backup_enabled && group.length > 1) {
         backup = group[(position - 1 + group.length) % group.length].owner;
+      } else if (roster.backup_enabled) {
+        backup = spare;
       }
       for (const table of run) plan.set(table.id, { owner, backup });
     });

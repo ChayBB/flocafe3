@@ -164,6 +164,14 @@ function main() {
     'one zone: backups are another person in the zone',
   );
 
+  resetTables(db, [['Bar', 1]]);
+  shuffle(db, owner.userId, staff.slice(0, 2));
+  const [bar] = byZone(db).get('Bar') as Row[];
+  assertOrThrow(
+    bar.owner_user_id && bar.backup_user_id && bar.backup_user_id !== bar.owner_user_id,
+    'a lone table is backed up by a present person who has no tables',
+  );
+
   console.log('\n✅ All table assignment by zone tests passed');
 }
 

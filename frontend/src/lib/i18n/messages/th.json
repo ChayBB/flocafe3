@@ -3993,6 +3993,7 @@
     "zoneBoardAssigned": "กำหนดแล้ว {assigned}/{total}",
     "zoneBoardUnassigned": "ยังไม่กำหนด",
     "zoneBoardBackup": "สำรอง: {name}",
+    "zoneBoardSummary": "{zones, plural, other {# โซน}} · พนักงานหลัก {staff} คน · กำหนดแล้ว {assigned}/{total} โต๊ะ",
     "rezoneCurrent": "โซนปัจจุบัน",
     "rezoneProposed": "โซนใหม่",
     "rezoneTableCount": "{count, plural, other {# โต๊ะ}}",

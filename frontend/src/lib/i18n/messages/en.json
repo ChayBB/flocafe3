@@ -3993,6 +3993,7 @@
     "zoneBoardAssigned": "{assigned}/{total} assigned",
     "zoneBoardUnassigned": "Unassigned",
     "zoneBoardBackup": "Backup: {name}",
+    "zoneBoardSummary": "{zones, plural, one {# zone} other {# zones}} · {staff} main staff · {assigned}/{total} tables assigned",
     "rezoneCurrent": "Current zones",
     "rezoneProposed": "New zones",
     "rezoneTableCount": "{count, plural, one {# table} other {# tables}}",
