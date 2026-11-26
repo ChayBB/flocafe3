@@ -37,21 +37,27 @@ test('a second PromptPay method takes a phone number and can print its QR on bil
 
   const form = page.getByTestId(`promptpay-account-form-${phoneMethod.id}`);
   await expect(form).toBeVisible();
-  const account = form.getByRole('textbox', { name: 'QR payment account (PromptPay)' });
+  const account = form.getByRole('textbox', {
+    name: 'National ID or phone number linked to PromptPay',
+  });
   await account.fill('12345');
-  await form.getByRole('button', { name: 'QR payment account (PromptPay)' }).click();
+  await form
+    .getByRole('button', { name: 'National ID or phone number linked to PromptPay' })
+    .click();
   await expect(
     page.getByText('Enter a 10-digit phone number, 13-digit ID or 15-digit e-wallet ID'),
   ).toBeVisible();
 
   await account.fill('+66 81-234-5678');
-  await form.getByRole('button', { name: 'QR payment account (PromptPay)' }).click();
+  await form
+    .getByRole('button', { name: 'National ID or phone number linked to PromptPay' })
+    .click();
   await expect(page.getByText('QR account saved')).toBeVisible();
   await expect(account).toHaveValue('0812345678');
 
-  await form.getByRole('textbox', { name: 'Account holder name' }).fill('Phone holder');
-  await form.getByRole('button', { name: 'Account holder name' }).click();
-  await expect(page.getByText('Account holder name saved')).toBeVisible();
+  await form.getByRole('textbox', { name: 'Account owner name' }).fill('Phone holder');
+  await form.getByRole('button', { name: 'Account owner name' }).click();
+  await expect(page.getByText('Account owner name saved')).toBeVisible();
 
   const billRadio = form.getByRole('radio', { name: 'Print this QR on bills' });
   await billRadio.click();
