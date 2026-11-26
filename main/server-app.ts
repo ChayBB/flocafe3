@@ -93,6 +93,7 @@ import {
 } from './lib/server-app-rate-limit';
 import { callMainApiAsGuest, ensureGuestUser, placeGuestOrder } from './lib/guest-order-placement';
 import { staffDaySummary } from './lib/staff-profile-summary';
+import { recordClientError, recordRateLimited } from './lib/client-error-log';
 import { requestOrderBill } from './services/orders';
 import { claimOwnTables, readTableOwnerAssignmentSettings } from './services/table-owner-rotation';
 import { notifyOrderUpdated } from './services/kds';
@@ -357,15 +358,30 @@ export function startServerApp(): Promise<void> {
     );
     const fallbackApiLimit =
       Number.isFinite(configuredApiLimit) && configuredApiLimit > 0 ? configuredApiLimit : 600;
+    const serverAppApiLimit = () =>
+      resolveServerAppApiRateLimit(
+        getSettingValue(SERVER_APP_API_RATE_LIMIT_KEY),
+        fallbackApiLimit,
+      );
     const serverAppApiRateLimit = expressRateLimit({
       windowMs: 60 * 1000,
-      limit: () =>
-        resolveServerAppApiRateLimit(
-          getSettingValue(SERVER_APP_API_RATE_LIMIT_KEY),
-          fallbackApiLimit,
-        ),
+      limit: serverAppApiLimit,
       standardHeaders: true,
       legacyHeaders: false,
+      handler: (req, res, _next, options) => {
+        recordRateLimited(req.ip || '', req.path, serverAppApiLimit());
+        res.status(options.statusCode).send(options.message);
+      },
+    });
+    const clientErrorRateLimit = expressRateLimit({
+      windowMs: 60 * 1000,
+      limit: 30,
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+    app.post('/api/client-errors', clientErrorRateLimit, (req: Request, res: Response) => {
+      recordClientError(req.body, { ip: req.ip || '', userAgent: req.get('user-agent') });
+      res.status(204).end();
     });
 
     app.get('/api/server-app/info', serverAppApiRateLimit, (_req: Request, res: Response) => {
@@ -402,7 +418,9 @@ export function startServerApp(): Promise<void> {
       });
     });
 
-    app.get('/api/server-app/branding/:kind', serverAppApiRateLimit, (req, res) => {
+    // Cached menu photos and branding must not spend the per-route API budget that order calls need.
+    const assetRateLimit = staticRouteRateLimit();
+    app.get('/api/server-app/branding/:kind', assetRateLimit, (req, res) => {
       if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });
       const kind = req.params.kind;
       if (!isStoreImageKind(kind)) return res.status(404).json({ error: 'Not found' });
@@ -1136,7 +1154,7 @@ export function startServerApp(): Promise<void> {
     app.get('/api/products/popular', serverAppApiRateLimit, requireServerAppAuth, (req, res) =>
       forwardToMainApi(req, res, '/products/popular'),
     );
-    app.get('/api/products/:id/image', serverAppApiRateLimit, (req, res) => {
+    app.get('/api/products/:id/image', assetRateLimit, (req, res) => {
       if (!isServerAppEnabled()) return res.status(404).json({ error: 'Not found' });
       return forwardToMainApi(
         req,

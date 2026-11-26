@@ -477,6 +477,24 @@ export default function ServerStandalonePage() {
     join: { key: string; request: Promise<Settled<AxiosResponse>> } | null;
   } | null>(null);
   const [guestTable, setGuestTable] = useState<{ id: string; name: string } | null>(null);
+  const customerFacingRef = useRef(true);
+  customerFacingRef.current = !user;
+  // Customers never see error messages; the staff app still does.
+  const showError = useCallback((message: string) => {
+    const customer = customerFacingRef.current;
+    if (customer) console.warn('[ServerApp]', message);
+    else toast.error(message);
+    void fetch('/api/client-errors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        audience: customer ? 'customer' : 'staff',
+        page: window.location.pathname,
+      }),
+      keepalive: true,
+    }).catch(() => undefined);
+  }, []);
   const [guestDeviceToken, setGuestDeviceToken] = useState<string | null>(null);
   const [guestOrder, setGuestOrder] = useState<GuestOrder | null>(null);
   const [guestOrderLoaded, setGuestOrderLoaded] = useState(false);
@@ -1262,12 +1280,12 @@ export default function ServerStandalonePage() {
       })
       .catch((error) => {
         if (error?.response?.status === 401) setUser(null);
-        else toast.error(t('couldNotLoadData'));
+        else showError(t('couldNotLoadData'));
       });
     return () => {
       cancelled = true;
     };
-  }, [api, selectedTableId, userId, t]);
+  }, [api, selectedTableId, userId, t, showError]);
 
   const refreshLiveRef = useRef(refreshLive);
   useEffect(() => {
@@ -1542,10 +1560,10 @@ export default function ServerStandalonePage() {
       if (listWasOpen) setOrderedItemsOpen(true);
     } catch (error: unknown) {
       const code = (error as { response?: { data?: { code?: string } } })?.response?.data?.code;
-      if (code === 'source_billed') toast.error(t('mergeBlockedBilled'));
-      else if (code === 'source_discount') toast.error(t('mergeBlockedDiscount'));
-      else if (code === 'target_paying') toast.error(t('mergeBlockedPaying'));
-      else if (code === 'target_empty') toast.error(t('tableHasNoOrder', { name: target.name }));
+      if (code === 'source_billed') showError(t('mergeBlockedBilled'));
+      else if (code === 'source_discount') showError(t('mergeBlockedDiscount'));
+      else if (code === 'target_paying') showError(t('mergeBlockedPaying'));
+      else if (code === 'target_empty') showError(t('tableHasNoOrder', { name: target.name }));
       else
         toastApiError(
           error,
@@ -1619,12 +1637,12 @@ export default function ServerStandalonePage() {
         );
       } else if (printed === 'already-printed') toast(t('billAlreadyPrinted'));
       else if (printed === 'not-allowed') toast.success(t('billRequestNotified'));
-      else toast.error(t('billRequestCashierPrintFailed'));
+      else showError(t('billRequestCashierPrintFailed'));
     } catch (error: unknown) {
       if (!isCurrent()) return;
       const code = (error as { response?: { data?: { code?: string } } })?.response?.data?.code;
-      if (code === 'weight_pending') toast.error(t('billBlockedPricePending'));
-      else if (code === 'served_unconfirmed') toast.error(t('billBlockedNotServed'));
+      if (code === 'weight_pending') showError(t('billBlockedPricePending'));
+      else if (code === 'served_unconfirmed') showError(t('billBlockedNotServed'));
       else toastApiError(error, t('billRequestFailed'), apiErrorT);
     } finally {
       billPrintInFlight.current.delete(orderId);
@@ -1720,7 +1738,7 @@ export default function ServerStandalonePage() {
     if (sendInFlightRef.current) return;
     if (tableId === selectedTableIdRef.current) {
       if (orderLookupFailedRef.current) {
-        loadOrder(tableId).catch(() => toast.error(t('couldNotLoadData')));
+        loadOrder(tableId).catch(() => showError(t('couldNotLoadData')));
       }
       return;
     }
@@ -2136,15 +2154,15 @@ export default function ServerStandalonePage() {
       const data = (error as { response?: { data?: { code?: string; retry_after?: number } } })
         ?.response?.data;
       const code = data?.code;
-      if (code === 'bill_awaiting_payment') toast.error(t('tableAwaitingPaymentLocked'));
+      if (code === 'bill_awaiting_payment') showError(t('tableAwaitingPaymentLocked'));
       else if (code === 'order_needs_review') {
         setGuestDeliveryStatus({ kind: 'review' });
-        toast.error(t('guestOrderNeedsReview'));
+        showError(t('guestOrderNeedsReview'));
       } else if (code === 'order_cooldown') {
-        toast.error(t('guestOrderCooldown', { seconds: data?.retry_after ?? 5 }));
+        showError(t('guestOrderCooldown', { seconds: data?.retry_after ?? 5 }));
       } else if (code === 'order_rejected') {
         guestAttemptRef.current = null;
-        toast.error(t('guestOrderRejected'));
+        showError(t('guestOrderRejected'));
       } else if (code === 'qr_expired') {
         // The party's session ended; a sticker can join the next one after another tap.
         removeGuestDevice(guestDeviceStorageKey(guestTable.id));
@@ -2332,7 +2350,7 @@ export default function ServerStandalonePage() {
         (error as { response?: { data?: { code?: string } } })?.response?.data?.code ===
         'bill_awaiting_payment'
       )
-        toast.error(t('tableAwaitingPaymentLocked'));
+        showError(t('tableAwaitingPaymentLocked'));
       else toastApiError(error, t('couldNotSendOrder'), apiErrorT);
     } finally {
       sendInFlightRef.current = false;
