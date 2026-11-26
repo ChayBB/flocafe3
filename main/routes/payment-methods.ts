@@ -1,9 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, upsertSettings, withTxn } from '../db';
 import * as QRCode from 'qrcode';
-import { buildPromptPayPayload, parsePromptPayAccount } from '../lib/promptpay';
+import { buildPromptPayPayload, normalizePromptPayAccount } from '../lib/promptpay';
 import {
   BANK_QR_ACCOUNT_SETTING,
+  BILL_QR_METHOD_SETTING,
+  listPromptPayMethods,
+  promptPayMethodSettings,
+  readBillQrMethodId,
+  readPromptPayMethodAccounts,
+  resolvePaymentQr,
   QR_ACCOUNT_NAME_SETTING,
   QR_ACCOUNT_SETTING,
   missingQrAccountCode,
@@ -11,7 +17,6 @@ import {
   parsePaymentQrKind,
   readPaymentQrAccount,
   readPaymentQrAccountName,
-  resolvePaymentQrTarget,
 } from '../lib/payment-qr-target';
 import { requirePermission, hasPermission } from '../services/authorization';
 import { sendEvent } from '../services/telemetry';
@@ -72,16 +77,21 @@ function promptPayAccountRoutes(path: string, setting: string, kind: 'promptpay'
     res.json({ account: readPaymentQrAccount(kind) });
   });
   router.put(path, requirePermission('payment-methods.manage'), (req: Request, res: Response) => {
-    const account =
-      typeof req.body?.account === 'string' ? req.body.account.replace(/[\s-]/g, '') : '';
-    if (account && !parsePromptPayAccount(account)) {
-      return res
-        .status(400)
-        .json({ error: 'Enter a 10-digit phone number, 13-digit ID or 15-digit e-wallet ID' });
-    }
+    const account = parseAccountBody(req.body?.account);
+    if (account === null) return res.status(400).json({ error: INVALID_ACCOUNT_ERROR });
     upsertSettings({ [setting]: account });
     res.json({ account });
   });
+}
+
+const INVALID_ACCOUNT_ERROR = 'Enter a 10-digit phone number, 13-digit ID or 15-digit e-wallet ID';
+
+/** An empty value clears the account; anything else must be a valid PromptPay ID. */
+function parseAccountBody(value: unknown): string | null {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) {
+    return '';
+  }
+  return normalizePromptPayAccount(value);
 }
 
 promptPayAccountRoutes('/qr-account', QR_ACCOUNT_SETTING, 'promptpay');
@@ -103,10 +113,50 @@ router.put(
   },
 );
 
+router.get('/promptpay-accounts', requirePermission('payment-methods.manage'), (_req, res) => {
+  res.json({ accounts: readPromptPayMethodAccounts(), bill_method_id: readBillQrMethodId() });
+});
+
+router.put(
+  '/promptpay-accounts/:id',
+  requirePermission('payment-methods.manage'),
+  (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    const keys = Number.isSafeInteger(id) ? promptPayMethodSettings(id) : null;
+    if (!keys) return res.status(404).json({ error: 'PromptPay payment method not found' });
+    if (req.body?.name !== undefined && typeof req.body.name !== 'string') {
+      return res.status(400).json({ error: 'name must be a string' });
+    }
+    const updates: Record<string, string> = {};
+    if (req.body?.account !== undefined) {
+      const account = parseAccountBody(req.body.account);
+      if (account === null) return res.status(400).json({ error: INVALID_ACCOUNT_ERROR });
+      updates[keys.account] = account;
+    }
+    if (req.body?.name !== undefined) updates[keys.name] = normalizeQrAccountName(req.body.name);
+    upsertSettings(updates);
+    res.json({ account: readPromptPayMethodAccounts().find((row) => row.method_id === id) });
+  },
+);
+
+router.put(
+  '/promptpay-bill-method',
+  requirePermission('payment-methods.manage'),
+  (req: Request, res: Response) => {
+    const raw = req.body?.method_id;
+    const id = raw === null || raw === undefined || raw === '' ? null : Number(raw);
+    if (id !== null && !listPromptPayMethods().some((row) => row.id === id)) {
+      return res.status(404).json({ error: 'PromptPay payment method not found' });
+    }
+    upsertSettings({ [BILL_QR_METHOD_SETTING]: id === null ? '' : String(id) });
+    res.json({ bill_method_id: id });
+  },
+);
+
 router.get('/qr-code', requirePermission('payments.take'), async (req: Request, res: Response) => {
   const kind = parsePaymentQrKind(req.query.kind);
-  const target = resolvePaymentQrTarget(kind);
-  if (!target) {
+  const resolved = resolvePaymentQr(kind);
+  if (!resolved) {
     return res
       .status(404)
       .json({ error: 'No QR payment account is set up', code: missingQrAccountCode(kind) });
@@ -115,7 +165,7 @@ router.get('/qr-code', requirePermission('payments.take'), async (req: Request, 
   if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
     return res.status(400).json({ error: 'amount must be a positive number' });
   }
-  const payload = buildPromptPayPayload(target, Number(amount.toFixed(2)));
+  const payload = buildPromptPayPayload(resolved.target, Number(amount.toFixed(2)));
   const dataUrl = await QRCode.toDataURL(payload, {
     errorCorrectionLevel: 'M',
     margin: 1,
@@ -125,7 +175,7 @@ router.get('/qr-code', requirePermission('payments.take'), async (req: Request, 
     payload,
     data_url: dataUrl,
     amount: Number(amount.toFixed(2)),
-    account_name: readPaymentQrAccountName(kind),
+    account_name: resolved.accountName,
   });
 });
 

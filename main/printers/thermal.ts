@@ -1,5 +1,5 @@
 import { formatPhoneLocal } from '../lib/phone';
-import { readPaymentQrAccountName, resolvePaymentQrTarget } from '../lib/payment-qr-target';
+import { resolveBillPaymentQr } from '../lib/payment-qr-target';
 import { buildPromptPayPayload } from '../lib/promptpay';
 import {
   buildQrRasterBytes,
@@ -1094,18 +1094,18 @@ export async function insertBillPaymentQr(
   language: string = 'en',
 ): Promise<Buffer> {
   const amount = Number(Number(total).toFixed(2));
-  const target = amount > 0 ? resolvePaymentQrTarget('promptpay') : null;
-  if (!target) return data;
+  const billQr = amount > 0 ? resolveBillPaymentQr() : null;
+  if (!billQr) return data;
   const { profile, columns, capabilities } = resolveBillPrinterContext(printer);
   const qr = buildQrRasterBytes(
-    buildPromptPayPayload(target, amount),
+    buildPromptPayPayload(billQr.target, amount),
     (capabilities.raster?.widthDots ?? (columns <= 32 ? 384 : 576)) +
       2 * (capabilities.sideMarginDots ?? 0),
     capabilities.raster?.maxBandHeight ?? 200,
   );
   const qrLine = `{RAW_BYTES:${Buffer.from(qr).toString('base64')}}`;
   const caption = `{CENTER}{BOLD}{DOUBLE_HEIGHT}{DOUBLE_WIDTH}${paymentQrCaption(language)}{/DOUBLE_WIDTH}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}`;
-  const nameLines = wrapText(readPaymentQrAccountName(), columns)
+  const nameLines = wrapText(billQr.accountName, columns)
     .filter((part) => part.trim())
     .map((part) => `{CENTER}{BOLD}{DOUBLE_HEIGHT}${part}{/DOUBLE_HEIGHT}{/BOLD}{/CENTER}`);
   // A named account reads caption, name, then QR; without a name the caption stays under the QR.

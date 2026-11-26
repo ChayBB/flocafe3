@@ -215,6 +215,138 @@ async function main() {
       receipt,
       'a shop without PromptPay prints bills without a QR',
     );
+
+    // A second PromptPay method keeps its own account, such as a phone number beside a national ID.
+    const createMethod = async (name: string) =>
+      (
+        await api(baseUrl, '/api/payment-methods', {
+          method: 'POST',
+          headers: authHeader,
+          body: { name },
+        })
+      ).data.payment_method.id as number;
+    const idMethod = await createMethod('พร้อมเพย์');
+    const phoneMethod = await createMethod('พร้อมเพย์ เบอร์โทร');
+    const otherMethod = await createMethod('Voucher');
+    const putAccount = (id: number, body: Record<string, unknown>) =>
+      api(baseUrl, `/api/payment-methods/promptpay-accounts/${id}`, {
+        method: 'PUT',
+        headers: authHeader,
+        body,
+      });
+    const mainAccount = async () =>
+      (await api(baseUrl, '/api/payment-methods/qr-account', { headers: authHeader })).data.account;
+    const listed = await api(baseUrl, '/api/payment-methods/promptpay-accounts', {
+      headers: authHeader,
+    });
+    assertEqualOrThrow(
+      listed.data.accounts.map((row: any) => row.method_id).join(','),
+      `${idMethod},${phoneMethod}`,
+      'only PromptPay-named methods get an account',
+    );
+    assertEqualOrThrow(listed.data.bill_method_id, null, 'bills start on the main account');
+    assertEqualOrThrow(
+      (await putAccount(otherMethod, { account: '0812345678' })).status,
+      404,
+      'a non-PromptPay method has no account',
+    );
+    assertEqualOrThrow(
+      (await putAccount(phoneMethod, { account: '+1 202 555 0100' })).status,
+      400,
+      'an invalid phone is rejected',
+    );
+    assertEqualOrThrow(
+      (await putAccount(phoneMethod, { name: 7 })).status,
+      400,
+      'a non-text name is rejected',
+    );
+
+    const idSaved = await putAccount(idMethod, { account: '1-2345-67890-12-3', name: 'ID holder' });
+    assertEqualOrThrow(idSaved.data.account.account, '1234567890123', 'the ID account is saved');
+    assertEqualOrThrow(
+      await mainAccount(),
+      '1234567890123',
+      'the oldest PromptPay method holds the main account',
+    );
+    const phoneSaved = await putAccount(phoneMethod, {
+      account: '+66 81 234 5678',
+      name: 'Phone holder',
+    });
+    assertEqualOrThrow(
+      phoneSaved.data.account.account,
+      '0812345678',
+      'the phone is stored as 0XXXXXXXXX',
+    );
+    assertEqualOrThrow(phoneSaved.data.account.name, 'Phone holder', 'the phone has its own name');
+    assertEqualOrThrow(
+      await mainAccount(),
+      '1234567890123',
+      'saving the phone account leaves the main account alone',
+    );
+
+    const byId = await qr(100);
+    assertOrThrow(
+      byId.data.payload.includes('02131234567890123'),
+      'bills default to the main ID account',
+    );
+    assertEqualOrThrow(byId.data.account_name, 'ID holder', 'the main account name prints');
+
+    const choose = (method_id: unknown) =>
+      api(baseUrl, '/api/payment-methods/promptpay-bill-method', {
+        method: 'PUT',
+        headers: authHeader,
+        body: { method_id },
+      });
+    assertEqualOrThrow(
+      (await choose(otherMethod)).status,
+      404,
+      'only a PromptPay method can print on bills',
+    );
+    assertEqualOrThrow(
+      (await choose(phoneMethod)).data.bill_method_id,
+      phoneMethod,
+      'the phone account is chosen for bills',
+    );
+    const byPhone = await qr(100);
+    assertOrThrow(
+      byPhone.data.payload.includes('01130066812345678'),
+      'the bill QR pays the phone number',
+    );
+    assertOrThrow(
+      !byPhone.data.payload.includes('1234567890123'),
+      'the bill QR no longer pays the ID',
+    );
+    assertEqualOrThrow(
+      byPhone.data.payload.slice(-4),
+      crc16Ccitt(byPhone.data.payload.slice(0, -4)),
+      'the phone payload checksum is valid',
+    );
+    assertEqualOrThrow(byPhone.data.account_name, 'Phone holder', 'the phone account name prints');
+    const phoneBill = await insertBillPaymentQr(receipt, 250, printer);
+    assertOrThrow(
+      phoneBill.includes(Buffer.from('Phone holder')),
+      'the thermal bill names the phone account',
+    );
+    const phoneSlip = await api(baseUrl, '/api/printers/print-payment-request', {
+      method: 'POST',
+      headers: authHeader,
+      body: { orderId, amount: 250, format: 'html' },
+    });
+    assertOrThrow(
+      String(phoneSlip.data.html).includes('Phone holder'),
+      'the payment request names the phone account',
+    );
+
+    await api(baseUrl, `/api/payment-methods/${phoneMethod}`, {
+      method: 'PUT',
+      headers: authHeader,
+      body: { is_active: false },
+    });
+    assertOrThrow(
+      (await qr(100)).data.payload.includes('02131234567890123'),
+      'a disabled phone method falls back to the main account',
+    );
+    assertEqualOrThrow((await choose(null)).data.bill_method_id, null, 'the bill choice resets');
     console.log('\nAll QR payment checks passed');
   } finally {
     server.close();

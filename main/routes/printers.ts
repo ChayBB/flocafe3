@@ -4,8 +4,7 @@ import { buildPromptPayPayload } from '../lib/promptpay';
 import {
   missingQrAccountCode,
   parsePaymentQrKind,
-  readPaymentQrAccountName,
-  resolvePaymentQrTarget,
+  resolvePaymentQr,
 } from '../lib/payment-qr-target';
 import {
   billHasWeightPending,
@@ -2036,8 +2035,8 @@ router.post(
       }
 
       const qrKind = parsePaymentQrKind(req.body?.kind);
-      const target = resolvePaymentQrTarget(qrKind);
-      if (!target) {
+      const resolved = resolvePaymentQr(qrKind);
+      if (!resolved) {
         return res
           .status(404)
           .json({ error: 'No QR payment account is set up', code: missingQrAccountCode(qrKind) });
@@ -2062,8 +2061,8 @@ router.post(
               .map((addon: { name?: unknown }) => String(addon?.name ?? ''))
               .filter(Boolean),
           })),
-        qrPayload: buildPromptPayPayload(target, rounded),
-        accountName: readPaymentQrAccountName(qrKind),
+        qrPayload: buildPromptPayPayload(resolved.target, rounded),
+        accountName: resolved.accountName,
       };
       const language = resolveTenantReceiptLanguages(db).primary;
       // A document printer or no printer at all prints this page through the system print dialog.

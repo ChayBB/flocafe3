@@ -11,10 +11,14 @@ import { useFormatDate } from '@/hooks/useFormatDate';
 import {
   BUILT_IN_PAYMENT_SETTING,
   isBankAccountMethod,
-  isQrCodeMethod,
   type BuiltInPaymentKey,
   type CustomPaymentMethod,
 } from '@/lib/payment-methods';
+
+interface PromptPayAccount {
+  account: string;
+  name: string;
+}
 
 interface MergeRecord {
   id: number;
@@ -52,10 +56,9 @@ export function PaymentMethodsSettings({
   const [mergeTargets, setMergeTargets] = useState<Record<number, string>>({});
   const [merges, setMerges] = useState<MergeRecord[]>([]);
   const [splitChecksEnabled, setSplitChecksEnabled] = useState(false);
-  const [qrAccount, setQrAccount] = useState('');
-  const [qrAccountSaved, setQrAccountSaved] = useState('');
-  const [qrAccountName, setQrAccountName] = useState('');
-  const [qrAccountNameSaved, setQrAccountNameSaved] = useState('');
+  const [promptPaySaved, setPromptPaySaved] = useState<Record<number, PromptPayAccount>>({});
+  const [promptPayDrafts, setPromptPayDrafts] = useState<Record<number, PromptPayAccount>>({});
+  const [billQrMethodId, setBillQrMethodId] = useState<number | null>(null);
   const [bankAccount, setBankAccount] = useState('');
   const [bankAccountSaved, setBankAccountSaved] = useState('');
   const [requireOpenShift, setRequireOpenShift] = useState(false);
@@ -94,9 +97,8 @@ export function PaymentMethodsSettings({
       splitRes,
       requireShiftRes,
       perStaffShiftRes,
-      qrRes,
+      promptPayRes,
       bankRes,
-      qrNameRes,
     ] = await Promise.all([
       api.get('/payment-methods?include_inactive=true'),
       canManagePaymentMethods
@@ -111,15 +113,23 @@ export function PaymentMethodsSettings({
       api
         .get('/settings/one_shift_per_staff')
         .catch(() => ({ data: { setting: { value: 'false' } } })),
-      api.get('/payment-methods/qr-account').catch(() => ({ data: { account: '' } })),
+      api
+        .get('/payment-methods/promptpay-accounts')
+        .catch(() => ({ data: { accounts: [], bill_method_id: null } })),
       api.get('/payment-methods/bank-qr-account').catch(() => ({ data: { account: '' } })),
-      api.get('/payment-methods/qr-account-name').catch(() => ({ data: { name: '' } })),
       loadCardTransactionSetting(),
     ]);
-    setQrAccountName(qrNameRes.data?.name || '');
-    setQrAccountNameSaved(qrNameRes.data?.name || '');
-    setQrAccount(qrRes.data?.account || '');
-    setQrAccountSaved(qrRes.data?.account || '');
+    const promptPay: Record<number, PromptPayAccount> = Object.fromEntries(
+      (promptPayRes.data?.accounts || []).map(
+        (row: { method_id: number; account: string; name: string }) => [
+          row.method_id,
+          { account: row.account || '', name: row.name || '' },
+        ],
+      ),
+    );
+    setPromptPaySaved(promptPay);
+    setPromptPayDrafts(promptPay);
+    setBillQrMethodId(promptPayRes.data?.bill_method_id ?? null);
     setBankAccount(bankRes.data?.account || '');
     setBankAccountSaved(bankRes.data?.account || '');
     const rows = methodsRes.data.payment_methods || [];
@@ -187,23 +197,41 @@ export function PaymentMethodsSettings({
     }
   };
 
-  const saveQrAccount = async () => {
+  const setPromptPayDraft = (methodId: number, changes: Partial<PromptPayAccount>) =>
+    setPromptPayDrafts((old) => ({
+      ...old,
+      [methodId]: { ...(old[methodId] ?? { account: '', name: '' }), ...changes },
+    }));
+
+  const savePromptPay = async (methodId: number, field: keyof PromptPayAccount) => {
     try {
-      const { data } = await api.put('/payment-methods/qr-account', { account: qrAccount });
-      setQrAccount(data.account);
-      setQrAccountSaved(data.account);
-      toast.success(t('qrAccountSaved'));
+      const { data } = await api.put(`/payment-methods/promptpay-accounts/${methodId}`, {
+        [field]: promptPayDrafts[methodId]?.[field] ?? '',
+      });
+      const saved = { account: data.account?.account ?? '', name: data.account?.name ?? '' };
+      setPromptPaySaved((old) => ({ ...old, [methodId]: saved }));
+      setPromptPayDraft(methodId, { [field]: saved[field] });
+      toast.success(t(field === 'account' ? 'qrAccountSaved' : 'qrAccountNameSaved'));
     } catch {
-      toast.error(t('qrAccountInvalid'));
+      toast.error(t(field === 'account' ? 'qrAccountInvalid' : 'saveFailed'));
     }
   };
 
-  const saveQrAccountName = async () => {
+  const promptPayMethodIds = Object.keys(promptPaySaved)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const effectiveBillQrMethodId =
+    billQrMethodId !== null && promptPayMethodIds.includes(billQrMethodId)
+      ? billQrMethodId
+      : (promptPayMethodIds[0] ?? null);
+
+  const saveBillQrMethod = async (methodId: number) => {
     try {
-      const { data } = await api.put('/payment-methods/qr-account-name', { name: qrAccountName });
-      setQrAccountName(data.name);
-      setQrAccountNameSaved(data.name);
-      toast.success(t('qrAccountNameSaved'));
+      const { data } = await api.put('/payment-methods/promptpay-bill-method', {
+        method_id: methodId,
+      });
+      setBillQrMethodId(data.bill_method_id ?? null);
+      toast.success(t('billQrMethodSaved'));
     } catch {
       toast.error(t('saveFailed'));
     }
@@ -327,25 +355,30 @@ export function PaymentMethodsSettings({
                   <Trash2 size={14} />
                 </Button>
               </div>
-              {isQrCodeMethod(method.name) && (
-                <div className="space-y-1">
+              {promptPaySaved[method.id] && (
+                <div className="space-y-1" data-testid={`promptpay-account-form-${method.id}`}>
                   <label className="block text-xs font-medium text-foreground">
                     {t('qrAccountLabel')}
                   </label>
                   <div className="flex gap-2 items-center">
                     <input
                       disabled={!canManagePaymentMethods}
-                      inputMode="numeric"
-                      value={qrAccount}
-                      onChange={(e) => setQrAccount(e.target.value)}
+                      inputMode="tel"
+                      value={promptPayDrafts[method.id]?.account ?? ''}
+                      onChange={(e) => setPromptPayDraft(method.id, { account: e.target.value })}
                       placeholder={t('qrAccountPlaceholder')}
+                      aria-label={t('qrAccountLabel')}
                       className="flex-1 px-3 py-2 text-sm border rounded-lg"
                     />
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!canManagePaymentMethods || qrAccount === qrAccountSaved}
-                      onClick={saveQrAccount}
+                      aria-label={t('qrAccountLabel')}
+                      disabled={
+                        !canManagePaymentMethods ||
+                        promptPayDrafts[method.id]?.account === promptPaySaved[method.id].account
+                      }
+                      onClick={() => savePromptPay(method.id, 'account')}
                     >
                       <Save size={14} />
                     </Button>
@@ -358,8 +391,8 @@ export function PaymentMethodsSettings({
                     <input
                       disabled={!canManagePaymentMethods}
                       maxLength={60}
-                      value={qrAccountName}
-                      onChange={(e) => setQrAccountName(e.target.value)}
+                      value={promptPayDrafts[method.id]?.name ?? ''}
+                      onChange={(e) => setPromptPayDraft(method.id, { name: e.target.value })}
                       placeholder={t('qrAccountNamePlaceholder')}
                       aria-label={t('qrAccountNameLabel')}
                       className="flex-1 px-3 py-2 text-sm border rounded-lg"
@@ -368,13 +401,28 @@ export function PaymentMethodsSettings({
                       variant="outline"
                       size="sm"
                       aria-label={t('qrAccountNameLabel')}
-                      disabled={!canManagePaymentMethods || qrAccountName === qrAccountNameSaved}
-                      onClick={saveQrAccountName}
+                      disabled={
+                        !canManagePaymentMethods ||
+                        promptPayDrafts[method.id]?.name === promptPaySaved[method.id].name
+                      }
+                      onClick={() => savePromptPay(method.id, 'name')}
                     >
                       <Save size={14} />
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">{t('qrAccountNameHint')}</p>
+                  {promptPayMethodIds.length > 1 && (
+                    <label className="flex items-center gap-1.5 pt-2 text-xs text-foreground">
+                      <input
+                        type="radio"
+                        name="bill-qr-method"
+                        disabled={!canManagePaymentMethods}
+                        checked={effectiveBillQrMethodId === method.id}
+                        onChange={() => saveBillQrMethod(method.id)}
+                      />
+                      {t('billQrMethodLabel')}
+                    </label>
+                  )}
                 </div>
               )}
               {isBankAccountMethod(method.name) && (
@@ -453,6 +501,9 @@ export function PaymentMethodsSettings({
                 {tCommon('add')}
               </Button>
             </div>
+          )}
+          {canManagePaymentMethods && (
+            <p className="text-xs text-muted-foreground">{t('promptPayMethodNameHint')}</p>
           )}
         </div>
       </div>
