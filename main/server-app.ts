@@ -92,6 +92,7 @@ import {
   resolveServerAppApiRateLimit,
 } from './lib/server-app-rate-limit';
 import { callMainApiAsGuest, ensureGuestUser, placeGuestOrder } from './lib/guest-order-placement';
+import { staffDaySummary } from './lib/staff-profile-summary';
 import { requestOrderBill } from './services/orders';
 import { claimOwnTables, readTableOwnerAssignmentSettings } from './services/table-owner-rotation';
 import { notifyOrderUpdated } from './services/kds';
@@ -757,22 +758,7 @@ export function startServerApp(): Promise<void> {
          WHERE user_id = ? ORDER BY business_date DESC LIMIT 14`,
         )
         .all(userId);
-      const summary = db
-        .prepare(
-          `WITH table_bills AS (
-           SELECT o.id, o.guest_count, b.paid_amount
-           FROM bills b JOIN orders o ON o.id = b.order_id
-           WHERE o.table_owner_user_id = ?
-             AND b.paid_at >= ? AND b.paid_at < ?
-             AND b.payment_status IN ('paid', 'partially_refunded', 'refunded')
-         )
-         SELECT COALESCE(SUM(paid_amount), 0) AS sales,
-                COUNT(*) AS bills,
-                (SELECT COALESCE(SUM(guest_count), 0)
-                 FROM (SELECT DISTINCT id, guest_count FROM table_bills)) AS guests
-         FROM table_bills`,
-        )
-        .get(userId, start, end);
+      const summary = staffDaySummary(db, userId, start, end);
       // The work calendar covers this month and the two before it.
       const [year, month] = businessDate.split('-').map(Number);
       const since = new Date(Date.UTC(year, month - 3, 1)).toISOString().slice(0, 10);

@@ -19,8 +19,8 @@ import {
   ShoppingBag,
   SlidersHorizontal,
   Utensils,
+  UserPlus,
   UserRound,
-  Users,
 } from 'lucide-react';
 import { useLocale, useTranslations } from 'use-intl';
 import { FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP } from '@/lib/font-scale';
@@ -39,7 +39,7 @@ type ProfileData = {
     clock_out_at: string | null;
   }[];
   calendar?: WorkCalendarData;
-  summary: { sales: number; bills: number; guests: number };
+  summary: { sales: number; bills: number; new_customers: number };
   assignment_mode?: string;
   backup_enabled?: boolean;
 };
@@ -232,7 +232,7 @@ export function StaffProfile({
           [
             [ShoppingBag, 'sales', snapshot && formatMoney(snapshot.summary.sales)],
             [ReceiptText, 'bills', snapshot?.summary.bills],
-            [Users, 'guests', snapshot?.summary.guests],
+            [UserPlus, 'newCustomers', snapshot?.summary.new_customers],
           ] as const
         ).map(([Metric, label, value]) => (
           <div
